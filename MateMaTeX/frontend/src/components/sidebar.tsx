@@ -8,7 +8,6 @@ import {
   Library,
   LayoutTemplate,
   Clock,
-  School,
   Share2,
   Settings,
   User,
@@ -19,9 +18,8 @@ import {
   PanelLeftClose,
   PanelLeft,
   Home,
-  BookOpenText,
-  Languages,
-  Calculator,
+  FolderKanban,
+  PackagePlus,
 } from "lucide-react";
 
 interface NavItem {
@@ -32,16 +30,13 @@ interface NavItem {
 
 const mainNav: NavItem[] = [
   { href: "/", label: "Oversikt", icon: <Home size={20} /> },
-  { href: "/fag", label: "Fag & læring", icon: <BookOpenText size={20} /> },
-  { href: "/norsk", label: "Norsklæring", icon: <Languages size={20} /> },
-  { href: "/matematikk", label: "Matematikk", icon: <Calculator size={20} /> },
 ];
 
-const secondaryNav: NavItem[] = [
-  { href: "/exercises", label: "Oppgavebank", icon: <Library size={20} /> },
+const commonSecondaryNav: NavItem[] = [
+  { href: "/theme-pack", label: "Temapakke", icon: <PackagePlus size={20} /> },
+  { href: "/projects", label: "Prosjekter", icon: <FolderKanban size={20} /> },
   { href: "/templates", label: "Maler", icon: <LayoutTemplate size={20} /> },
   { href: "/history", label: "Historikk", icon: <Clock size={20} /> },
-  { href: "/school", label: "Skolens bank", icon: <School size={20} /> },
   { href: "/shared", label: "Delt med meg", icon: <Share2 size={20} /> },
 ];
 
@@ -49,6 +44,9 @@ export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [isDark, setIsDark] = useState(true);
+  const secondaryNav = pathname.startsWith("/matematikk") || pathname.startsWith("/exercises")
+    ? [{ href: "/exercises", label: "Matteoppgaver", icon: <Library size={20} /> }, ...commonSecondaryNav]
+    : commonSecondaryNav;
 
   // Init theme from DOM
   useEffect(() => {

@@ -15,6 +15,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .platform.router import router as platform_router
+from .platform.store import get_platform_store
+from .platform.telemetry import JobTelemetryMiddleware
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MATE_BACKEND = REPO_ROOT / "MateMaTeX" / "backend"
@@ -57,6 +61,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(JobTelemetryMiddleware)
+app.include_router(platform_router, prefix="/api/platform")
 
 
 @app.get("/", tags=["platform"])
@@ -74,9 +80,30 @@ async def platform_info() -> dict:
 
 @app.get("/health", tags=["platform"])
 async def health() -> dict:
+    store_health = get_platform_store().health()
     return {
         "status": "healthy",
-        "modules": ["fag", "norsk", "matematikk"],
+        "modules": {
+            "fag": "loaded",
+            "norsk": "loaded",
+            "matematikk": "loaded",
+        },
+        "storage": store_health,
+    }
+
+
+@app.get("/health/ready", tags=["platform"])
+async def readiness() -> dict:
+    """Readiness details without performing slow external provider calls."""
+    return {
+        "status": "ready",
+        "storage": get_platform_store().health(),
+        "ai_provider_configured": bool(os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY")),
+        "redis_configured": bool(os.getenv("REDIS_URL")),
+        "pdf_engines": {
+            "typst": bool(os.getenv("TYPST_PATH")) or "PATH",
+            "pdflatex": bool(os.getenv("PDFLATEX_PATH")) or "PATH",
+        },
     }
 
 

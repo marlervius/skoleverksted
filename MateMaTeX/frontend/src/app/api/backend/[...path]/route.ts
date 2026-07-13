@@ -66,6 +66,10 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
   if (accept) {
     headers.set("Accept", accept);
   }
+  const project = req.headers.get("x-skoleverksted-project");
+  if (project) {
+    headers.set("X-Skoleverksted-Project", project);
+  }
 
   const init: RequestInit = {
     method: req.method,

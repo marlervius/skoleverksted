@@ -7,14 +7,31 @@ De tre tidligere appene er samlet i én lærerplattform:
 - **Matematikk** – LK20-oppgaver og prøver med SymPy-verifisert fasit
 
 Brukeren møter én oversikt og en fast verktøyvelger øverst. Hver fagmodul har
-fortsatt sin spesialiserte arbeidsflyt, mens frontend, drift og offentlig
-API-adresse er felles.
+sin spesialiserte arbeidsflyt, mens frontend, prosjekter, jobbhistorikk,
+kvalitetspass, drift og offentlig API-adresse er felles.
+
+## Ny felles produktflyt
+
+- **Temapakke** oppretter ett prosjekt med koordinerte arbeidsflater for fagtekst,
+  CEFR-tilpasset norsk og matematikk.
+- **Prosjekter** lagres varig i SQLite og kan senere flyttes til PostgreSQL uten
+  å endre frontendkontrakten.
+- **Felles historikk** indekserer jobber fra alle domenene. Domenenes egne
+  jobbmotorer er fortsatt autoritative for filer og strømmer.
+- **Kvalitetspass** viser deterministiske kontroller, kilder, kompetansemål,
+  matematikkstatus, kompilering og begrensninger.
+- Skjemaene autosaves lokalt slik at læreren kan bytte arbeidsflate uten å miste utkast.
+- Skolepålogging og organisasjonstilknytning er bevisst utsatt til produktet er
+  ferdig validert. Dagens modulspesifikke sikkerhet er beholdt.
 
 ## Arkitektur
 
 ```text
 MateMaTeX/frontend/             Felles Next.js-frontend (Skoleverksted)
+  src/features/fag              Fagmodulens aktive frontendkode
+  src/features/norsk            Norskmodulens aktive frontendkode
 Skoleverksted/backend/main.py   Felles FastAPI-inngang
+Skoleverksted/backend/platform  Prosjekter, jobbindeks, kvalitet og Temapakke
   /api/fag                      VGS-modulen
   /api/norsk                    Scriptorium-modulen
   /api/matematikk               MateMaTeX-modulen
@@ -23,9 +40,18 @@ ScriptoriumFOV/                 Norskmodulens eksisterende domene-kode
 MateMaTeX/backend/              Matematikkmodulens eksisterende domene-kode
 ```
 
-Backendene er montert som navngitte ASGI-moduler. Dermed deler de server og
-deploy, men beholder egne ruter, jobbtilstander og kvalitetssikringspipelines.
-Dette er tryggere enn å blande tre sett med endepunkter som har flere like navn.
+Backendene er montert som navngitte ASGI-moduler. Plattformmiddleware observerer
+JSON- og SSE-resultater og bygger en varig, felles jobbindeks uten å endre bytes
+eller strømmer fra domenene. Dette gjør migreringen trinnvis: senere kan selve
+utførelsen flyttes til en felles Redis-kø uten å endre brukergrensesnittet.
+
+Felles plattform-API ligger under `/api/platform`:
+
+- `GET/POST /projects`
+- `GET/PATCH /projects/{id}`
+- `GET /jobs` og `GET /jobs/{id}`
+- `POST /theme-packs`
+- `POST /quality-passports`
 
 ## Lokal kjøring
 
@@ -67,6 +93,19 @@ npm run dev
   `NEXT_PUBLIC_VGS_API_URL`, `NEXT_PUBLIC_NORSK_API_URL` og
   `NEXT_PUBLIC_MATE_API_URL`.
 
+Alternativt kan begge tjenester startes med Docker:
+
+```powershell
+Copy-Item .\Skoleverksted\backend\.env.example .\.env
+# Fyll inn GOOGLE_API_KEY
+# Sett også MATE_API_KEY for den server-side matematikkproxyen i produksjon
+docker compose up --build
+```
+
+SQLite-filen og genererte dokumenter ligger i volumet `skoleverksted_data`.
+`/health/ready` kontrollerer plattformlager og viser om AI-, Redis- og PDF-
+konfigurasjon er tilgjengelig.
+
 ## Kontroll
 
 ```powershell
@@ -75,6 +114,22 @@ npm run build
 npm test
 ```
 
-Backend-testene i hver domenemappe kan fortsatt kjøres separat. Den felles
-inngangen har helsesjekk på `/health`, og hver modul beholder egne API-dokumenter
-på `/api/fag/docs`, `/api/norsk/docs` og `/api/matematikk/docs`.
+Plattformtestene kan kjøres uten eksterne AI-kall:
+
+```powershell
+python -m unittest discover -s .\Skoleverksted\backend\tests -v
+```
+
+GitHub Actions kjører frontendtester, TypeScript, produksjonsbygg,
+plattformtester, Python-kompilering og deterministiske matematikk-/pipeline-
+tester. Hver modul beholder API-dokumentasjon på `/api/fag/docs`,
+`/api/norsk/docs` og `/api/matematikk/docs`.
+
+## AI- og kildepolicy
+
+- Kreativitetstemperatur styres av `AI_TEMPERATURE` (standard `0.35`).
+- `PROMPT_VERSION` følger resultater og kvalitetspass for sporbarhet.
+- Lærerens kildetekst behandles som ubetrådde data, ikke som instruksjoner.
+- Kildebaserte faktapåstander merkes med `[K]` i Fag og Norsk.
+- Kjente matematikkfeil skal fortsatt blokkere levering i matematikkmodulen;
+  uttrykk som ikke kan verifiseres merkes for manuell lærerkontroll.

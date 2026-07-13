@@ -412,6 +412,7 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("warnings", content.get("warnings"))
         ctx.set_meta("source_grounded", content.get("source_grounded"))
         ctx.set_meta("source_name", source_name)
+        ctx.set_meta("prompt_version", content.get("prompt_version"))
 
     ctx.push("Henter og optimaliserer bilde...")
     image_path = fetch_image_with_retry(
@@ -527,6 +528,7 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
     if ctx.set_meta:
         ctx.set_meta("source_grounded", content.get("source_grounded"))
         ctx.set_meta("source_name", source_name)
+        ctx.set_meta("prompt_version", content.get("prompt_version"))
 
     ctx.push("Henter og optimaliserer bilde...")
     image_path = fetch_image_with_retry(

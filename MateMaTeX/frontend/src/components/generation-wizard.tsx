@@ -178,20 +178,35 @@ export function GenerationWizard() {
   useEffect(() => {
     const prefs = loadPreferences();
     const params = new URLSearchParams(window.location.search);
+    let draft: Record<string, unknown> = {};
+    try {
+      draft = JSON.parse(localStorage.getItem("skoleverksted_matte_draft_v1") || "{}");
+    } catch { /* ignore corrupt draft */ }
     const template = params.get("template");
     const materialTypeParam = params.get("materialType");
+    const topicParam = params.get("topic");
+    const gradeParam = params.get("grade") || params.get("level");
+    const languageLevelParam = params.get("languageLevel");
     const defaultGrade =
       prefs.grade ||
       (LAUNCH_GRADES.length > 0 ? LAUNCH_GRADES[0] : GRADES[0]?.value) ||
       "VG1 1T";
     setRequest({
-      grade: defaultGrade,
-      languageLevel: prefs.languageLevel,
+      ...(draft as Partial<typeof request>),
+      grade: gradeParam || defaultGrade,
+      topic: topicParam || (typeof draft.topic === "string" ? draft.topic : ""),
+      languageLevel: languageLevelParam?.toLowerCase() || prefs.languageLevel,
       materialType: template
         ? materialTypeFromTemplate(template)
         : materialTypeParam || prefs.materialType,
     });
   }, [setRequest]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("skoleverksted_matte_draft_v1", JSON.stringify(request));
+    } catch { /* localStorage may be unavailable */ }
+  }, [request]);
 
   useEffect(() => {
     return () => {

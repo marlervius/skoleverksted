@@ -27,6 +27,12 @@ function apiUrl(path: string): string {
   return `${getApiBase()}/${clean}`;
 }
 
+function projectHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  const project = new URLSearchParams(window.location.search).get("project");
+  return project ? { "X-Skoleverksted-Project": project } : {};
+}
+
 let activeStreamClose: (() => void) | null = null;
 
 export function closeActiveStream(): void {
@@ -64,6 +70,7 @@ async function readErrorMessage(res: Response): Promise<string> {
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
+    ...projectHeaders(),
     ...(init?.headers as Record<string, string>),
   };
   if (init?.body && !headers["Content-Type"]) {
@@ -145,7 +152,7 @@ export async function startGeneration(
 ): Promise<GenerateResponse> {
   const res = await fetch(apiUrl("generate"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...projectHeaders() },
     body: JSON.stringify(request),
   });
   if (!res.ok) {

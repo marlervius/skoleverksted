@@ -11,6 +11,8 @@ const PAGE_TITLES: Record<string, string> = {
   "/fag": "Fag & læring",
   "/norsk": "Norsklæring",
   "/matematikk": "Matematikk",
+  "/theme-pack": "Temapakke",
+  "/projects": "Prosjekter",
   "/exercises": "Oppgavebank",
   "/templates": "Maler",
   "/history": "Historikk",
@@ -47,7 +49,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Get breadcrumb from path
-  const pageTitle = PAGE_TITLES[pathname] || "";
+  const pageTitle = PAGE_TITLES[pathname] || (pathname.startsWith("/projects/") ? "Prosjekt" : "");
   const isImmersiveWorkspace = pathname === "/fag" || pathname === "/norsk";
 
   return (
@@ -88,7 +90,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </header>
 
         {/* Page content */}
-        <main className={isImmersiveWorkspace ? "max-w-none" : "max-w-content mx-auto px-4 py-8 sm:px-6"}>
+        <main className={`${isImmersiveWorkspace ? "max-w-none" : "max-w-content mx-auto px-4 py-8 sm:px-6"} pb-24 md:pb-8`}>
           {children}
         </main>
       </div>

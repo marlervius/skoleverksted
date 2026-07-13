@@ -1,4 +1,4 @@
-import Fagverksted from "../../../../../VGS_KI/frontend/app/page";
+import Fagverksted from "@/features/fag/page";
 
 export const metadata = {
   title: "Fag & læring — Skoleverksted",

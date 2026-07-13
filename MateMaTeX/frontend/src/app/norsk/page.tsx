@@ -1,4 +1,4 @@
-import Norskverksted from "../../../../../ScriptoriumFOV/frontend/app/page";
+import Norskverksted from "@/features/norsk/app/page";
 
 export const metadata = {
   title: "Norsklæring — Skoleverksted",

@@ -134,6 +134,8 @@ def generate_lesson_background(
             difficulty_modifier=getattr(request, 'difficulty_modifier', None),
             special_instructions=getattr(request, 'special_instructions', None),
             series=getattr(request, 'series', None),
+            source_text=getattr(request, 'source_text', None),
+            source_name=getattr(request, 'source_name', None),
         )
 
         # Step 2: Process the image (skip if caller already provided a local path)
@@ -263,6 +265,8 @@ class LessonRequest(BaseModel):
         default=None,
         description="Optional accessibility options: {dyslexia_font, high_contrast, large_print}"
     )
+    source_text: Optional[str] = Field(default=None, max_length=5000)
+    source_name: Optional[str] = Field(default=None, max_length=160)
 
 
 CefrLevel = Literal["A1.1", "A1.2", "A2.1", "A2.2", "B1.1", "B1.2", "B2.1", "B2.2"]
@@ -284,6 +288,8 @@ class MultiLevelLessonRequest(BaseModel):
     special_instructions: Optional[str] = Field(default=None, max_length=500)
     series: Optional[dict] = Field(default=None)
     accessibility: Optional[dict] = Field(default=None)
+    source_text: Optional[str] = Field(default=None, max_length=5000)
+    source_name: Optional[str] = Field(default=None, max_length=160)
 
     @field_validator("levels")
     @classmethod
@@ -302,6 +308,8 @@ class MultiLevelLessonRequest(BaseModel):
             "special_instructions": self.special_instructions,
             "series": self.series,
             "accessibility": self.accessibility,
+            "source_text": self.source_text,
+            "source_name": self.source_name,
         }
         if self.options:
             kwargs["options"] = self.options
@@ -335,6 +343,9 @@ class LessonResponse(BaseModel):
     worksheet: str
     image_url: Optional[str] = None
     language_exercises: Optional[dict] = None
+    source_grounded: bool = False
+    source_name: Optional[str] = None
+    prompt_version: Optional[str] = None
 
 
 class PasswordVerifyBody(BaseModel):
@@ -499,6 +510,8 @@ def generate_lesson_json_background(
             difficulty_modifier=lesson_request.difficulty_modifier,
             special_instructions=lesson_request.special_instructions,
             series=lesson_request.series,
+            source_text=lesson_request.source_text,
+            source_name=lesson_request.source_name,
         )
         
         update_progress(generation_id, 2, 2, "Forhåndsvisning er klar!")
@@ -512,6 +525,9 @@ def generate_lesson_json_background(
                 "worksheet": content["worksheet"],
                 "image_url": content.get("image_url"),
                 "language_exercises": content.get("language_exercises"),
+                "source_grounded": content.get("source_grounded", False),
+                "source_name": content.get("source_name"),
+                "prompt_version": content.get("prompt_version"),
             },
         )
 
@@ -644,6 +660,8 @@ def _generate_single_pdf(request: "LessonRequest", level_override: str) -> tuple
         difficulty_modifier=req.difficulty_modifier,
         special_instructions=req.special_instructions,
         series=req.series,
+        source_text=req.source_text,
+        source_name=req.source_name,
     )
 
     processed_image_path = _process_image_for_content(content)
@@ -803,6 +821,8 @@ async def generate_lesson_with_image(
     difficulty_modifier: Optional[int] = Form(default=None),
     options: Optional[str] = Form(default=None, description="JSON string of options dict"),
     special_instructions: Optional[str] = Form(default=None, max_length=500),
+    source_text: Optional[str] = Form(default=None, max_length=5000),
+    source_name: Optional[str] = Form(default=None, max_length=160),
     series: Optional[str] = Form(default=None, description="JSON string of series dict"),
     accessibility: Optional[str] = Form(default=None, description="JSON string of accessibility dict"),
     image: UploadFile = File(..., description="Custom image (JPEG/PNG/WebP, max 5 MB)"),
@@ -898,6 +918,8 @@ async def generate_lesson_with_image(
         special_instructions=special_instructions,
         series=parsed_series,
         accessibility=parsed_accessibility,
+        source_text=source_text,
+        source_name=source_name,
     )
 
     generation_id = str(uuid.uuid4())

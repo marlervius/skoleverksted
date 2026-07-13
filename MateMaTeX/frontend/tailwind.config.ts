@@ -4,8 +4,6 @@ const config: Config = {
   darkMode: "class",
   content: [
     "./src/**/*.{js,ts,jsx,tsx,mdx}",
-    "../../VGS_KI/frontend/app/**/*.{js,ts,jsx,tsx,mdx}",
-    "../../ScriptoriumFOV/frontend/{app,components}/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
     extend: {

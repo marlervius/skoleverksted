@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, BookOpenText, Calculator, Languages, ShieldCheck, Sparkles } from "lucide-react";
-import { PlatformSwitcher, platformTools } from "@/components/platform-switcher";
+import { ArrowRight, BookOpenText, Calculator, Languages, PackagePlus, ShieldCheck, Sparkles } from "lucide-react";
+import { platformTools } from "@/components/platform-switcher";
 
 const cardStyles = [
   { surface: "from-accent-teal/15 to-accent-teal/5", icon: "bg-accent-teal/15 text-accent-teal" },
@@ -26,12 +26,20 @@ export default function HomePage() {
         <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-text-secondary sm:text-lg">
           Velg arbeidsflate. Du kan bytte når som helst uten å forlate appen.
         </p>
-        <div className="mt-8 flex justify-center">
-          <PlatformSwitcher />
-        </div>
       </section>
 
-      <section className="mt-12 grid gap-4 md:grid-cols-3" aria-label="Arbeidsverktøy">
+      <Link
+        href="/theme-pack"
+        className="group mt-9 flex flex-col items-start justify-between gap-5 overflow-hidden rounded-2xl border border-accent-orange/25 bg-gradient-to-r from-accent-orange/10 via-surface to-accent-purple/10 p-6 shadow-soft-sm transition hover:border-accent-orange/50 sm:flex-row sm:items-center"
+      >
+        <div className="flex items-start gap-4">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-orange/15 text-accent-orange"><PackagePlus className="h-5 w-5" /></div>
+          <div><div className="text-xs font-medium uppercase tracking-wide text-accent-orange">Ny superapp-funksjon</div><h2 className="mt-1 text-lg font-semibold">Lag én sammenhengende temapakke</h2><p className="mt-1 text-sm text-text-secondary">Planlegg fagtekst, norsktilpasning og verifiserte matematikkoppgaver som ett prosjekt.</p></div>
+        </div>
+        <span className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium">Start temapakke <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" /></span>
+      </Link>
+
+      <section className="mt-6 grid gap-4 md:grid-cols-3" aria-label="Arbeidsverktøy">
         {platformTools.map((tool, index) => {
           const Icon = icons[index];
           const style = cardStyles[index];
@@ -57,7 +65,7 @@ export default function HomePage() {
 
       <div className="mt-8 flex items-center justify-center gap-2 text-xs text-text-muted">
         <ShieldCheck className="h-4 w-4 text-accent-green" />
-        Felles inngang, ingen elevdata og fagspesialisert kvalitetssikring
+        Felles inngang, lokal behandling av elevprofiler og fagspesialisert kvalitetssikring
       </div>
     </div>
   );

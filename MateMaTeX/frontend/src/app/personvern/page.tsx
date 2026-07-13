@@ -2,9 +2,9 @@ import Link from "next/link";
 import { M1CoverageCard } from "@/components/m1-coverage";
 
 export const metadata = {
-  title: "Personvern — MateMaTeX",
+  title: "Personvern — Skoleverksted",
   description:
-    "MateMaTeX behandler innhold, ikke elever. Ingen elevdata — ingen DPIA-bekymring for skolen.",
+    "Hvordan Skoleverksted behandler lærerinput, lokale elevprofiler, kildetekst og generert innhold.",
 };
 
 export default function PersonvernPage() {
@@ -16,19 +16,19 @@ export default function PersonvernPage() {
         <Link href="/" className="text-accent-blue hover:underline">
           produktets grunnlov
         </Link>
-        : vi lager innhold for lærere — vi rører ikke elevdata.
+        : vi lager innhold for lærere og ber ikke om identifiserbare elevopplysninger.
       </p>
 
       <section className="card mb-6 not-prose">
-        <h2 className="text-lg font-semibold mb-2">Ingen elevdata</h2>
+        <h2 className="text-lg font-semibold mb-2">Ikke legg inn identifiserbare elevdata</h2>
         <p className="text-sm text-text-secondary leading-relaxed">
-          MateMaTeX behandler <strong className="text-text-primary">ikke personopplysninger om elever</strong>.
-          Ingen elevnavn, ingen besvarelser, ingen identifiserbare opplysninger — verken inn eller ut.
-          Produktet genererer oppgaver, arbeidsark og prøver som <em>du</em> laster ned og bruker lokalt.
+          Skoleverksted trenger ikke elevnavn, besvarelser eller andre direkte identifikatorer.
+          Fagmodulen kan lagre pseudonyme gruppeprofiler og interesser lokalt i nettleseren.
+          Bruk derfor beskrivelser som «gruppe A» og aldri navn, fødselsdato eller helseopplysninger.
         </p>
         <p className="text-sm text-text-secondary leading-relaxed mt-3">
-          Dette er et bevisst salgs- og personvernvalg: skoler slipper DPIA og databehandleravtale
-          knyttet til elevers bruk av selve genereringsverktøyet.
+          Lokale utkast og profiler kan bli liggende på en delt maskin. Tøm nettleserdata etter bruk
+          dersom enheten deles. Skoleinnlogging og sentral datastyring innføres først i en senere fase.
         </p>
       </section>
 
@@ -37,12 +37,14 @@ export default function PersonvernPage() {
         <ul className="text-sm text-text-secondary space-y-2 list-disc pl-5">
           <li>
             <strong className="text-text-primary">Lærerens input</strong> — emne, trinn, kompetansemål og
-            eventuelle notater du skriver inn for å styre genereringen.
+            eventuelle notater og kildetekster du skriver inn for å styre genereringen. Dette sendes
+            til konfigurert AI-leverandør når du starter generering.
           </li>
           <li>
             <strong className="text-text-primary">Generert innhold</strong> — LaTeX/PDF lagres midlertidig
             for nedlasting og kan caches for raskere gjentakelse av samme forespørsel.
           </li>
+          <li><strong className="text-text-primary">Prosjekter og jobbindeks</strong> — temapakker og teknisk jobbhistorikk lagres i plattformdatabasen til de slettes eller arkiveres.</li>
           <li>
             <strong className="text-text-primary">Kontodata</strong> (når aktivert) — e-post og betaling
             for abonnement, behandles minimalt og hostes i EU/EØS der det er praktisk mulig.
@@ -71,7 +73,7 @@ export default function PersonvernPage() {
       </section>
 
       <p className="text-xs text-text-muted not-prose">
-        Spørsmål? Kontakt Apexlab (Lervik KI-Tech ENK). Sist oppdatert juni 2026.
+        Spørsmål? Kontakt Apexlab (Lervik KI-Tech ENK). Sist oppdatert juli 2026.
       </p>
     </div>
   );

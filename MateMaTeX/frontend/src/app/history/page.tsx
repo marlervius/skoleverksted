@@ -8,6 +8,7 @@ import { warningReasonLabel } from "@/lib/map-api-result";
 import { useAppStore } from "@/lib/store";
 import { getResult } from "@/lib/api";
 import { mapApiResultToGenerationResult } from "@/lib/map-api-result";
+import { listPlatformJobs, type PlatformJob } from "@/lib/platform-api";
 
 export default function HistoryPage() {
   const router = useRouter();
@@ -16,9 +17,11 @@ export default function HistoryPage() {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [openError, setOpenError] = useState("");
+  const [platformJobs, setPlatformJobs] = useState<PlatformJob[]>([]);
 
   useEffect(() => {
     setEntries(listHistory());
+    listPlatformJobs().then(setPlatformJobs).catch(() => undefined);
   }, []);
 
   const refresh = () => setEntries(listHistory());
@@ -31,7 +34,7 @@ export default function HistoryPage() {
       const mapped = mapApiResultToGenerationResult(raw, entry.request);
       setRequest({ ...entry.request });
       setResult(mapped);
-      router.push("/");
+      router.push("/matematikk");
     } catch (e: unknown) {
       setOpenError(
         e instanceof Error ? e.message : "Kunne ikke åpne jobben — den kan være utløpt."
@@ -41,7 +44,7 @@ export default function HistoryPage() {
     }
   };
 
-  if (entries.length > 0) {
+  if (entries.length > 0 || platformJobs.length > 0) {
     return (
       <div className="max-w-content mx-auto">
         <div className="mb-6">
@@ -56,6 +59,22 @@ export default function HistoryPage() {
           )}
         </div>
         <div className="space-y-3">
+          {platformJobs.filter((job) => !entries.some((entry) => entry.jobId === job.id)).map((job) => (
+            <div key={`platform-${job.id}`} className="card flex items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="badge bg-accent-blue/10 text-accent-blue">{job.module}</span>
+                  <span className="text-xs text-text-muted">{job.id.slice(0, 8)}</span>
+                </div>
+                <p className="mt-2 text-sm font-medium">{job.message || "Generert læringsprodukt"}</p>
+                <p className="mt-1 text-xs text-text-secondary">{new Date(job.updated_at).toLocaleString("nb-NO")} · {job.progress}%</p>
+              </div>
+              <div className="flex items-center gap-3">
+                {typeof job.quality_passport?.score === "number" && <span className="text-xs text-text-muted">Kvalitet {job.quality_passport.score}/100</span>}
+                <a href={`/${job.module === "platform" ? "projects" : job.module}`} className="btn-secondary">Arbeidsflate</a>
+              </div>
+            </div>
+          ))}
           {entries.map((entry) => (
             <div key={entry.jobId} className="card flex items-center justify-between gap-4">
               <div>
@@ -127,7 +146,7 @@ export default function HistoryPage() {
                   className="btn-secondary"
                   onClick={() => {
                     setRequest({ ...entry.request });
-                    router.push("/");
+                    router.push("/matematikk");
                   }}
                 >
                   <Copy size={14} />

@@ -313,7 +313,7 @@ def run_job_in_thread(
             done_event: dict = {"type": "done", "filename": filename}
             for field in ("basis_text", "image_url", "worksheet_text",
                           "faktarapport_text", "language_exercises", "warnings",
-                          "source_name", "lint_issues"):
+                          "source_name", "prompt_version", "lint_issues"):
                 if job_meta.get(field):
                     done_event[field] = job_meta[field]
             # Boolean flags must be forwarded even when False, so the UI can
