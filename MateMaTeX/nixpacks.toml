@@ -1,0 +1,9 @@
+[phases.setup]
+nixPkgs = ["texlive.combined.scheme-medium", "texlive.combined.scheme-basic"]
+aptPkgs = ["texlive-latex-base", "texlive-latex-extra", "texlive-fonts-recommended", "texlive-fonts-extra", "texlive-lang-european", "texlive-pictures", "texlive-science", "texlive-binaries", "ghostscript"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "streamlit run app.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true"

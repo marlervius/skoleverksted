@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: matematex-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: MATE_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: PRIMARY_MODEL
+        sync: false
+      - key: FALLBACK_MODEL
+        sync: false
+      - key: OUTPUT_DIR
+        value: /tmp/matematex_out
+      - key: ENVIRONMENT
+        value: production
+      # LuaLaTeX (the "auto" default) needs more RAM than the free plan's 512 MB
+      # and gets OOM-killed mid-compile. pdfLaTeX is far lighter and stable here.
+      # Switch to "auto" (LuaLaTeX) once on a paid plan with >=1 GB RAM for the
+      # nicer Libertinus typography.
+      - key: LATEX_ENGINE
+        value: pdflatex

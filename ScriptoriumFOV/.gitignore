@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
+.DS_Store
+
+# Node/Frontend
+node_modules/
+.next/
+dist/
+
+# App spesifikt
+*.pdf
+tmp/
+
+# Genererte filer og artefakter
+*.png
+nul

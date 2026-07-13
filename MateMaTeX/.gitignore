@@ -1,0 +1,63 @@
+# Environment (NEVER commit secrets)
+.env
+.env.local
+.env.production
+.env.*.local
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+# Python build artifacts (not frontend/src/lib/)
+/lib/
+/lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Output files
+output/*.pdf
+output/*.tex
+output/*.log
+output/*.aux
+
+# Runtime data (caches, job snapshots) — never commit generated artifacts
+backend/data/
+backend/output/
+
+# IDE / local AI
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Node.js
+node_modules/
+.next/
+out/
+
+# Vercel
+.vercel/

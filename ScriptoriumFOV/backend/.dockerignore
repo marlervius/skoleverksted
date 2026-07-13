@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.py[cod]
+.env
+*.pdf
+*.png
+test_*.py
+convert_pdf_to_images.py
+.venv/

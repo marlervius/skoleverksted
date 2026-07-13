@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: fov-scriptorum
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: frankfurt
+    plan: free
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: GOOGLE_MODEL
+        value: gemini-2.0-flash
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Optional: share generation progress across multiple server instances
+      - key: REDIS_URL
+        sync: false

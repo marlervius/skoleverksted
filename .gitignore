@@ -1,0 +1,57 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+
+# JavaScript / Next.js
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+.vercel/
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Runtime and generated documents
+output/
+outputs/
+data/
+tmp/
+*.log
+*.pdf
+*.zip
+*.aux
+*.tex
+*.db
+*.sqlite*
+*_preview-*.png
+
+# Local workspace / editor state
+.agents/
+.codex/
+.nested-git-backup/
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Operating system
+.DS_Store
+Thumbs.db
+nul

@@ -1,0 +1,3 @@
+-r ../../VGS_KI/backend/requirements.txt
+-r ../../ScriptoriumFOV/backend/requirements.txt
+-r ../../MateMaTeX/backend/requirements.txt

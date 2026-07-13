@@ -1,0 +1,21 @@
+nivaa,emne,oppgavetype,poeng,resultat,kommentar
+1T,Algebra,faktorisering,2,verified,
+1T,Algebra,brokforenkling,2,verified,
+1T,Likninger,andregrad,3,verified,
+1T,Likninger,eksponential/log,3,verified,
+1T,Funksjoner,nullpunkt/ekstremal,4,verified,
+1T,Derivasjon,polynom,3,verified,
+1T,Geometri,sinus-/cosinussetning,4,verified,rund av til 2 desimaler
+1T,Sannsynlighet,kombinatorikk,3,verified,
+1T,Modellering,sett opp funksjon,6,unverifiable,oppsett er skjonn
+1T,Modellering,tolk grafen,3,unverifiable,
+1T,Funksjoner,riktig men ulik form,2,false_negative,verifikator bommet pa form
+R1,Algebra,polynomdivisjon,3,verified,
+R1,Derivasjon,kjerneregel,3,verified,
+R1,Funksjonsdrofting,vendepunkt,4,verified,
+R1,Vektorer,skalarprodukt,3,verified,
+R1,Sannsynlighet,betinget/Bayes,4,verified,
+R1,Bevis,induksjon,6,unverifiable,bevismetode
+R1,Bevis,vis at (identitet),4,verified,maalet er en identitet
+R1,Logikk,implikasjon,3,unverifiable,
+R1,Vektorer,geometrisk resonnement,4,unverifiable,argument ikke sjekkbart

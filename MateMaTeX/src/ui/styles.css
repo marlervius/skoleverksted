@@ -1,0 +1,213 @@
+/* MateMaTeX - Clean, Minimal Stylesheet */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* ============================================
+   CSS Variables
+   ============================================ */
+:root {
+    --bg-base: #0f172a;
+    --bg-card: #1e293b;
+    --bg-input: #0f172a;
+    --border: #334155;
+    --border-hover: #475569;
+    --text: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent: #f59e0b;
+    --accent-dim: #d97706;
+    --accent-bg: rgba(245, 158, 11, 0.1);
+    --green: #10b981;
+    --green-bg: rgba(16, 185, 129, 0.1);
+    --red: #f43f5e;
+    --blue: #3b82f6;
+    --radius: 10px;
+    --radius-sm: 6px;
+}
+
+/* ============================================
+   Global
+   ============================================ */
+.stApp {
+    background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%) !important;
+    font-family: 'Inter', -apple-system, sans-serif !important;
+}
+
+#MainMenu, footer, header, .stDeployButton { visibility: hidden !important; }
+
+.main .block-container {
+    padding: 2rem 1.5rem !important;
+    max-width: 720px !important;
+}
+
+/* ============================================
+   Form Elements - Clean & Consistent
+   ============================================ */
+.stSelectbox > div > div {
+    background: var(--bg-input) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    color: var(--text) !important;
+}
+
+.stSelectbox > div > div:hover,
+.stSelectbox > div > div:focus-within {
+    border-color: var(--accent) !important;
+}
+
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea {
+    background: var(--bg-input) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    color: var(--text) !important;
+    font-family: 'Inter', sans-serif !important;
+}
+
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px var(--accent-bg) !important;
+}
+
+.stTextInput > div > div > input::placeholder {
+    color: var(--text-muted) !important;
+}
+
+/* Checkbox */
+.stCheckbox {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.4rem;
+}
+
+.stCheckbox:has(input:checked) {
+    background: var(--accent-bg);
+    border-color: var(--accent-dim);
+}
+
+.stCheckbox label {
+    color: var(--text) !important;
+    font-weight: 500 !important;
+    font-size: 0.85rem !important;
+}
+
+/* Radio */
+.stRadio > div {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.6rem;
+}
+
+.stRadio label { color: var(--text) !important; }
+
+/* Slider */
+.stSlider > div > div > div { background: var(--border) !important; }
+.stSlider > div > div > div > div { background: var(--accent) !important; }
+
+/* ============================================
+   Buttons
+   ============================================ */
+.stButton > button {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    border-radius: var(--radius) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    padding: 0.6rem 1rem !important;
+    transition: all 0.15s ease !important;
+}
+
+.stButton > button:hover {
+    border-color: var(--accent) !important;
+    background: rgba(245, 158, 11, 0.05) !important;
+}
+
+/* Primary button */
+.stButton > button[kind="primary"],
+button[data-testid="baseButton-primary"] {
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%) !important;
+    color: #0f172a !important;
+    border: none !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
+    padding: 0.8rem 1.5rem !important;
+    border-radius: var(--radius) !important;
+    box-shadow: 0 4px 16px rgba(245, 158, 11, 0.2) !important;
+}
+
+.stButton > button[kind="primary"]:hover,
+button[data-testid="baseButton-primary"]:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 24px rgba(245, 158, 11, 0.3) !important;
+}
+
+/* Download buttons */
+.stDownloadButton > button {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    border-radius: var(--radius) !important;
+    font-family: 'Inter', sans-serif !important;
+}
+
+.stDownloadButton > button:hover {
+    border-color: var(--accent) !important;
+}
+
+/* ============================================
+   Expanders - Simple
+   ============================================ */
+.streamlit-expanderHeader {
+    background: var(--bg-card) !important;
+    border-radius: var(--radius) !important;
+    color: var(--text) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    border: 1px solid var(--border) !important;
+}
+
+.streamlit-expanderContent {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-top: none !important;
+    border-radius: 0 0 var(--radius) var(--radius) !important;
+}
+
+/* ============================================
+   Status Messages
+   ============================================ */
+.stSuccess { background: var(--green-bg) !important; border: 1px solid var(--green) !important; border-radius: var(--radius) !important; }
+.stInfo { background: rgba(59,130,246,0.1) !important; border: 1px solid var(--blue) !important; border-radius: var(--radius) !important; }
+.stWarning { background: var(--accent-bg) !important; border: 1px solid var(--accent) !important; border-radius: var(--radius) !important; }
+.stError { background: rgba(244,63,94,0.1) !important; border: 1px solid var(--red) !important; border-radius: var(--radius) !important; }
+
+/* ============================================
+   Code Blocks
+   ============================================ */
+.stCodeBlock {
+    background: var(--bg-input) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+}
+
+/* ============================================
+   Scrollbar
+   ============================================ */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ============================================
+   Responsive
+   ============================================ */
+@media (max-width: 768px) {
+    .main .block-container {
+        padding: 1rem !important;
+        max-width: 100% !important;
+    }
+}

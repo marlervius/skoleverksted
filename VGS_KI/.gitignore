@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
+.DS_Store
+.pytest_cache/
+.cache/
+
+# Node/Frontend
+node_modules/
+.next/
+dist/
+
+# App spesifikt
+*.pdf
+tmp/
+
+# Editor / lokale verktøy
+.claude/
+
