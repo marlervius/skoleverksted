@@ -14,7 +14,9 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from .platform.readiness import build_readiness
 from .platform.router import router as platform_router
 from .platform.store import get_platform_store
 from .platform.telemetry import JobTelemetryMiddleware
@@ -93,18 +95,15 @@ async def health() -> dict:
 
 
 @app.get("/health/ready", tags=["platform"])
-async def readiness() -> dict:
-    """Readiness details without performing slow external provider calls."""
-    return {
-        "status": "ready",
-        "storage": get_platform_store().health(),
-        "ai_provider_configured": bool(os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY")),
-        "redis_configured": bool(os.getenv("REDIS_URL")),
-        "pdf_engines": {
-            "typst": bool(os.getenv("TYPST_PATH")) or "PATH",
-            "pdflatex": bool(os.getenv("PDFLATEX_PATH")) or "PATH",
-        },
-    }
+async def readiness() -> JSONResponse:
+    """Fail closed when a dependency required by the complete app is missing."""
+    try:
+        storage = get_platform_store().health()
+    except Exception as exc:  # pragma: no cover - exercised by deployment failures
+        storage = {"status": "unhealthy", "error": type(exc).__name__}
+
+    ready, report = build_readiness(storage)
+    return JSONResponse(content=report, status_code=200 if ready else 503)
 
 
 app.mount("/api/fag", fag_app, name="fag")

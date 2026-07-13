@@ -1,0 +1,47 @@
+# Render Blueprint for the shared Skoleverksted backend.
+# Secrets with `sync: false` are entered in the Render dashboard during setup.
+services:
+  - type: web
+    name: skoleverksted-api
+    runtime: docker
+    repo: https://github.com/marlervius/skoleverksted.git
+    branch: main
+    region: frankfurt
+    plan: standard
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 120
+    disk:
+      name: skoleverksted-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: OUTPUT_DIR
+        value: /var/data/output
+      - key: SKOLEVERKSTED_DB_PATH
+        value: /var/data/platform/skoleverksted.sqlite3
+      - key: TYPST_PATH
+        value: /usr/local/bin/typst
+      - key: PDFLATEX_PATH
+        value: /usr/bin/pdflatex
+      - key: AI_TEMPERATURE
+        value: "0.35"
+      - key: PROMPT_VERSION
+        value: skoleverksted-v2
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: MAX_CONCURRENT_COMPILES
+        value: "1"
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: MATE_API_KEY
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false

@@ -6,8 +6,11 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      OUTPUT_DIR: /var/data/output
+      SKOLEVERKSTED_DB_PATH: /var/data/platform/skoleverksted.sqlite3
     volumes:
-      - skoleverksted_data:/data/output
+      - skoleverksted_data:/var/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
       interval: 30s

@@ -103,8 +103,23 @@ docker compose up --build
 ```
 
 SQLite-filen og genererte dokumenter ligger i volumet `skoleverksted_data`.
-`/health/ready` kontrollerer plattformlager og viser om AI-, Redis- og PDF-
-konfigurasjon er tilgjengelig.
+`/health/ready` returnerer HTTP 503 hvis plattformlager, Gemini, Typst eller
+pdfLaTeX mangler. Redis vises som en valgfri driftsstatus.
+
+### Render
+
+Rotmappen inneholder en komplett `render.yaml` for backend:
+
+- Docker-basert web service i Frankfurt
+- Standard-instans med 2 GB RAM og begrenset intern samtidighet
+- 1 GB persistent disk montert på `/var/data`
+- deploy fra `main` etter at GitHub-kontrollene har bestått
+- streng health check på `/health/ready`
+
+Opprett tjenesten med **New > Blueprint** i Render og koble til dette repoet.
+Render ber om `GOOGLE_API_KEY`, `APP_PASSWORD`, `FRONTEND_URL` og
+`ALLOWED_ORIGINS`. Se [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md) for hele
+oppskriften og frontendvariablene.
 
 ## Kontroll
 

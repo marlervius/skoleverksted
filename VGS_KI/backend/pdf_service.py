@@ -32,8 +32,9 @@ def compile_typst(source: str, image_path: Optional[str] = None) -> bytes:
     Raises:
         RuntimeError: If compilation fails
     """
-    # Find typst executable
-    typst_exe = shutil.which("typst")
+    # Allow production images to pin the executable explicitly while keeping
+    # local PATH discovery as the default.
+    typst_exe = shutil.which(os.getenv("TYPST_PATH", "typst"))
     if not typst_exe:
         raise RuntimeError("Typst executable not found. Please install Typst: https://typst.app/")
     
