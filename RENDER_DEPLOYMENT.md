@@ -1,7 +1,7 @@
 # Deploy backend on Render
 
 The repository contains a Render Blueprint in `render.yaml`. It creates one
-Docker web service in Frankfurt with a 2 GB instance and a 1 GB persistent disk.
+Docker web service in Frankfurt with a 512 MB Starter instance and a 1 GB persistent disk.
 The disk is required because projects, the shared job index and generated files
 must survive restarts and deploys.
 

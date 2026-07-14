@@ -14,7 +14,7 @@ class RenderBlueprintTests(unittest.TestCase):
 
         self.assertEqual(service["runtime"], "docker")
         self.assertEqual(service["region"], "frankfurt")
-        self.assertEqual(service["plan"], "standard")
+        self.assertEqual(service["plan"], "starter")
         self.assertEqual(service["healthCheckPath"], "/health/ready")
         self.assertEqual(service["autoDeployTrigger"], "checksPass")
         self.assertEqual(service["disk"]["mountPath"], "/var/data")

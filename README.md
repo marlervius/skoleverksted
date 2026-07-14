@@ -111,7 +111,7 @@ pdfLaTeX mangler. Redis vises som en valgfri driftsstatus.
 Rotmappen inneholder en komplett `render.yaml` for backend:
 
 - Docker-basert web service i Frankfurt
-- Standard-instans med 2 GB RAM og begrenset intern samtidighet
+- Starter-instans med 512 MB RAM og én jobb/kompilering om gangen
 - 1 GB persistent disk montert på `/var/data`
 - deploy fra `main` etter at GitHub-kontrollene har bestått
 - streng health check på `/health/ready`

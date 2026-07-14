@@ -7,7 +7,7 @@ services:
     repo: https://github.com/marlervius/skoleverksted.git
     branch: main
     region: frankfurt
-    plan: standard
+    plan: starter
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health/ready
     autoDeployTrigger: checksPass
