@@ -27,6 +27,8 @@ MATE_API_KEY=<same value as the Render backend>
 ```
 
 Replace the example hostname if Render assigns another service slug.
+For the Vercel Hobby flow, follow `VERCEL_DEPLOYMENT.md` after the backend has a
+public hostname.
 
 ## Verify the deployment
 

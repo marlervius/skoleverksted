@@ -1,6 +1,8 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "regions": ["arn1"],
+  "fluid": true,
+  "regions": ["fra1"],
   "headers": [
     {
       "source": "/(.*)",

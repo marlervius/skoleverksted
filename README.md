@@ -121,6 +121,14 @@ Render ber om `GOOGLE_API_KEY`, `APP_PASSWORD`, `FRONTEND_URL` og
 `ALLOWED_ORIGINS`. Se [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md) for hele
 oppskriften og frontendvariablene.
 
+### Vercel frontend
+
+Frontenden deployes separat på Vercel fra `MateMaTeX/frontend`. Sett
+`NEXT_PUBLIC_API_URL` og `BACKEND_INTERNAL_URL` til Render-backenden, og kopier
+Render-tjenestens genererte `MATE_API_KEY` som en server-side variabel i Vercel.
+Se [VERCEL_DEPLOYMENT.md](VERCEL_DEPLOYMENT.md) for komplett Hobby-oppsett,
+CORS-tilkobling og smoke test.
+
 ## Kontroll
 
 ```powershell
