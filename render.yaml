@@ -11,7 +11,6 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health/ready
     autoDeployTrigger: checksPass
-    maxShutdownDelaySeconds: 120
     disk:
       name: skoleverksted-data
       mountPath: /var/data

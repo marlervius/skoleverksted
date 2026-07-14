@@ -18,6 +18,8 @@ class RenderBlueprintTests(unittest.TestCase):
         self.assertEqual(service["healthCheckPath"], "/health/ready")
         self.assertEqual(service["autoDeployTrigger"], "checksPass")
         self.assertEqual(service["disk"]["mountPath"], "/var/data")
+        # Render rejects custom shutdown delays on services with a disk.
+        self.assertNotIn("maxShutdownDelaySeconds", service)
 
         env_vars = {item["key"]: item for item in service["envVars"]}
         self.assertEqual(env_vars["OUTPUT_DIR"]["value"], "/var/data/output")
