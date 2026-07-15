@@ -24,9 +24,11 @@ from typing import Any, Callable, Optional
 if __package__:
     from .media_manager import image_processor
     from . import config
+    from .logging_utils import RequestLogger
 else:
     from media_manager import image_processor
     import config
+    from logging_utils import RequestLogger
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +210,6 @@ def run_job_in_thread(
     """
     loop = asyncio.get_event_loop()
 
-    from main import RequestLogger  # avoid circular import at module load
     req_logger = RequestLogger(logger, {'request_id': job_id[:8]})
 
     def push(msg: str) -> None:

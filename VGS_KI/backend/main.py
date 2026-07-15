@@ -42,6 +42,7 @@ if __package__:
         create_prove_pdf, create_sequence_pdf, parse_worksheet_content,
     )
     from .media_manager import image_processor
+    from .logging_utils import RequestLogger
     from .job_manager import (
         JobContext, compute_cache_key, fetch_image_with_retry, get_job,
         register_job, run_job_in_thread, safe_filename, start_cleanup_task,
@@ -62,6 +63,7 @@ else:
         create_prove_pdf, create_sequence_pdf, parse_worksheet_content,
     )
     from media_manager import image_processor
+    from logging_utils import RequestLogger
     from job_manager import (
         JobContext, compute_cache_key, fetch_image_with_retry, get_job,
         register_job, run_job_in_thread, safe_filename, start_cleanup_task,
@@ -78,13 +80,6 @@ formatter = jsonlogger.JsonFormatter(
 logHandler.setFormatter(formatter)
 logging.basicConfig(level=logging.INFO, handlers=[logHandler], force=True)
 logger = logging.getLogger(__name__)
-
-
-class RequestLogger(logging.LoggerAdapter):
-    """Logger adapter that injects request_id into every log record."""
-    def process(self, msg, kwargs):
-        kwargs.setdefault('extra', {})['request_id'] = self.extra.get('request_id', '-')
-        return msg, kwargs
 
 
 # ── Prompt-injection sanitisation ────────────────────────────────────────────
