@@ -31,6 +31,8 @@ htmlcov/
 output/
 outputs/
 data/
+!MateMaTeX/frontend/src/data/
+!MateMaTeX/frontend/src/data/lk20-goals.ts
 tmp/
 *.log
 *.pdf
