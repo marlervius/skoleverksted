@@ -24,6 +24,10 @@ class RenderBlueprintTests(unittest.TestCase):
         env_vars = {item["key"]: item for item in service["envVars"]}
         self.assertEqual(env_vars["OUTPUT_DIR"]["value"], "/var/data/output")
         self.assertEqual(
+            env_vars["SKOLEVERKSTED_PUBLIC_FRONTEND_URL"]["value"],
+            "https://skoleverksted-3npg.vercel.app",
+        )
+        self.assertEqual(
             env_vars["SKOLEVERKSTED_DB_PATH"]["value"],
             "/var/data/platform/skoleverksted.sqlite3",
         )

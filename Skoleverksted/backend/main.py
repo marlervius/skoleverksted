@@ -7,7 +7,6 @@ checks and documentation one public backend address.
 
 from __future__ import annotations
 
-import os
 import sys
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -17,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .platform.readiness import build_readiness
+from .platform.cors import allowed_origins
 from .platform.router import router as platform_router
 from .platform.store import get_platform_store
 from .platform.telemetry import JobTelemetryMiddleware
@@ -33,11 +33,6 @@ from app.main import app as matematikk_app  # noqa: E402
 
 
 DOMAIN_APPS = (fag_app, norsk_app, matematikk_app)
-
-
-def _allowed_origins() -> list[str]:
-    raw = os.getenv("ALLOWED_ORIGINS") or os.getenv("FRONTEND_URL") or "http://localhost:3000"
-    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
 
 
 @asynccontextmanager
@@ -58,7 +53,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins(),
+    allow_origins=allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

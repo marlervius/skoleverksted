@@ -18,6 +18,8 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
+      - key: SKOLEVERKSTED_PUBLIC_FRONTEND_URL
+        value: https://skoleverksted-3npg.vercel.app
       - key: OUTPUT_DIR
         value: /var/data/output
       - key: SKOLEVERKSTED_DB_PATH
