@@ -31,6 +31,20 @@ class RenderBlueprintTests(unittest.TestCase):
         self.assertNotIn("value", env_vars["GOOGLE_API_KEY"])
         self.assertTrue(env_vars["MATE_API_KEY"]["generateValue"])
 
+    def test_render_image_includes_crewai_gemini_provider(self):
+        for requirements_path in (
+            REPO_ROOT / "VGS_KI" / "backend" / "requirements.txt",
+            REPO_ROOT / "ScriptoriumFOV" / "backend" / "requirements.txt",
+        ):
+            requirements = requirements_path.read_text(encoding="utf-8")
+            self.assertIn("crewai[google-genai]", requirements)
+
+        dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(
+            "from crewai.llms.providers.gemini.completion import GeminiCompletion",
+            dockerfile,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

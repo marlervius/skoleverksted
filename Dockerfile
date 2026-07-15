@@ -31,6 +31,7 @@ COPY VGS_KI/backend/requirements.txt /app/VGS_KI/backend/requirements.txt
 COPY ScriptoriumFOV/backend/requirements.txt /app/ScriptoriumFOV/backend/requirements.txt
 COPY MateMaTeX/backend/requirements.txt /app/MateMaTeX/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/Skoleverksted/backend/requirements.txt
+RUN python -c "from crewai.llms.providers.gemini.completion import GeminiCompletion"
 COPY . /app
 RUN mkdir -p /var/data/output /var/data/platform \
     && typst --version \
