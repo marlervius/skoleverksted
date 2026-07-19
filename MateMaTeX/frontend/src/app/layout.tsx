@@ -17,29 +17,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html
-      lang="no"
-      className="dark"
-      suppressHydrationWarning
-    >
+    <html lang="no">
       <body className="font-sans antialiased bg-bg text-text-primary">
-        {/* Theme init script — avoids flash */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              (function() {
-                try {
-                  var stored = localStorage.getItem('theme');
-                  if (stored === 'light') {
-                    document.documentElement.classList.remove('dark');
-                  } else if (!stored && window.matchMedia('(prefers-color-scheme: light)').matches) {
-                    document.documentElement.classList.remove('dark');
-                  }
-                } catch(e) {}
-              })();
-            `,
-          }}
-        />
         <ConditionalShell>{children}</ConditionalShell>
       </body>
     </html>

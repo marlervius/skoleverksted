@@ -5,7 +5,6 @@ import {
   FileText,
   Loader2,
   Sparkles,
-  GraduationCap,
   CheckCircle2,
   Settings2,
   ChevronDown,
@@ -818,8 +817,8 @@ export default function HomeContent() {
 
   if (!authConfigLoaded) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
-        <Loader2 className="w-10 h-10 animate-spin text-blue-400" aria-label="Laster" />
+      <main className="min-h-screen bg-bg flex items-center justify-center">
+        <Loader2 className="w-10 h-10 animate-spin text-accent-600" aria-label="Laster" />
       </main>
     );
   }
@@ -837,17 +836,10 @@ export default function HomeContent() {
   }
 
   return (
-    <main className="min-h-screen bg-bg relative overflow-hidden">
-      {/* Background decoration */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-indigo-500/5 rounded-full blur-3xl" />
-      </div>
-
-      <div className="relative z-10 flex flex-col items-center justify-start min-h-screen px-4 py-8">
-        {/* Header */}
-        <header className="text-center mb-7 w-full max-w-lg relative">
+    <main className="min-h-screen bg-bg">
+      <div className="mx-auto max-w-2xl px-4 py-8 sm:py-10">
+        {/* Page intro */}
+        <div className="mb-6 relative">
           {passwordRequired && appPassword && (
             <button
               type="button"
@@ -855,26 +847,20 @@ export default function HomeContent() {
                 clearStoredPassword();
                 setLoginPasswordInput("");
               }}
-              className="absolute right-0 top-0 text-xs text-slate-500 hover:text-slate-300 underline"
+              className="absolute right-0 top-0 text-xs text-stone-400 hover:text-stone-600 underline"
             >
               Logg ut
             </button>
           )}
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <div className="p-3 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl shadow-lg shadow-blue-500/25">
-              <GraduationCap className="w-8 h-8 text-white" />
-            </div>
-            <h1 className="font-display text-4xl md:text-5xl text-text-primary">
-              Norsklæring
-            </h1>
-          </div>
-          <p className="text-slate-400 text-lg max-w-xl mx-auto">
-            Lag tydelige PDF-læringsark tilpasset fag og språknivå – for voksne som
-            lærer norsk
+          <h1 className="text-xl font-semibold text-stone-900 tracking-tight">
+            Norsklæring
+          </h1>
+          <p className="text-stone-500 text-sm mt-1">
+            Tydelige PDF-læringsark tilpasset fag og språknivå — for voksne som lærer norsk.
           </p>
-        </header>
+        </div>
 
-        <div className="w-full max-w-lg">
+        <div className="w-full">
           <HistoryPanel
             history={history}
             showHistory={showHistory}
@@ -884,23 +870,23 @@ export default function HomeContent() {
           />
 
           <form onSubmit={handleSubmit}>
-            <div className="bg-slate-800/50 backdrop-blur-xl border border-slate-700/50 rounded-3xl shadow-2xl shadow-black/20 p-8">
+            <div className="surface-card p-6 sm:p-7">
 
               {/* Subject */}
-              <div className="mb-6">
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-2">
-                  <BookOpen className="w-4 h-4 text-blue-400" />
+              <div className="mb-5">
+                <label className="field-label">
+                  <BookOpen className="w-4 h-4 text-accent-600" aria-hidden="true" />
                   Fag
                 </label>
                 <select
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
-                  className="w-full px-4 py-3.5 bg-slate-900/50 border border-slate-600/50 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all appearance-none cursor-pointer hover:border-slate-500"
+                  className="input-field appearance-none cursor-pointer"
                   disabled={formDisabled}
                 >
-                  <option value="" className="bg-slate-900">Velg fag...</option>
+                  <option value="">Velg fag...</option>
                   {SUBJECTS.map((s) => (
-                    <option key={s.value} value={s.value} className="bg-slate-900">
+                    <option key={s.value} value={s.value}>
                       {s.icon} {s.label}
                     </option>
                   ))}
@@ -908,21 +894,21 @@ export default function HomeContent() {
               </div>
 
               {/* Level */}
-              <div className="mb-6">
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-2">
-                  <Languages className="w-4 h-4 text-emerald-400" />
+              <div className="mb-5">
+                <label className="field-label">
+                  <Languages className="w-4 h-4 text-accent-600" aria-hidden="true" />
                   Språknivå (CEFR)
                 </label>
                 {!multiLevelMode && (
                   <select
                     value={level}
                     onChange={(e) => setLevel(e.target.value)}
-                    className="w-full px-4 py-3.5 bg-slate-900/50 border border-slate-600/50 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all appearance-none cursor-pointer hover:border-slate-500"
+                    className="input-field appearance-none cursor-pointer"
                     disabled={formDisabled}
                   >
-                    <option value="" className="bg-slate-900">Velg nivå...</option>
+                    <option value="">Velg nivå...</option>
                     {LEVELS.map((l) => (
-                      <option key={l.value} value={l.value} className="bg-slate-900">
+                      <option key={l.value} value={l.value}>
                         {l.label}
                       </option>
                     ))}
@@ -950,8 +936,8 @@ export default function HomeContent() {
                 </div>
 
                 {multiLevelMode && (
-                  <div className="mt-3 p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl space-y-2">
-                    <p className="text-xs text-cyan-200/80">
+                  <div className="mt-3 p-4 bg-accent-50 border border-accent-200 rounded-lg space-y-2">
+                    <p className="text-xs text-stone-600">
                       Kryss av 2 eller 3 nivåer (f.eks. A1.1, B1.1 og B2.1 for differensiering).
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -961,17 +947,17 @@ export default function HomeContent() {
                         return (
                           <label
                             key={l.value}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors text-sm ${
+                            className={`flex items-center gap-2 px-3 py-2 rounded-md border cursor-pointer transition-colors text-sm ${
                               checked
-                                ? "border-cyan-500/50 bg-cyan-500/10 text-white"
+                                ? "border-accent-300 bg-white text-accent-800"
                                 : maxed
-                                  ? "border-slate-700/40 bg-slate-900/30 text-slate-500 cursor-not-allowed"
-                                  : "border-slate-600/40 bg-slate-900/40 text-slate-300 hover:border-slate-500"
+                                  ? "border-stone-200 bg-stone-50 text-stone-400 cursor-not-allowed"
+                                  : "border-stone-200 bg-white text-stone-600 hover:border-stone-300"
                             }`}
                           >
                             <input
                               type="checkbox"
-                              className="rounded border-slate-500 text-cyan-500 focus:ring-cyan-500/50"
+                              className="rounded border-stone-300 text-accent-600 focus:ring-accent-600/30"
                               checked={checked}
                               disabled={formDisabled || maxed}
                               onChange={() => toggleMultiLevelCheckbox(l.value)}
@@ -983,7 +969,7 @@ export default function HomeContent() {
                     </div>
                     <p
                       className={`text-xs ${
-                        multiLevelsOk ? "text-emerald-400/90" : "text-amber-400/90"
+                        multiLevelsOk ? "text-accent-700" : "text-amber-600"
                       }`}
                     >
                       Valgt: {selectedMultiLevels.length} av 3
@@ -997,33 +983,33 @@ export default function HomeContent() {
 
               {/* Difficulty Modifier */}
               {(level || (multiLevelMode && selectedMultiLevels.length > 0)) && (
-                <div className="mb-6">
-                  <label className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-3">
-                    <Settings2 className="w-4 h-4 text-purple-400" />
+                <div className="mb-5">
+                  <label className="field-label mb-3">
+                    <Settings2 className="w-4 h-4 text-accent-600" aria-hidden="true" />
                     Vanskelighetsgrad (valgfritt)
                   </label>
-                  <div className="px-4 py-3 bg-slate-900/50 border border-slate-600/50 rounded-xl">
+                  <div className="px-4 py-3 bg-white border border-stone-200 rounded-lg">
                     <div className="flex items-center gap-4">
-                      <span className="text-xs text-slate-400 whitespace-nowrap">Enklere</span>
+                      <span className="text-xs text-stone-500 whitespace-nowrap">Enklere</span>
                       <input
                         type="range"
                         min="-2"
                         max="2"
                         value={difficultyModifier ?? 0}
                         onChange={(e) => setDifficultyModifier(parseInt(e.target.value) || null)}
-                        className="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                        className="flex-1 h-2 cursor-pointer accent-accent-600"
                         disabled={formDisabled}
                       />
-                      <span className="text-xs text-slate-400 whitespace-nowrap">Vanskeligere</span>
+                      <span className="text-xs text-stone-500 whitespace-nowrap">Vanskeligere</span>
                     </div>
-                    <div className="flex justify-between text-xs text-slate-500 mt-2">
+                    <div className="flex justify-between text-xs text-stone-400 mt-2">
                       <span>-2</span><span>-1</span>
-                      <span className="text-slate-300 font-medium">Standard</span>
+                      <span className="text-stone-700 font-medium">Standard</span>
                       <span>+1</span><span>+2</span>
                     </div>
                     {difficultyModifier !== null && difficultyModifier !== 0 && (
                       <div className="flex items-center justify-between mt-2">
-                        <p className="text-xs text-purple-300">
+                        <p className="text-xs text-accent-700">
                           Justering: {difficultyModifier > 0 ? "+" : ""}{difficultyModifier}
                           {difficultyModifier === -2 && " (Svært enkelt)"}
                           {difficultyModifier === -1 && " (Litt enklere)"}
@@ -1033,7 +1019,7 @@ export default function HomeContent() {
                         <button
                           type="button"
                           onClick={() => setDifficultyModifier(null)}
-                          className="text-xs text-slate-400 hover:text-slate-300 underline"
+                          className="text-xs text-stone-400 hover:text-stone-600 underline"
                           disabled={formDisabled}
                         >
                           Tilbakestill
@@ -1045,9 +1031,9 @@ export default function HomeContent() {
               )}
 
               {/* Topic / Profession */}
-              <div className="mb-6">
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-2">
-                  <FileText className="w-4 h-4 text-amber-400" />
+              <div className="mb-5">
+                <label className="field-label">
+                  <FileText className="w-4 h-4 text-accent-600" aria-hidden="true" />
                   {subject === "Utdanningsvalg" ? "Hvilket yrke vil du utforske?" : "Tema"}
                 </label>
                 <input
@@ -1055,7 +1041,7 @@ export default function HomeContent() {
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
                   placeholder={subject === "Utdanningsvalg" ? "F.eks. Sykepleier, Elektriker, Ingeniør..." : "F.eks. Det Norske Storting, Fotosyntese..."}
-                  className="w-full px-4 py-3.5 bg-slate-900/50 border border-slate-600/50 rounded-xl text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all hover:border-slate-500"
+                  className="input-field"
                   disabled={formDisabled}
                 />
               </div>
@@ -1063,11 +1049,11 @@ export default function HomeContent() {
               {/* ---------------------------------------------------------------- */}
               {/* #9 Special instructions                                          */}
               {/* ---------------------------------------------------------------- */}
-              <div className="mb-6">
+              <div className="mb-5">
                 <button
                   type="button"
                   onClick={() => setShowInstructions((v) => !v)}
-                  className="flex items-center gap-2 text-sm text-slate-400 hover:text-slate-300 transition-colors"
+                  className="flex items-center gap-2 text-sm text-stone-500 hover:text-stone-700 transition-colors"
                   disabled={formDisabled}
                 >
                   {showInstructions ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -1081,34 +1067,34 @@ export default function HomeContent() {
                       onChange={(e) => setSpecialInstructions(e.target.value.slice(0, 500))}
                       placeholder="F.eks. Fokuser på norrøn mytologi, unngå bruk av presens perfektum, inkluder minst to eksempler fra dagliglivet..."
                       rows={3}
-                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600/50 rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all resize-none"
+                      className="input-field text-sm resize-none"
                       disabled={formDisabled}
                     />
-                    <p className={`text-xs mt-1 text-right ${specialInstructions.length >= 480 ? "text-amber-400" : "text-slate-500"}`}>
+                    <p className={`text-xs mt-1 text-right ${specialInstructions.length >= 480 ? "text-amber-600" : "text-stone-400"}`}>
                       {specialInstructions.length}/500 tegn
                     </p>
                   </div>
                 )}
               </div>
 
-              <div className="mb-6">
+              <div className="mb-5">
                 <button
                   type="button"
                   onClick={() => setShowSource((value) => !value)}
-                  className="flex items-center gap-2 text-sm text-slate-400 transition-colors hover:text-slate-300"
+                  className="flex items-center gap-2 text-sm text-stone-500 transition-colors hover:text-stone-700"
                   disabled={formDisabled}
                 >
-                  <BookOpen className="h-4 w-4 text-emerald-400" />
+                  <BookOpen className="h-4 w-4 text-accent-600" />
                   <span>Kildegrunnlag fra lærer (anbefalt)</span>
                   {showSource ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                 </button>
                 {showSource && (
-                  <div className="mt-3 space-y-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <div className="mt-3 space-y-2 rounded-lg border border-stone-200 bg-stone-50/60 p-4">
                     <input
                       value={sourceName}
                       onChange={(e) => setSourceName(e.target.value.slice(0, 160))}
                       placeholder="Kildenavn, for eksempel NDLA-artikkel eller lærerens notat"
-                      className="w-full rounded-lg border border-slate-600/50 bg-slate-900/50 px-3 py-2 text-sm text-white placeholder:text-slate-500"
+                      className="input-field text-sm"
                       disabled={formDisabled}
                     />
                     <textarea
@@ -1116,21 +1102,21 @@ export default function HomeContent() {
                       onChange={(e) => setSourceText(e.target.value.slice(0, 5000))}
                       placeholder="Lim inn et autoritativt utdrag. Kildebaserte faktapåstander merkes med [K] i resultatet."
                       rows={5}
-                      className="w-full resize-y rounded-lg border border-slate-600/50 bg-slate-900/50 px-3 py-3 text-sm text-white placeholder:text-slate-500"
+                      className="input-field resize-y text-sm"
                       disabled={formDisabled}
                     />
-                    <p className="text-right text-xs text-slate-500">{sourceText.length}/5000 tegn</p>
+                    <p className="text-right text-xs text-stone-400">{sourceText.length}/5000 tegn</p>
                   </div>
                 )}
               </div>
 
               {/* Modular Options */}
-              <div className="mb-6 p-6 bg-slate-900/30 border border-slate-700/30 rounded-2xl">
-                <label className="flex items-center gap-2 text-sm font-semibold text-slate-300 mb-4">
-                  <Settings2 className="w-4 h-4 text-indigo-400" />
+              <div className="mb-5 panel">
+                <label className="flex items-center gap-2 text-sm font-semibold text-stone-800 mb-3">
+                  <Settings2 className="w-4 h-4 text-accent-600" aria-hidden="true" />
                   Tilpass innhold
                 </label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                   <OptionToggle label="Mye fakta (Fordypning)" checked={options.deep_dive}
                     onChange={(val) => setOptions({ ...options, deep_dive: val })}
                     disabled={formDisabled} description="Ca. 800 ord tekst" />
@@ -1153,12 +1139,12 @@ export default function HomeContent() {
               </div>
 
               {/* Advanced Modules */}
-              <div className="mb-6 p-6 bg-slate-900/30 border border-amber-500/30 rounded-2xl">
-                <label className="flex items-center gap-2 text-sm font-semibold text-amber-300 mb-4">
-                  <Sparkles className="w-4 h-4 text-amber-400" />
+              <div className="mb-5 panel">
+                <label className="flex items-center gap-2 text-sm font-semibold text-stone-800 mb-3">
+                  <Sparkles className="w-4 h-4 text-accent-600" aria-hidden="true" />
                   Avanserte moduler
                 </label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                   <OptionToggle label="Rollespill" checked={options.role_play}
                     onChange={(val) => setOptions({ ...options, role_play: val })}
                     disabled={formDisabled} description="Dialog mellom Person A og B" advanced />
@@ -1180,62 +1166,62 @@ export default function HomeContent() {
               {/* ---------------------------------------------------------------- */}
               {/* #11 Series                                                        */}
               {/* ---------------------------------------------------------------- */}
-              <div className="mb-6">
+              <div className="mb-5">
                 <button
                   type="button"
                   onClick={() => setSeriesEnabled((v) => !v)}
                   className="flex items-center gap-2 w-full text-left"
                   disabled={formDisabled}
                 >
-                  <div className={`p-1.5 rounded-lg ${seriesEnabled ? "bg-indigo-500/20" : "bg-slate-700/40"}`}>
-                    <ListOrdered className={`w-4 h-4 ${seriesEnabled ? "text-indigo-400" : "text-slate-400"}`} />
+                  <div className={`p-1.5 rounded-md ${seriesEnabled ? "bg-accent-100" : "bg-stone-100"}`}>
+                    <ListOrdered className={`w-4 h-4 ${seriesEnabled ? "text-accent-700" : "text-stone-400"}`} />
                   </div>
-                  <span className={`text-sm font-medium ${seriesEnabled ? "text-indigo-300" : "text-slate-400"}`}>
+                  <span className={`text-sm font-medium ${seriesEnabled ? "text-accent-800" : "text-stone-500"}`}>
                     Del av en serie (valgfritt)
                   </span>
-                  {seriesEnabled ? <ChevronUp className="w-3 h-3 text-slate-400 ml-auto" /> : <ChevronDown className="w-3 h-3 text-slate-400 ml-auto" />}
+                  {seriesEnabled ? <ChevronUp className="w-3 h-3 text-stone-400 ml-auto" /> : <ChevronDown className="w-3 h-3 text-stone-400 ml-auto" />}
                 </button>
 
                 {seriesEnabled && (
-                  <div className="mt-3 p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-xl space-y-3">
+                  <div className="mt-3 p-4 bg-accent-50 border border-accent-200 rounded-lg space-y-3">
                     <div>
-                      <label className="text-xs text-slate-400 mb-1 block">Serietema</label>
+                      <label className="text-xs text-stone-600 mb-1 block">Serietema</label>
                       <input
                         type="text"
                         value={series.series_theme}
                         onChange={(e) => setSeries({ ...series, series_theme: e.target.value.slice(0, 100) })}
                         placeholder="F.eks. Norsk arbeidsliv og samfunn"
-                        className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600/50 rounded-lg text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                        className="input-field text-sm"
                         disabled={formDisabled}
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-xs text-slate-400 mb-1 block">Leksjon nr.</label>
+                        <label className="text-xs text-stone-600 mb-1 block">Leksjon nr.</label>
                         <input
                           type="number"
                           min={1}
                           max={20}
                           value={series.lesson_number}
                           onChange={(e) => setSeries({ ...series, lesson_number: Math.max(1, Math.min(20, parseInt(e.target.value) || 1)) })}
-                          className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600/50 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                          className="input-field text-sm"
                           disabled={formDisabled}
                         />
                       </div>
                       <div>
-                        <label className="text-xs text-slate-400 mb-1 block">Totalt antall</label>
+                        <label className="text-xs text-stone-600 mb-1 block">Totalt antall</label>
                         <input
                           type="number"
                           min={2}
                           max={20}
                           value={series.total_lessons}
                           onChange={(e) => setSeries({ ...series, total_lessons: Math.max(2, Math.min(20, parseInt(e.target.value) || 2)) })}
-                          className="w-full px-3 py-2 bg-slate-900/50 border border-slate-600/50 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                          className="input-field text-sm"
                           disabled={formDisabled}
                         />
                       </div>
                     </div>
-                    <p className="text-xs text-indigo-300/60">
+                    <p className="text-xs text-stone-500">
                       Leksjon {series.lesson_number} av {series.total_lessons} i &quot;{series.series_theme || "..."}&quot;
                     </p>
                   </div>
@@ -1245,24 +1231,24 @@ export default function HomeContent() {
               {/* ---------------------------------------------------------------- */}
               {/* #12 Accessibility                                                 */}
               {/* ---------------------------------------------------------------- */}
-              <div className="mb-6">
+              <div className="mb-5">
                 <button
                   type="button"
                   onClick={() => setShowAccessibility((v) => !v)}
                   className="flex items-center gap-2 w-full text-left"
                   disabled={formDisabled}
                 >
-                  <div className={`p-1.5 rounded-lg ${showAccessibility ? "bg-teal-500/20" : "bg-slate-700/40"}`}>
-                    <Accessibility className={`w-4 h-4 ${showAccessibility ? "text-teal-400" : "text-slate-400"}`} />
+                  <div className={`p-1.5 rounded-md ${showAccessibility ? "bg-accent-100" : "bg-stone-100"}`}>
+                    <Accessibility className={`w-4 h-4 ${showAccessibility ? "text-accent-700" : "text-stone-400"}`} />
                   </div>
-                  <span className={`text-sm font-medium ${showAccessibility ? "text-teal-300" : "text-slate-400"}`}>
+                  <span className={`text-sm font-medium ${showAccessibility ? "text-accent-800" : "text-stone-500"}`}>
                     Tilgjengelighetsalternativer
                   </span>
-                  {showAccessibility ? <ChevronUp className="w-3 h-3 text-slate-400 ml-auto" /> : <ChevronDown className="w-3 h-3 text-slate-400 ml-auto" />}
+                  {showAccessibility ? <ChevronUp className="w-3 h-3 text-stone-400 ml-auto" /> : <ChevronDown className="w-3 h-3 text-stone-400 ml-auto" />}
                 </button>
 
                 {showAccessibility && (
-                  <div className="mt-3 p-4 bg-teal-500/5 border border-teal-500/20 rounded-xl">
+                  <div className="mt-3 p-4 bg-accent-50 border border-accent-200 rounded-lg">
                     <div className="grid grid-cols-1 gap-2">
                       <OptionToggle
                         label="Dysleksi-vennlig font"
@@ -1293,14 +1279,14 @@ export default function HomeContent() {
               {/* ---------------------------------------------------------------- */}
               {/* #5 Custom image upload                                            */}
               {/* ---------------------------------------------------------------- */}
-              <div className="mb-6">
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-2">
-                  <Upload className="w-4 h-4 text-sky-400" />
+              <div className="mb-5">
+                <label className="field-label">
+                  <Upload className="w-4 h-4 text-accent-600" aria-hidden="true" />
                   Eget bilde (valgfritt)
                 </label>
                 <div
-                  className={`relative border-2 border-dashed rounded-xl px-4 py-5 text-center transition-colors
-                    ${customImage ? "border-sky-500/50 bg-sky-500/5" : "border-slate-600/50 hover:border-slate-500"}`}
+                  className={`relative border-2 border-dashed rounded-lg px-4 py-5 text-center transition-colors
+                    ${customImage ? "border-accent-300 bg-accent-50" : "border-stone-300 bg-white hover:border-stone-400"}`}
                 >
                   <input
                     ref={fileInputRef}
@@ -1313,14 +1299,14 @@ export default function HomeContent() {
                   {customImage ? (
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 min-w-0">
-                        <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
-                        <span className="text-sky-300 text-sm truncate">{customImage.name}</span>
-                        <span className="text-slate-500 text-xs shrink-0">({(customImage.size / 1024).toFixed(0)} KB)</span>
+                        <CheckCircle2 className="w-4 h-4 text-accent-700 shrink-0" />
+                        <span className="text-accent-800 text-sm truncate">{customImage.name}</span>
+                        <span className="text-stone-400 text-xs shrink-0">({(customImage.size / 1024).toFixed(0)} KB)</span>
                       </div>
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); setCustomImage(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
-                        className="text-xs text-slate-400 hover:text-red-400 ml-2 shrink-0 transition-colors"
+                        className="text-xs text-stone-400 hover:text-red-600 ml-2 shrink-0 transition-colors"
                         disabled={formDisabled}
                       >
                         Fjern
@@ -1328,24 +1314,24 @@ export default function HomeContent() {
                     </div>
                   ) : (
                     <div>
-                      <Upload className="w-6 h-6 text-slate-500 mx-auto mb-1" />
-                      <p className="text-sm text-slate-500">
+                      <Upload className="w-6 h-6 text-stone-400 mx-auto mb-1" />
+                      <p className="text-sm text-stone-500">
                         Klikk eller dra et bilde hit
                       </p>
-                      <p className="text-xs text-slate-600 mt-0.5">JPEG, PNG, WebP · maks 5 MB</p>
+                      <p className="text-xs text-stone-400 mt-0.5">JPEG, PNG, WebP · maks 5 MB</p>
                     </div>
                   )}
                 </div>
                 {imageError && (
-                  <p className="text-xs text-red-400 mt-1">{imageError}</p>
+                  <p className="text-xs text-red-600 mt-1">{imageError}</p>
                 )}
                 {multiLevelMode && (
-                  <p className="text-xs text-cyan-400/80 mt-2">
+                  <p className="text-xs text-stone-500 mt-2">
                     Flernivå støttes ikke sammen med eget bilde — skru av «Flere nivåer» for å laste opp bilde.
                   </p>
                 )}
                 {customImage && (
-                  <p className="text-xs text-sky-400/70 mt-1">
+                  <p className="text-xs text-stone-500 mt-1">
                     Wikimedia-søk hoppes over – bildet ditt brukes i PDF-en.
                   </p>
                 )}
@@ -1376,7 +1362,7 @@ export default function HomeContent() {
                     }
                   />
                   {dualVersion && (
-                    <p className="text-xs text-purple-300/70 mt-2 px-1">
+                    <p className="text-xs text-stone-500 mt-2 px-1">
                       Du laster ned en ZIP med én PDF per undernivå.
                     </p>
                   )}
@@ -1384,7 +1370,7 @@ export default function HomeContent() {
               )}
 
               {/* Submit / Preview */}
-              <div className="flex gap-4">
+              <div className="flex gap-3">
                 <button
                   type="button"
                   onClick={handlePreview}
@@ -1396,17 +1382,15 @@ export default function HomeContent() {
                     !!customImage
                   }
                   className={`
-                    flex-1 py-4 px-6 rounded-xl font-semibold text-base
-                    flex items-center justify-center gap-2
-                    transition-all duration-300 transform
+                    flex-1 py-3.5 px-6 rounded-lg font-medium text-base
+                    flex items-center justify-center gap-2 border
+                    transition-colors focus:outline-none focus:ring-2 focus:ring-stone-300
                     ${
                       status === "loading"
-                        ? "bg-slate-800 text-slate-500 cursor-wait"
-                        : status === "success"
-                        ? "bg-slate-800 text-slate-500"
-                        : isFormValid
-                        ? "bg-slate-700 hover:bg-slate-600 text-white shadow-lg hover:shadow-slate-500/20 hover:scale-[1.02] active:scale-[0.98]"
-                        : "bg-slate-800/50 text-slate-600 cursor-not-allowed"
+                        ? "bg-stone-100 text-stone-400 border-stone-200 cursor-wait"
+                        : isFormValid && !multiLevelMode && !dualVersion && !customImage
+                        ? "bg-white text-stone-700 border-stone-300 hover:border-stone-400 hover:bg-stone-50"
+                        : "bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed"
                     }
                   `}
                 >
@@ -1417,17 +1401,17 @@ export default function HomeContent() {
                   type="submit"
                   disabled={!isFormValid || status === "loading"}
                   className={`
-                    flex-1 py-4 px-6 rounded-xl font-semibold text-base
+                    flex-1 py-3.5 px-6 rounded-lg font-semibold text-base
                     flex items-center justify-center gap-2
-                    transition-all duration-300 transform
+                    transition-colors focus:outline-none focus:ring-2 focus:ring-accent-600/30
                     ${
                       status === "loading"
-                        ? "bg-slate-700 text-slate-400 cursor-wait"
+                        ? "bg-stone-200 text-stone-500 cursor-wait"
                         : status === "success"
-                        ? "bg-emerald-600 text-white"
+                        ? "bg-accent-700 text-white"
                         : isFormValid
-                        ? "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 hover:scale-[1.02] active:scale-[0.98]"
-                        : "bg-slate-700/50 text-slate-500 cursor-not-allowed"
+                        ? "bg-accent-700 hover:bg-accent-800 text-white"
+                        : "bg-stone-200 text-stone-400 cursor-not-allowed"
                     }
                   `}
                 >
@@ -1452,23 +1436,21 @@ export default function HomeContent() {
           </form>
 
           {/* Info Cards */}
-          <div className="grid grid-cols-2 gap-4 mt-6">
-            <div className="bg-slate-800/30 backdrop-blur border border-slate-700/30 rounded-2xl p-4">
-              <div className="text-2xl mb-2">🎯</div>
-              <h3 className="text-white font-medium text-sm">Tilpasset innhold</h3>
-              <p className="text-slate-500 text-xs mt-1">AI-generert tekst tilpasset språknivå</p>
+          <div className="grid grid-cols-2 gap-3 mt-5">
+            <div className="rounded-lg border border-stone-200 bg-white px-4 py-3">
+              <h3 className="text-stone-800 font-medium text-sm">Tilpasset innhold</h3>
+              <p className="text-stone-400 text-xs mt-0.5">AI-generert tekst tilpasset språknivå</p>
             </div>
-            <div className="bg-slate-800/30 backdrop-blur border border-slate-700/30 rounded-2xl p-4">
-              <div className="text-2xl mb-2">📄</div>
-              <h3 className="text-white font-medium text-sm">Ferdig PDF</h3>
-              <p className="text-slate-500 text-xs mt-1">Klar til print med oppgaver</p>
+            <div className="rounded-lg border border-stone-200 bg-white px-4 py-3">
+              <h3 className="text-stone-800 font-medium text-sm">Ferdig PDF</h3>
+              <p className="text-stone-400 text-xs mt-0.5">Klar til print med oppgaver</p>
             </div>
           </div>
         </div>
 
         {/* Footer */}
-        <footer className="mt-12 text-center text-slate-500 text-sm">
-          <p>Scriptorium • Læringsark for voksenopplæring</p>
+        <footer className="mt-10 text-center text-stone-400 text-xs">
+          <p>Norsklæring · Læringsark for voksenopplæring</p>
         </footer>
       </div>
 

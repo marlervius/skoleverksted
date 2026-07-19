@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Sun, Moon } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import {
   loadPreferences,
@@ -24,31 +23,15 @@ const LANGUAGE_LEVELS = [
 ];
 
 export default function SettingsPage() {
-  const [isDark, setIsDark] = useState(true);
   const setRequest = useAppStore((s) => s.setRequest);
   const [grade, setGrade] = useState(DEFAULT_PREFERENCES.grade);
   const [languageLevel, setLanguageLevel] = useState(DEFAULT_PREFERENCES.languageLevel);
 
   useEffect(() => {
-    setIsDark(document.documentElement.classList.contains("dark"));
     const prefs = loadPreferences();
     setGrade(prefs.grade);
     setLanguageLevel(prefs.languageLevel);
   }, []);
-
-  const toggleTheme = () => {
-    const html = document.documentElement;
-    html.classList.add("theme-transitioning");
-    if (isDark) {
-      html.classList.remove("dark");
-      localStorage.setItem("theme", "light");
-    } else {
-      html.classList.add("dark");
-      localStorage.setItem("theme", "dark");
-    }
-    setIsDark(!isDark);
-    setTimeout(() => html.classList.remove("theme-transitioning"), 250);
-  };
 
   const updateGrade = (value: string) => {
     setGrade(value);
@@ -67,20 +50,6 @@ export default function SettingsPage() {
       <h1 className="font-display text-3xl mb-8">Innstillinger</h1>
 
       <div className="space-y-6">
-        <div className="card">
-          <h2 className="text-sm font-medium mb-4">Utseende</h2>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-text-primary">Tema</p>
-              <p className="text-xs text-text-muted">Velg mellom mørkt og lyst tema</p>
-            </div>
-            <button onClick={toggleTheme} className="btn-secondary !py-2">
-              {isDark ? <Moon size={14} /> : <Sun size={14} />}
-              {isDark ? "Mørkt" : "Lyst"}
-            </button>
-          </div>
-        </div>
-
         <div className="card">
           <h2 className="text-sm font-medium mb-4">Standard-innstillinger</h2>
           <p className="text-xs text-text-secondary mb-4">

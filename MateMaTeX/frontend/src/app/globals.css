@@ -34,29 +34,6 @@
     --shadow-lg:       0 8px 24px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04);
   }
 
-  .dark {
-    --bg:              220 20% 8%;
-    --surface:         220 18% 12%;
-    --surface-elevated: 220 16% 16%;
-    --border:          220 14% 20%;
-    --text-primary:    210 20% 92%;
-    --text-secondary:  210 12% 58%;
-    --text-muted:      210 8% 40%;
-
-    /* -- Accents (dark variants — slightly brighter for contrast) -- */
-    --accent-blue:     210 70% 55%;
-    --accent-green:    150 55% 45%;
-    --accent-purple:   270 50% 55%;
-    --accent-orange:   30 80% 55%;
-    --accent-teal:     180 50% 45%;
-    --accent-red:      0 65% 55%;
-
-    /* -- Shadows (dark — use ring/border instead) -- */
-    --shadow-sm:       none;
-    --shadow-md:       none;
-    --shadow-lg:       none;
-  }
-
   /* -- Base body -- */
   html {
     scroll-behavior: smooth;
@@ -65,20 +42,6 @@
   body {
     background-color: hsl(var(--bg));
     color: hsl(var(--text-primary));
-  }
-
-  /* -- Theme transition -- */
-  *,
-  *::before,
-  *::after {
-    transition-property: background-color, border-color, color;
-    transition-timing-function: ease;
-    transition-duration: 0ms; /* upgraded to 200ms on theme toggle via JS */
-  }
-  html.theme-transitioning *,
-  html.theme-transitioning *::before,
-  html.theme-transitioning *::after {
-    transition-duration: 200ms !important;
   }
 
   /* -- Reduced motion -- */
@@ -99,9 +62,6 @@
   }
   ::-webkit-scrollbar-track {
     background: transparent;
-  }
-  .dark ::-webkit-scrollbar-track {
-    background: hsl(220 18% 10%);
   }
   ::-webkit-scrollbar-thumb {
     background: hsl(var(--text-muted));
@@ -139,20 +99,6 @@
 
   .panel {
     @apply rounded-lg border border-stone-200 bg-stone-50/60 p-5;
-  }
-
-  .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-accent-700
-      font-semibold text-white transition-colors hover:bg-accent-800
-      focus:outline-none focus:ring-2 focus:ring-accent-600/30
-      disabled:cursor-not-allowed disabled:opacity-50;
-  }
-
-  .btn-secondary {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border
-      border-stone-300 bg-white font-medium text-stone-700 transition-colors
-      hover:border-stone-400 hover:bg-stone-50 focus:outline-none
-      focus:ring-2 focus:ring-stone-300;
   }
 }
 
@@ -194,11 +140,6 @@
     border: 1px solid hsl(var(--border));
     border-radius: var(--radius);
     padding: 1.25rem;
-  }
-  .dark .card {
-    box-shadow: none;
-  }
-  :not(.dark) .card {
     box-shadow: var(--shadow-sm);
   }
 
@@ -210,8 +151,6 @@
   .card-interactive:hover {
     transform: translateY(-2px);
     border-color: hsl(var(--accent-blue) / 0.4);
-  }
-  :not(.dark) .card-interactive:hover {
     box-shadow: var(--shadow-md);
   }
 
@@ -246,23 +185,19 @@
     transform: scale(0.97);
   }
 
+  /* Primary/secondary follow the shared white "Scholarly Craft" look
+     (stone + accent) so all three modules get identical buttons. */
   .btn-primary {
-    @apply btn;
-    background: hsl(var(--accent-blue));
-    color: white;
-  }
-  .btn-primary:hover {
-    filter: brightness(1.1);
+    @apply btn bg-accent-700 font-semibold text-white
+      hover:bg-accent-800 focus:outline-none focus:ring-2 focus:ring-accent-600/30
+      disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .btn-secondary {
-    @apply btn;
-    background: hsl(var(--surface-elevated));
-    color: hsl(var(--text-primary));
-    border: 1px solid hsl(var(--border));
-  }
-  .btn-secondary:hover {
-    border-color: hsl(var(--text-muted));
+    @apply btn border border-stone-300 bg-white font-medium text-stone-700
+      hover:border-stone-400 hover:bg-stone-50
+      focus:outline-none focus:ring-2 focus:ring-stone-300
+      disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .btn-ghost {

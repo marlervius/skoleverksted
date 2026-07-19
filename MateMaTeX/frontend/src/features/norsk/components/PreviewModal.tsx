@@ -33,24 +33,24 @@ export function PreviewModal({
   const hasAnyExercises = hasGrammar || hasVocab || hasSyntax;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/80 backdrop-blur-sm">
-      <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-stone-900/40 backdrop-blur-sm">
+      <div className="bg-white border border-stone-200 rounded-xl shadow-pop w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-700 bg-slate-800/50">
+        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-stone-200">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-500/20 rounded-lg">
-              <FileText className="w-5 h-5 text-blue-400" />
+            <div className="p-2 bg-accent-100 rounded-md">
+              <FileText className="w-5 h-5 text-accent-700" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white leading-tight">Forhåndsvisning</h2>
-              <p className="text-sm text-slate-400">
+              <h2 className="text-lg font-semibold text-stone-900 leading-tight">Forhåndsvisning</h2>
+              <p className="text-sm text-stone-500">
                 {previewData.subject} • {previewData.level} • {previewData.topic}
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+            className="p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
           >
             Lukk
           </button>
@@ -65,41 +65,41 @@ export function PreviewModal({
               <img
                 src={previewData.image_url}
                 alt={previewData.topic}
-                className="max-h-64 object-contain rounded-lg border border-slate-700 shadow-md"
+                className="max-h-64 object-contain rounded-lg border border-stone-200 shadow-card"
                 onError={(e) => {
                   e.currentTarget.style.display = "none";
                   const parent = e.currentTarget.parentElement;
                   if (parent) {
                     const msg = document.createElement("p");
-                    msg.className = "text-xs text-red-400 mt-2";
+                    msg.className = "text-xs text-red-600 mt-2";
                     msg.textContent =
                       "Kunne ikke laste inn forhåndsvisning av bildet (men det vil sannsynligvis fungere i PDF-en).";
                     parent.appendChild(msg);
                   }
                 }}
               />
-              <p className="text-xs text-slate-500 mt-2">Bilde fra Wikimedia Commons</p>
+              <p className="text-xs text-stone-400 mt-2">Bilde fra Wikimedia Commons</p>
             </div>
           )}
 
           {/* Text */}
           <div>
-            <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-emerald-400" />
+            <h3 className="text-lg font-semibold text-stone-800 mb-4 flex items-center gap-2">
+              <BookOpen className="w-4 h-4 text-accent-600" />
               Tekst
             </h3>
-            <pre className="whitespace-pre-wrap font-sans text-sm sm:text-base text-slate-300 bg-slate-900/50 p-6 rounded-xl border border-slate-700/50">
+            <pre className="whitespace-pre-wrap font-sans text-sm sm:text-base text-stone-700 bg-stone-50 p-6 rounded-lg border border-stone-200">
               {previewData.text}
             </pre>
           </div>
 
           {/* Worksheet */}
           <div>
-            <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-              <GraduationCap className="w-4 h-4 text-amber-400" />
+            <h3 className="text-lg font-semibold text-stone-800 mb-4 flex items-center gap-2">
+              <GraduationCap className="w-4 h-4 text-accent-600" />
               Oppgaver
             </h3>
-            <pre className="whitespace-pre-wrap font-sans text-sm sm:text-base text-slate-300 bg-slate-900/50 p-6 rounded-xl border border-slate-700/50">
+            <pre className="whitespace-pre-wrap font-sans text-sm sm:text-base text-stone-700 bg-stone-50 p-6 rounded-lg border border-stone-200">
               {previewData.worksheet}
             </pre>
           </div>
@@ -107,14 +107,14 @@ export function PreviewModal({
           {/* Language Exercises */}
           {ex && (
             <div>
-              <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                <Languages className="w-4 h-4 text-purple-400" />
+              <h3 className="text-lg font-semibold text-stone-800 mb-4 flex items-center gap-2">
+                <Languages className="w-4 h-4 text-accent-600" />
                 Språkøvelser (CLIL)
               </h3>
-              <div className="bg-slate-900/50 p-6 rounded-xl border border-slate-700/50">
+              <div className="bg-stone-50 p-6 rounded-lg border border-stone-200">
                 {hasGrammar && (
                   <div className="mb-6">
-                    <h4 className="text-emerald-400 font-semibold mb-3 border-b border-slate-700 pb-1">
+                    <h4 className="text-accent-800 font-semibold mb-3 border-b border-stone-200 pb-1">
                       Grammatikk
                     </h4>
                     {ex.grammar_tasks!.map((task: Record<string, unknown>, i) => (
@@ -124,7 +124,7 @@ export function PreviewModal({
                 )}
                 {hasVocab && (
                   <div className="mb-6">
-                    <h4 className="text-amber-400 font-semibold mb-3 border-b border-slate-700 pb-1">
+                    <h4 className="text-accent-800 font-semibold mb-3 border-b border-stone-200 pb-1">
                       Ordforråd
                     </h4>
                     {ex.vocabulary_tasks!.map((task: Record<string, unknown>, i) => (
@@ -134,7 +134,7 @@ export function PreviewModal({
                 )}
                 {hasSyntax && (
                   <div className="mb-2">
-                    <h4 className="text-sky-400 font-semibold mb-3 border-b border-slate-700 pb-1">
+                    <h4 className="text-accent-800 font-semibold mb-3 border-b border-stone-200 pb-1">
                       Setningsstruktur
                     </h4>
                     {ex.syntax_tasks!.map((task: Record<string, unknown>, i) => (
@@ -143,7 +143,7 @@ export function PreviewModal({
                   </div>
                 )}
                 {!hasAnyExercises && (
-                  <p className="text-sm text-slate-400 italic">Ingen språkøvelser ble generert.</p>
+                  <p className="text-sm text-stone-500 italic">Ingen språkøvelser ble generert.</p>
                 )}
               </div>
             </div>
@@ -151,16 +151,16 @@ export function PreviewModal({
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 sm:p-6 border-t border-slate-700 bg-slate-800/80 backdrop-blur-sm flex flex-col sm:flex-row justify-between items-center gap-4">
-          <p className="text-sm text-slate-400 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+        <div className="p-4 sm:p-6 border-t border-stone-200 bg-white flex flex-col sm:flex-row justify-between items-center gap-4">
+          <p className="text-sm text-stone-500 flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-accent-700" />
             Ser dette bra ut?
           </p>
           <div className="flex w-full sm:w-auto gap-3">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-slate-300 hover:text-white bg-slate-700/50 hover:bg-slate-700 font-medium transition-colors"
+              className="btn-secondary flex-1 sm:flex-none px-6 py-2.5"
             >
               Avbryt
             </button>
@@ -168,7 +168,7 @@ export function PreviewModal({
               type="button"
               onClick={onGeneratePdf}
               disabled={formDisabled}
-              className="flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 font-medium shadow-lg hover:shadow-blue-500/25 transition-all flex items-center justify-center gap-2"
+              className="btn-primary flex-1 sm:flex-none px-6 py-2.5"
             >
               {isGenerating ? (
                 <>
@@ -193,12 +193,12 @@ function ExerciseBlock({ task }: { task: Record<string, unknown> }) {
   const items = task.items as string[] | undefined;
   return (
     <div className="mb-4 last:mb-0 ml-2">
-      <h5 className="text-white font-medium mb-1">
+      <h5 className="text-stone-800 font-medium mb-1">
         {(task.type as string) || "Oppgave"}
       </h5>
-      <p className="text-sm text-slate-400 mb-2">{task.instruction as string}</p>
+      <p className="text-sm text-stone-500 mb-2">{task.instruction as string}</p>
       {items && items.length > 0 && (
-        <ul className="list-disc list-inside text-sm text-slate-300 space-y-1 ml-2">
+        <ul className="list-disc list-inside text-sm text-stone-700 space-y-1 ml-2">
           {items.map((item, i) => (
             <li key={i}>{item}</li>
           ))}

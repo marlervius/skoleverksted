@@ -1,15 +1,11 @@
 "use client";
 
-import { Check } from "lucide-react";
-
 export function OptionToggle({
   label,
   checked,
   onChange,
   disabled,
   description,
-  highlight = false,
-  advanced = false,
 }: {
   label: string;
   checked: boolean;
@@ -22,44 +18,43 @@ export function OptionToggle({
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={`${label}${description ? ` - ${description}` : ""}`}
       onClick={() => !disabled && onChange(!checked)}
       className={`
-        flex items-center justify-between p-3 rounded-xl border transition-all duration-200
+        flex items-center justify-between gap-3 px-3 py-2.5 rounded-md border text-left transition-colors
+        focus:outline-none focus:ring-2 focus:ring-accent-600/30
         ${
           checked
-            ? highlight
-              ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-100"
-              : advanced
-                ? "bg-amber-500/10 border-amber-500/50 text-amber-100"
-                : "bg-blue-500/10 border-blue-500/50 text-blue-100"
-            : "bg-slate-900/50 border-slate-700/50 text-slate-400 opacity-60 hover:opacity-100"
+            ? "bg-accent-50 border-accent-200"
+            : "bg-white border-stone-200 hover:border-stone-300"
         }
-        ${disabled ? "cursor-not-allowed" : "cursor-pointer"}
+        ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}
       `}
       disabled={disabled}
     >
-      <div className="flex flex-col items-start">
-        <span className="text-xs font-medium leading-none">{label}</span>
+      <div className="flex flex-col items-start min-w-0">
+        <span className={`text-xs font-medium leading-tight ${checked ? "text-accent-800" : "text-stone-700"}`}>
+          {label}
+        </span>
         {description && (
-          <span className="text-[10px] text-slate-500 mt-1">{description}</span>
+          <span className="text-[10px] text-stone-400 mt-0.5 leading-tight">{description}</span>
         )}
       </div>
-      <div
-        className={`
-        w-5 h-5 rounded-md flex items-center justify-center transition-colors
-        ${
-          checked
-            ? highlight
-              ? "bg-emerald-500 text-white"
-              : advanced
-                ? "bg-amber-500 text-white"
-                : "bg-blue-500 text-white"
-            : "bg-slate-800 border border-slate-600"
-        }
-      `}
+      {/* Switch */}
+      <span
+        className={`relative shrink-0 w-9 h-5 rounded-full transition-colors ${
+          checked ? "bg-accent-600" : "bg-stone-300"
+        }`}
+        aria-hidden="true"
       >
-        {checked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-      </div>
+        <span
+          className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
+            checked ? "translate-x-4" : "translate-x-0"
+          }`}
+        />
+      </span>
     </button>
   );
 }

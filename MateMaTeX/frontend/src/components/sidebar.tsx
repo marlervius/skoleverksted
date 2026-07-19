@@ -13,8 +13,6 @@ import {
   User,
   ChevronLeft,
   ChevronRight,
-  Sun,
-  Moon,
   PanelLeftClose,
   PanelLeft,
   Home,
@@ -43,15 +41,9 @@ const commonSecondaryNav: NavItem[] = [
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [isDark, setIsDark] = useState(true);
   const secondaryNav = pathname.startsWith("/matematikk") || pathname.startsWith("/exercises")
     ? [{ href: "/exercises", label: "Matteoppgaver", icon: <Library size={20} /> }, ...commonSecondaryNav]
     : commonSecondaryNav;
-
-  // Init theme from DOM
-  useEffect(() => {
-    setIsDark(document.documentElement.classList.contains("dark"));
-  }, []);
 
   // Keyboard shortcut: Cmd/Ctrl + B
   useEffect(() => {
@@ -64,20 +56,6 @@ export function Sidebar() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-
-  const toggleTheme = () => {
-    const html = document.documentElement;
-    html.classList.add("theme-transitioning");
-    if (isDark) {
-      html.classList.remove("dark");
-      localStorage.setItem("theme", "light");
-    } else {
-      html.classList.add("dark");
-      localStorage.setItem("theme", "dark");
-    }
-    setIsDark(!isDark);
-    setTimeout(() => html.classList.remove("theme-transitioning"), 250);
-  };
 
   const sidebarWidth = collapsed ? 64 : 280;
 
@@ -145,33 +123,6 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="px-2 pb-3 space-y-1 flex-shrink-0 border-t border-border pt-3">
-        {/* Theme toggle */}
-        <button
-          onClick={toggleTheme}
-          className="nav-item w-full"
-          aria-label={isDark ? "Bytt til lyst tema" : "Bytt til mørkt tema"}
-        >
-          <motion.div
-            animate={{ rotate: isDark ? 0 : 180 }}
-            transition={{ duration: 0.3 }}
-            className="flex-shrink-0"
-          >
-            {isDark ? <Moon size={20} /> : <Sun size={20} />}
-          </motion.div>
-          <AnimatePresence>
-            {!collapsed && (
-              <motion.span
-                initial={{ opacity: 0, width: 0 }}
-                animate={{ opacity: 1, width: "auto" }}
-                exit={{ opacity: 0, width: 0 }}
-                className="overflow-hidden whitespace-nowrap"
-              >
-                {isDark ? "Mørkt tema" : "Lyst tema"}
-              </motion.span>
-            )}
-          </AnimatePresence>
-        </button>
-
         {/* Settings + privacy (grunnlov §2 / §9) */}
         <NavLink
           item={{
