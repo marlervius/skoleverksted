@@ -14,7 +14,7 @@ import os
 import re
 import threading
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 
 import diskcache as dc
 from fastapi import FastAPI, HTTPException, Request
@@ -25,6 +25,8 @@ from pythonjsonlogger import jsonlogger
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+
+from Skoleverksted.backend.platform.images import ImageResult, normalize_image_mode, resolve_image
 
 if __package__:
     from . import config
@@ -80,6 +82,59 @@ formatter = jsonlogger.JsonFormatter(
 logHandler.setFormatter(formatter)
 logging.basicConfig(level=logging.INFO, handlers=[logHandler], force=True)
 logger = logging.getLogger(__name__)
+
+
+def _materialize_pedagogical_image(
+    *,
+    image_mode: object,
+    topic: str,
+    subject: str,
+    level: str,
+    text: str,
+    req_logger: RequestLogger,
+    image_data: Optional[str] = None,
+    image_url_override: Optional[str] = None,
+) -> tuple[Optional[str], Optional[ImageResult], str, str]:
+    """Resolve and optimise one image without making PDF generation depend on it."""
+    if image_data:
+        path = fetch_image_with_retry(None, image_data, req_logger)
+        return path, None, "", "Bilde: lærerens eget opplastede bilde"
+    if image_url_override:
+        path = fetch_image_with_retry(image_url_override, None, req_logger)
+        return path, None, "", "Kilde: Wikimedia Commons · valgt av læreren"
+
+    mode = normalize_image_mode(image_mode)
+    if mode == "none":
+        return None, None, "", ""
+
+    asset = resolve_image(
+        mode,
+        topic=topic,
+        subject=subject,
+        level=level,
+        text=text,
+    )
+    if not asset:
+        req_logger.warning("Bildecrewet fant ikke et faglig trygt bilde; fortsetter uten bilde")
+        return None, None, "", ""
+
+    path: Optional[str] = None
+    if asset.local_path:
+        raw_path = asset.local_path
+        try:
+            path = image_processor.process_image_from_path(raw_path)
+        finally:
+            try:
+                os.unlink(raw_path)
+            except OSError:
+                pass
+    elif asset.image_url:
+        path = fetch_image_with_retry(asset.image_url, None, req_logger)
+
+    if not path:
+        req_logger.warning("Valgt bilde kunne ikke behandles; fortsetter uten bilde")
+        return None, None, "", ""
+    return path, asset, asset.caption, asset.credit
 
 
 # ── Prompt-injection sanitisation ────────────────────────────────────────────
@@ -221,6 +276,10 @@ class LessonRequest(BaseModel):
     interest: Optional[str] = Field(None, max_length=200)
     basis_text: Optional[str] = Field(None, max_length=10000)
     image_url_override: Optional[str] = Field(None, max_length=500)
+    image_mode: Literal["none", "commons", "ai"] = Field(
+        "none",
+        description="Ingen bilder, et fritt Wikimedia-bilde eller en KI-generert illustrasjon.",
+    )
 
     @field_validator('image_data')
     @classmethod
@@ -384,7 +443,7 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         source_text, source_name = req.source_text, ("lærerens kildemateriale" if req.source_text else None)
     else:
         source_text, source_name = _resolve_source(req, ctx)
-    ctx.push("Genererer fagtekst og søker etter bilde..." if not req.basis_text else "Bruker eksisterende fagtekst, regenererer oppgaver...")
+    ctx.push("Genererer fagtekst..." if not req.basis_text else "Bruker eksisterende fagtekst, regenererer oppgaver...")
     content = generate_lesson_content(
         topic=req.topic,
         subject=req.subject,
@@ -400,7 +459,6 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
 
     if ctx.set_meta:
         ctx.set_meta("basis_text", content.get("text"))
-        ctx.set_meta("image_url", content.get("image_url") or req.image_url_override)
         ctx.set_meta("worksheet_text", content.get("worksheet"))
         ctx.set_meta("faktarapport_text", content.get("faktarapport"))
         ctx.set_meta("language_exercises", content.get("language_exercises"))
@@ -409,12 +467,29 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("source_name", source_name)
         ctx.set_meta("prompt_version", content.get("prompt_version"))
 
-    ctx.push("Henter og optimaliserer bilde...")
-    image_path = fetch_image_with_retry(
-        req.image_url_override or content.get("image_url"),
-        req.image_data,
-        ctx.req_logger,
+    if normalize_image_mode(req.image_mode) != "none" and not req.image_data and not req.image_url_override:
+        ctx.push("Bildecrewet planlegger og kvalitetssikrer ett pedagogisk bilde...")
+    else:
+        ctx.push("Behandler bildevalg...")
+    image_path, image_asset, image_caption, image_credit = _materialize_pedagogical_image(
+        image_mode=req.image_mode,
+        topic=req.topic,
+        subject=req.subject,
+        level=req.level,
+        text=content.get("text", ""),
+        req_logger=ctx.req_logger,
+        image_data=req.image_data,
+        image_url_override=req.image_url_override,
     )
+    if ctx.set_meta:
+        ctx.set_meta("image_url", image_asset.image_url if image_asset else req.image_url_override)
+        ctx.set_meta("image_metadata", image_asset.public_metadata() if image_asset else None)
+        if normalize_image_mode(req.image_mode) != "none" and not image_path and not req.image_data:
+            ctx.set_meta(
+                "warnings",
+                list(content.get("warnings") or [])
+                + ["Bildecrewet fant ikke et bilde som bestod kvalitetskontrollen. PDF-en ble laget uten bilde."],
+            )
 
     structured = content.get("structured")
     rapport_payload = content.get("faktarapport_structured") or content.get("faktarapport")
@@ -440,6 +515,8 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
                 laeringsmaal=sections.get("learning_goals", ""),
                 oppgaver=oppgaver,
                 image_filename=os.path.basename(image_path) if image_path else None,
+                image_caption=image_caption,
+                image_credit=image_credit,
             )
             pdf_bytes = compile_typst(doc, image_path=image_path)
         else:
@@ -454,6 +531,8 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
                 subject=req.subject,
                 language_level=req.language_level,
                 image_path=image_path,
+                image_caption=image_caption,
+                image_credit=image_credit,
                 language_exercises=content.get("language_exercises"),
                 options=req.options,
                 faktarapport=None,
@@ -507,7 +586,7 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
     options["differensiering"] = True
 
     source_text, source_name = _resolve_source(req, ctx)
-    ctx.push("Genererer fagtekst og søker etter bilde...")
+    ctx.push("Genererer fagtekst...")
     content = generate_lesson_content(
         topic=req.topic,
         subject=req.subject,
@@ -525,12 +604,29 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("source_name", source_name)
         ctx.set_meta("prompt_version", content.get("prompt_version"))
 
-    ctx.push("Henter og optimaliserer bilde...")
-    image_path = fetch_image_with_retry(
-        content.get("image_url"),
-        req.image_data,
-        ctx.req_logger,
+    ctx.push(
+        "Bildecrewet planlegger og kvalitetssikrer ett pedagogisk bilde..."
+        if normalize_image_mode(req.image_mode) != "none" and not req.image_data
+        else "Behandler bildevalg..."
     )
+    image_path, image_asset, image_caption, image_credit = _materialize_pedagogical_image(
+        image_mode=req.image_mode,
+        topic=req.topic,
+        subject=req.subject,
+        level=req.level,
+        text=content.get("text", ""),
+        req_logger=ctx.req_logger,
+        image_data=req.image_data,
+    )
+    if ctx.set_meta:
+        ctx.set_meta("image_url", image_asset.image_url if image_asset else None)
+        ctx.set_meta("image_metadata", image_asset.public_metadata() if image_asset else None)
+        if normalize_image_mode(req.image_mode) != "none" and not image_path and not req.image_data:
+            ctx.set_meta(
+                "warnings",
+                list(content.get("warnings") or [])
+                + ["Bildecrewet fant ikke et bilde som bestod kvalitetskontrollen. PDF-en ble laget uten bilde."],
+            )
 
     try:
         ctx.push("Kompilerer differensiert PDF...")
@@ -543,6 +639,8 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
             level=req.level,
             subject=req.subject,
             image_path=image_path,
+            image_caption=image_caption,
+            image_credit=image_credit,
             worksheet_text=content.get("worksheet", ""),
             language_exercises=content.get("language_exercises"),
             options=options,
@@ -762,8 +860,15 @@ async def generate_lesson_sync(request: Request, lesson_request: LessonRequest):
         req_logger.error(f"Generation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e} (request_id={request_id})")
 
-    image_path = fetch_image_with_retry(
-        content.get("image_url"), lesson_request.image_data, req_logger,
+    image_path, _image_asset, image_caption, image_credit = _materialize_pedagogical_image(
+        image_mode=lesson_request.image_mode,
+        topic=lesson_request.topic,
+        subject=lesson_request.subject,
+        level=lesson_request.level,
+        text=content.get("text", ""),
+        req_logger=req_logger,
+        image_data=lesson_request.image_data,
+        image_url_override=lesson_request.image_url_override,
     )
 
     try:
@@ -775,6 +880,8 @@ async def generate_lesson_sync(request: Request, lesson_request: LessonRequest):
             subject=lesson_request.subject,
             language_level=lesson_request.language_level,
             image_path=image_path,
+            image_caption=image_caption,
+            image_credit=image_credit,
             language_exercises=content.get("language_exercises"),
             options=lesson_request.options,
             faktarapport=content.get("faktarapport"),

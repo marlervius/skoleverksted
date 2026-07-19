@@ -236,6 +236,8 @@ def build_laeringsark_doc(
     laeringsmaal: str = "",
     oppgaver: Optional[list[dict]] = None,
     image_filename: Optional[str] = None,
+    image_caption: str = "",
+    image_credit: str = "",
 ) -> str:
     """Build the full Typst source for the redesigned student læringsark."""
     fag_s = _typst_str(fag)
@@ -253,11 +255,14 @@ def build_laeringsark_doc(
     ]
 
     if image_filename:
+        caption_s = _esc(image_caption)
+        credit_s = _esc(image_credit or "Kilde: Wikimedia Commons")
         lines += [
             "#align(center)[",
             f'  #block(clip: true, radius: 6pt, width: 88%)[#image("{image_filename}", width: 100%)]',
             "  #v(2pt)",
-            "  #text(size: 8pt, fill: gray-400)[Foto: Wikimedia Commons]",
+            *([f"  #text(size: 9pt, fill: gray-600, style: \"italic\")[{caption_s}]", "  #linebreak()"] if caption_s else []),
+            f"  #text(size: 7.5pt, fill: gray-400)[{credit_s}]",
             "]",
             "#v(8pt)",
             "",

@@ -1,4 +1,5 @@
 import type { LessonOptions } from "./constants";
+import type { ImageMode } from "@/components/image-mode-picker";
 
 const API_URL =
   process.env.NEXT_PUBLIC_VGS_API_URL ||
@@ -17,6 +18,7 @@ interface GenerateLessonParams {
   languageLevel: string;
   options: LessonOptions;
   imageData?: string;
+  imageMode?: ImageMode;
   description?: string;
   sourceText?: string;
   useNdla?: boolean;
@@ -47,7 +49,7 @@ interface GenerateLessonResult {
 export async function generateLesson(
   params: GenerateLessonParams
 ): Promise<GenerateLessonResult> {
-  const { topic, subject, level, languageLevel, options, imageData, description, sourceText, useNdla, interest, basisText, imageUrlOverride, signal, onProgress } = params;
+  const { topic, subject, level, languageLevel, options, imageData, imageMode, description, sourceText, useNdla, interest, basisText, imageUrlOverride, signal, onProgress } = params;
 
   const body = JSON.stringify({
     topic: topic.trim(),
@@ -56,6 +58,7 @@ export async function generateLesson(
     language_level: languageLevel !== "none" ? languageLevel : null,
     options,
     image_data: imageData,
+    image_mode: imageData || imageUrlOverride ? "none" : imageMode || "none",
     description: description || null,
     source_text: sourceText || null,
     use_ndla: useNdla ?? true,
@@ -284,6 +287,7 @@ interface GenerateDifferentiatedParams {
   languageLevel: string;
   options: LessonOptions;
   imageData?: string;
+  imageMode?: ImageMode;
   description?: string;
   sourceText?: string;
   useNdla?: boolean;
@@ -295,7 +299,7 @@ interface GenerateDifferentiatedParams {
 export async function generateDifferentiated(
   params: GenerateDifferentiatedParams
 ): Promise<GenerateLessonResult> {
-  const { topic, subject, level, languageLevel, options, imageData, description, sourceText, useNdla, interest, signal, onProgress } = params;
+  const { topic, subject, level, languageLevel, options, imageData, imageMode, description, sourceText, useNdla, interest, signal, onProgress } = params;
 
   const body = JSON.stringify({
     topic: topic.trim(),
@@ -304,6 +308,7 @@ export async function generateDifferentiated(
     language_level: languageLevel !== "none" ? languageLevel : null,
     options,
     image_data: imageData,
+    image_mode: imageData ? "none" : imageMode || "none",
     description: description || null,
     source_text: sourceText || null,
     use_ndla: useNdla ?? true,

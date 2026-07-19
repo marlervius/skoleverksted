@@ -9,6 +9,8 @@ services:
     environment:
       OUTPUT_DIR: /var/data/output
       SKOLEVERKSTED_DB_PATH: /var/data/platform/skoleverksted.sqlite3
+      GOOGLE_IMAGE_API_KEY: ${GOOGLE_IMAGE_API_KEY:-}
+      GOOGLE_IMAGE_MODEL: ${GOOGLE_IMAGE_MODEL:-gemini-3.1-flash-image}
     volumes:
       - skoleverksted_data:/var/data
     healthcheck:

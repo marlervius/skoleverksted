@@ -20,6 +20,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+from Skoleverksted.backend.platform.images import ImageResult, normalize_image_mode, resolve_image
+
 if __package__:
     from .agents import generate_lesson_content
     from .config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
@@ -115,6 +117,55 @@ def _cleanup_image(path: Optional[str]) -> None:
             logger.warning(f"Failed to clean up image {path}: {e}")
 
 
+def _materialize_pedagogical_image(
+    request: object,
+    content: dict,
+    *,
+    pre_processed_image_path: Optional[str] = None,
+) -> tuple[Optional[str], Optional[ImageResult], str, str]:
+    """Resolve and optimise the selected image mode; fail safely to no image."""
+    if pre_processed_image_path:
+        return (
+            pre_processed_image_path,
+            None,
+            "",
+            "Bilde: lærerens eget opplastede bilde",
+        )
+
+    mode = normalize_image_mode(getattr(request, "image_mode", "none"))
+    if mode == "none":
+        return None, None, "", ""
+
+    asset = resolve_image(
+        mode,
+        topic=str(getattr(request, "topic", "")),
+        subject=str(getattr(request, "subject", "")),
+        level=str(getattr(request, "level", "")),
+        text=str(content.get("text", "")),
+    )
+    if not asset:
+        logger.warning("Bildecrewet fant ikke et faglig trygt bilde; fortsetter uten bilde")
+        return None, None, "", ""
+
+    processed_path: Optional[str] = None
+    if asset.local_path:
+        raw_path = asset.local_path
+        try:
+            processed_path = image_processor.process_image_from_path(raw_path)
+        finally:
+            try:
+                os.unlink(raw_path)
+            except OSError:
+                pass
+    elif asset.image_url:
+        processed_path = _process_image_for_content({"image_url": asset.image_url})
+
+    if not processed_path:
+        logger.warning("Valgt bilde kunne ikke behandles; fortsetter uten bilde")
+        return None, None, "", ""
+    return processed_path, asset, asset.caption, asset.credit
+
+
 def generate_lesson_background(
     generation_id: str,
     request: "LessonRequest",
@@ -124,7 +175,7 @@ def generate_lesson_background(
     processed_image_path = pre_processed_image_path
     try:
         # Step 1: Generate lesson content using AI agents
-        update_progress(generation_id, 1, 4, "Skriver pedagogisk tekst og finner relevant bilde...")
+        update_progress(generation_id, 1, 4, "Skriver pedagogisk tekst...")
         logger.info(f"Generating lesson: {request.topic} ({request.subject}, {request.level})")
         content = generate_lesson_content(
             topic=request.topic,
@@ -139,9 +190,22 @@ def generate_lesson_background(
         )
 
         # Step 2: Process the image (skip if caller already provided a local path)
-        update_progress(generation_id, 2, 4, "Behandler og optimaliserer bilde...")
-        if not processed_image_path:
-            processed_image_path = _process_image_for_content(content)
+        image_mode = normalize_image_mode(getattr(request, "image_mode", "none"))
+        update_progress(
+            generation_id,
+            2,
+            4,
+            (
+                "Bildecrewet planlegger og kvalitetssikrer ett pedagogisk bilde..."
+                if image_mode != "none" and not pre_processed_image_path
+                else "Behandler bildevalg..."
+            ),
+        )
+        processed_image_path, image_asset, image_caption, image_credit = _materialize_pedagogical_image(
+            request,
+            content,
+            pre_processed_image_path=pre_processed_image_path,
+        )
 
         # Step 3: Create PDF from the generated content
         update_progress(generation_id, 3, 4, "Formaterer og kompilerer PDF...")
@@ -152,6 +216,8 @@ def generate_lesson_background(
             level=request.level,
             subject=request.subject,
             image_path=processed_image_path,
+            image_caption=image_caption,
+            image_credit=image_credit,
             language_exercises=content.get("language_exercises"),
             options=request.options,
             teacher_key_content=content.get("teacher_key_content", ""),
@@ -160,7 +226,12 @@ def generate_lesson_background(
         )
 
         # Step 4: Store PDF bytes in progress for retrieval
-        update_progress(generation_id, 4, 4, "Ferdig! PDF klar for nedlasting.")
+        image_warning = (
+            " Bildecrewet fant ikke et bilde som bestod kvalitetskontrollen, så PDF-en er laget uten bilde."
+            if image_mode != "none" and not processed_image_path
+            else ""
+        )
+        update_progress(generation_id, 4, 4, f"Ferdig! PDF klar for nedlasting.{image_warning}")
         fname = _safe_filename(request.topic) + ".pdf"
         merge_progress(generation_id, pdf_bytes=pdf_bytes, filename=fname)
 
@@ -267,6 +338,10 @@ class LessonRequest(BaseModel):
     )
     source_text: Optional[str] = Field(default=None, max_length=5000)
     source_name: Optional[str] = Field(default=None, max_length=160)
+    image_mode: Literal["none", "commons", "ai"] = Field(
+        "none",
+        description="Ingen bilder, et fritt Wikimedia-bilde eller en KI-generert illustrasjon.",
+    )
 
 
 CefrLevel = Literal["A1.1", "A1.2", "A2.1", "A2.2", "B1.1", "B1.2", "B2.1", "B2.2"]
@@ -290,6 +365,7 @@ class MultiLevelLessonRequest(BaseModel):
     accessibility: Optional[dict] = Field(default=None)
     source_text: Optional[str] = Field(default=None, max_length=5000)
     source_name: Optional[str] = Field(default=None, max_length=160)
+    image_mode: Literal["none", "commons", "ai"] = "none"
 
     @field_validator("levels")
     @classmethod
@@ -310,6 +386,7 @@ class MultiLevelLessonRequest(BaseModel):
             "accessibility": self.accessibility,
             "source_text": self.source_text,
             "source_name": self.source_name,
+            "image_mode": self.image_mode,
         }
         if self.options:
             kwargs["options"] = self.options
@@ -330,6 +407,10 @@ class PreviewPDFRequest(BaseModel):
     text: str
     worksheet: str
     image_url: Optional[str] = None
+    image_mode: Literal["none", "commons", "ai"] = "none"
+    image_caption: str = Field("", max_length=160)
+    image_credit: str = Field("", max_length=600)
+    image_source_page: Optional[str] = Field(None, max_length=600)
     language_exercises: Optional[dict] = None
     options: dict[str, bool]
     accessibility: Optional[dict] = None
@@ -342,6 +423,10 @@ class LessonResponse(BaseModel):
     text: str
     worksheet: str
     image_url: Optional[str] = None
+    image_mode: Literal["none", "commons", "ai"] = "none"
+    image_caption: str = ""
+    image_credit: str = ""
+    image_source_page: Optional[str] = None
     language_exercises: Optional[dict] = None
     source_grounded: bool = False
     source_name: Optional[str] = None
@@ -500,7 +585,7 @@ def generate_lesson_json_background(
 ):
     """Background task to generate JSON preview."""
     try:
-        update_progress(generation_id, 1, 2, "Skriver pedagogisk tekst og finner bilde...")
+        update_progress(generation_id, 1, 2, "Skriver pedagogisk tekst...")
         
         content = generate_lesson_content(
             topic=lesson_request.topic,
@@ -514,6 +599,17 @@ def generate_lesson_json_background(
             source_name=lesson_request.source_name,
         )
         
+        image_asset: Optional[ImageResult] = None
+        if normalize_image_mode(lesson_request.image_mode) == "commons":
+            update_progress(generation_id, 2, 3, "Bildecrewet kvalitetssikrer et fritt bilde...")
+            image_asset = resolve_image(
+                "commons",
+                topic=lesson_request.topic,
+                subject=lesson_request.subject,
+                level=lesson_request.level,
+                text=content.get("text", ""),
+            )
+
         update_progress(generation_id, 2, 2, "Forhåndsvisning er klar!")
         merge_progress(
             generation_id,
@@ -523,7 +619,11 @@ def generate_lesson_json_background(
                 "level": content["level"],
                 "text": content["text"],
                 "worksheet": content["worksheet"],
-                "image_url": content.get("image_url"),
+                "image_url": image_asset.image_url if image_asset else None,
+                "image_mode": lesson_request.image_mode,
+                "image_caption": image_asset.caption if image_asset else "",
+                "image_credit": image_asset.credit if image_asset else "",
+                "image_source_page": image_asset.source_page_url if image_asset else None,
                 "language_exercises": content.get("language_exercises"),
                 "source_grounded": content.get("source_grounded", False),
                 "source_name": content.get("source_name"),
@@ -580,10 +680,19 @@ def generate_pdf_from_json_background(
     try:
         update_progress(generation_id, 1, 3, "Behandler og optimaliserer bilde...")
         
-        # Process image if needed
+        image_asset: Optional[ImageResult] = None
+        image_caption = request.image_caption
+        image_credit = request.image_credit
+
+        # A Commons image may already have been selected during preview.
         if not processed_image_path and request.image_url:
             content_dict = {"image_url": request.image_url}
             processed_image_path = _process_image_for_content(content_dict)
+        elif not processed_image_path and normalize_image_mode(request.image_mode) != "none":
+            processed_image_path, image_asset, image_caption, image_credit = _materialize_pedagogical_image(
+                request,
+                {"text": request.text},
+            )
             
         update_progress(generation_id, 2, 3, "Formaterer og kompilerer PDF...")
         
@@ -594,13 +703,21 @@ def generate_pdf_from_json_background(
             level=request.level,
             subject=request.subject,
             image_path=processed_image_path,
+            image_caption=image_caption,
+            image_credit=image_credit,
             language_exercises=request.language_exercises,
             options=request.options,
             accessibility=getattr(request, "accessibility", None),
         )
 
         # Store PDF
-        update_progress(generation_id, 3, 3, "Ferdig! PDF klar for nedlasting.")
+        requested_image = normalize_image_mode(request.image_mode) != "none"
+        image_warning = (
+            " Bildecrewet fant ikke et bilde som bestod kvalitetskontrollen, så PDF-en er laget uten bilde."
+            if requested_image and not processed_image_path
+            else ""
+        )
+        update_progress(generation_id, 3, 3, f"Ferdig! PDF klar for nedlasting.{image_warning}")
         merge_progress(
             generation_id,
             pdf_bytes=pdf_bytes,
@@ -664,7 +781,11 @@ def _generate_single_pdf(request: "LessonRequest", level_override: str) -> tuple
         source_name=req.source_name,
     )
 
-    processed_image_path = _process_image_for_content(content)
+    req.level = level_override
+    processed_image_path, _image_asset, image_caption, image_credit = _materialize_pedagogical_image(
+        req,
+        content,
+    )
     try:
         pdf_bytes = create_lesson_pdf(
             content_text=content["text"],
@@ -673,6 +794,8 @@ def _generate_single_pdf(request: "LessonRequest", level_override: str) -> tuple
             level=level_override,
             subject=req.subject,
             image_path=processed_image_path,
+            image_caption=image_caption,
+            image_credit=image_credit,
             language_exercises=content.get("language_exercises"),
             options=req.options,
             teacher_key_content=content.get("teacher_key_content", ""),

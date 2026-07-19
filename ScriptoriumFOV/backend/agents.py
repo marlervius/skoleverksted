@@ -13,11 +13,9 @@ from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attem
 if __package__:
     from .config import CACHE_TTL_SECONDS, GOOGLE_MODEL
     from .errors import GeminiQuotaExceededError
-    from .tools import WikimediaImageSearchTool
 else:
     from config import CACHE_TTL_SECONDS, GOOGLE_MODEL
     from errors import GeminiQuotaExceededError
-    from tools import WikimediaImageSearchTool
 
 logger = logging.getLogger(__name__)
 
@@ -516,7 +514,6 @@ load_dotenv()
 
 _initialized = False
 _llm = None
-_wikimedia_search_tool = None
 content_creator = None
 pedagogical_developer = None
 language_exercise_creator = None
@@ -524,7 +521,7 @@ language_exercise_creator = None
 
 def _init_agents() -> None:
     """Initialise the LLM and all CrewAI agents exactly once."""
-    global _initialized, _llm, _wikimedia_search_tool
+    global _initialized, _llm
     global content_creator, pedagogical_developer, language_exercise_creator
 
     if _initialized:
@@ -556,18 +553,13 @@ def _init_agents() -> None:
         temperature=float(os.getenv("AI_TEMPERATURE", "0.35")),
     )
 
-    # Instantiate the Wikimedia image search tool
-    _wikimedia_search_tool = WikimediaImageSearchTool()
-
-    # Agent 1: Content Creator (with image search capability)
+    # Agent 1: Content Creator. A separate post-generation image crew handles
+    # Commons search, visual verification and Google image generation.
     content_creator = Agent(
         role="Expert teacher for adult immigrants following the Norwegian FOV curriculum",
         goal="""Write a factual, educational text about a given topic in a specific subject,
     strictly adapted to the specified CEFR language level (A1, A2, B1, or B2).
-    The text should be informative, accurate, and appropriate for adult learners.
-
-    ADDITIONALLY: Find ONE relevant, high-quality image from Wikimedia Commons that
-    illustrates the topic. Use the wikimedia_image_search tool to search for an appropriate image.""",
+    The text should be informative, accurate, and appropriate for adult learners.""",
         backstory="""You are an experienced teacher specializing in teaching adult immigrants.
     You have deep knowledge of the FOV (Forberedende voksenopplæring) curriculum and understand
     how to adapt content for different language proficiency levels.
@@ -583,15 +575,7 @@ def _init_agents() -> None:
     For Norwegian subjects, write in Norwegian (Bokmål).
     For English subjects, write in English.
 
-    IMPORTANT: You always find authentic images to illustrate your educational content.
-    After writing the text, use the wikimedia_image_search tool to find a relevant image.
-    Search using English keywords for best results (e.g., "Norwegian parliament building" not "Stortinget").
-
-    At the VERY END of your output, on a new line, output the image URL in this exact format:
-    IMAGE_URL: <the full URL here>
-
-    If no suitable image is found, write: IMAGE_URL: none""",
-        tools=[_wikimedia_search_tool],
+    Do not search for or include images. A separate image crew handles visual material after the text is complete.""",
         llm=_llm,
         verbose=True,
         allow_delegation=False,
@@ -1042,17 +1026,9 @@ def generate_lesson_content(
             - Adapt the language carefully to {level} level
             - Use relevant examples that adult immigrants in Norway can relate to
             - Divide the text into 2-3 paragraphs with clear structure
-
-            IMPORTANT - IMAGE:
-            After writing the text, use the wikimedia_image_search tool to find
-            one relevant image that illustrates the topic.
-
-            At the END of your response, write the image link like this:
-            IMAGE_URL: <the full URL here>
-
-            If no suitable image is found, write: IMAGE_URL: none""",
+            - Do not search for or include an image URL""",
             expected_output=f"""A well-written, educational text in English about {topic},
-            adapted to {level} level, followed by IMAGE_URL: <url> on the last line.""",
+            adapted to {level} level.""",
             agent=content_creator,
         )
     else:
@@ -1070,17 +1046,9 @@ def generate_lesson_content(
             - Tilpass språket nøye til {level}-nivå
             - Bruk relevante eksempler fra norsk samfunn og kultur
             - Del teksten inn i 2-3 avsnitt med tydelig struktur (flere hvis det er en deep dive)
-
-            VIKTIG - BILDE:
-            Etter at du har skrevet teksten, bruk wikimedia_image_search verktøyet for å finne
-            ett relevant bilde som illustrerer temaet. Søk på engelsk for best resultat.
-
-            På SLUTTEN av svaret ditt, skriv bildelenken slik:
-            IMAGE_URL: <den fulle URL-en her>
-
-            Hvis du ikke finner et passende bilde, skriv: IMAGE_URL: none""",
+            - Ikke søk etter eller ta med en bilde-URL""",
             expected_output=f"""En velskrevet, pedagogisk tekst på norsk om {topic},
-            tilpasset {level}-nivå, etterfulgt av IMAGE_URL: <url> på siste linje.""",
+            tilpasset {level}-nivå.""",
             agent=content_creator,
         )
     

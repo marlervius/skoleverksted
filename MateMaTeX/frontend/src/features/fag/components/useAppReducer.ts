@@ -1,6 +1,7 @@
 import type { Status, LessonOptions, AppMode, StudentProfile } from "./constants";
 import { DEFAULT_OPTIONS } from "./constants";
 import type { CompetencyGoal, ImageCandidate } from "./api";
+import type { ImageMode } from "@/components/image-mode-picker";
 
 /** Result of one profile's generation in a batch run. */
 export interface ProfileResult {
@@ -22,6 +23,7 @@ export interface AppState {
   topic: string;
   options: LessonOptions;
   imageFile: File | null;
+  imageMode: ImageMode;
   description: string;
   showDescriptionTips: boolean;
   sourceText: string;
@@ -68,6 +70,7 @@ export const initialState: AppState = {
   topic: "",
   options: { ...DEFAULT_OPTIONS },
   imageFile: null,
+  imageMode: "none",
   description: "",
   showDescriptionTips: false,
   sourceText: "",
@@ -113,6 +116,7 @@ export type AppAction =
   | { type: "SET_OPTION"; key: keyof LessonOptions; val: boolean }
   | { type: "SET_TEXT_LENGTH"; length: "kort" | "standard" | "lang" }
   | { type: "SET_IMAGE_FILE"; file: File | null }
+  | { type: "SET_IMAGE_MODE"; mode: ImageMode }
   | { type: "SET_DESCRIPTION"; description: string }
   | { type: "TOGGLE_DESCRIPTION_TIPS" }
   | { type: "SET_SOURCE_TEXT"; sourceText: string }
@@ -170,6 +174,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       };
     case "SET_IMAGE_FILE":
       return { ...state, imageFile: action.file };
+    case "SET_IMAGE_MODE":
+      return { ...state, imageMode: action.mode };
     case "SET_DESCRIPTION":
       return { ...state, description: action.description };
     case "TOGGLE_DESCRIPTION_TIPS":

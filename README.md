@@ -89,6 +89,9 @@ npm run dev
 - Start backend med `uvicorn Skoleverksted.backend.main:app` fra repoets rot.
 - Sett `GOOGLE_API_KEY`, `FRONTEND_URL` og eventuelt `REDIS_URL`, `DATABASE_URL`,
   `APP_PASSWORD` og `MATE_API_KEY`.
+- KI-bilder bruker som standard samme Google-nøkkel. `GOOGLE_IMAGE_API_KEY` kan
+  settes hvis bildekall skal ha en separat nøkkel, og `GOOGLE_IMAGE_MODEL`
+  overstyrer standardmodellen `gemini-3.1-flash-image`.
 - Modulene kan fremdeles deployes separat ved å bruke de valgfrie
   `NEXT_PUBLIC_VGS_API_URL`, `NEXT_PUBLIC_NORSK_API_URL` og
   `NEXT_PUBLIC_MATE_API_URL`.
@@ -120,6 +123,10 @@ Opprett tjenesten med **New > Blueprint** i Render og koble til dette repoet.
 Render ber om `GOOGLE_API_KEY`, `APP_PASSWORD`, `FRONTEND_URL` og
 `ALLOWED_ORIGINS`. Se [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md) for hele
 oppskriften og frontendvariablene.
+
+Bildemodus er alltid et aktivt lærervalg. «Frie bilder» bruker et eget
+bildecrew, lisensfiltrering og Wikimedia Commons-attributt. «Lag AI-bilde»
+lager maksimalt én illustrasjon per PDF og merker den som KI-generert.
 
 ### Vercel frontend
 

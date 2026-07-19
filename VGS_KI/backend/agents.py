@@ -7,14 +7,12 @@ from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, Process, LLM
 
 if __package__:
-    from .tools import WikimediaImageSearchTool
     from .text_pipeline import find_english_leaks
     from .laeringsark_renderer import (
         coerce_structured_lesson, coerce_structured_rapport,
         collect_text_fields, structured_to_plain_text,
     )
 else:
-    from tools import WikimediaImageSearchTool
     from text_pipeline import find_english_leaks
     from laeringsark_renderer import (
         coerce_structured_lesson, coerce_structured_rapport,
@@ -55,9 +53,6 @@ llm = LLM(
     api_key=google_api_key,
     temperature=float(os.getenv("AI_TEMPERATURE", "0.35")),
 )
-
-# Instantiate the Wikimedia image search tool
-wikimedia_search_tool = WikimediaImageSearchTool()
 
 
 # ── Subject classification ────────────────────────────────────────────────────
@@ -297,17 +292,15 @@ def _level_guidelines_no(category: str, level: str) -> str:
     return ""
 
 
-# Agent 1: The VGS Content Creator (with image search capability)
+# Agent 1: The VGS Content Creator. Images are handled afterwards by the
+# shared pedagogical image crew, so this agent can focus on factual content.
 content_creator = Agent(
     role="Expert teacher for Norwegian Upper Secondary School (Videregående skole - VGS)",
     goal="""Write a factual, educational text about a given topic in a specific subject, 
     strictly adapted to the Norwegian VGS curriculum and competence goals (kompetansemål). 
     Every sentence must be grammatically complete. You are strictly forbidden from leaving 
     trailing commas or empty placeholders like 'oppfinnelser som ,'. 
-    The text should be informative, accurate, and appropriate for students aged 16-19.
-    
-    ADDITIONALLY: Find ONE relevant, high-quality image from Wikimedia Commons that 
-    illustrates the topic. Use the wikimedia_image_search tool to search for an appropriate image.""",
+    The text should be informative, accurate, and appropriate for students aged 16-19.""",
     backstory="""You are an experienced teacher in the Norwegian Upper Secondary School (VGS). 
     You have deep knowledge of the LK20 (Læreplanverket for Kunnskapsløftet 2020) curriculum 
     and understand how to create engaging content that covers specific competence goals.
@@ -342,32 +335,11 @@ content_creator = Agent(
     You know how to adapt content for different levels of VGS, from vocational programs (yrkesfag) 
     to academic specialization (studieforberedende).
     
-    IMPORTANT: Write in the language specified in the task description. 
+    IMPORTANT: Write in the language specified in the task description.
     For Norwegian subjects, write in Norwegian (Bokmål).
     For English subjects, write in English.
-    
-    CRITICAL - IMAGE SEARCH (you MUST do this):
-    After writing the text, you MUST use the wikimedia_image_search tool to find a relevant image.
-    This is NOT optional. Every lesson MUST have an image.
-    
-    IMAGE SEARCH STRATEGY:
-    1. Use SIMPLE English keywords: 2-4 words maximum. Example: "Industrial Revolution factory"
-    2. Do NOT use complex queries. BAD: "diagram of earth's axial tilt showing seasons". GOOD: "Earth axis tilt"
-    3. If the first search returns no results, try DIFFERENT simpler keywords
-    4. You MUST try at LEAST 2 different searches before giving up
-    5. Use the 'Image URL' or 'Thumbnail' URL from the tool's response
-    
-    SEARCH EXAMPLES:
-    - Topic "Den industrielle revolusjonen" → search "Industrial Revolution factory"
-    - Topic "Fotosyntese" → search "photosynthesis diagram"
-    - Topic "Andre verdenskrig" → search "World War II Europe"
-    - Topic "Jordas rotasjon" → search "Earth rotation"
-    
-    At the VERY END of your output, on its own line, write:
-    IMAGE_URL: <paste the URL from the tool here>
-    
-    Only write IMAGE_URL: none if you tried 2+ searches and found nothing.""",
-    tools=[wikimedia_search_tool],
+
+    Do not search for or include images. A separate image crew handles visual material after the text is complete.""",
     llm=llm,
     verbose=True,
     allow_delegation=False,
@@ -1409,22 +1381,9 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
             {narrative_guidelines_en}
             {STRUCTURED_OUTPUT_RULES_EN}
 
-            MANDATORY - IMAGE SEARCH (do NOT skip this):
-            After writing the text, use the wikimedia_image_search tool to find one relevant image.
-
-            Search strategy:
-            - Use 2-4 simple English words: e.g., "{topic} photo" or "{topic} illustration"
-            - If first search fails, try simpler/different keywords
-            - You MUST try at least 2 searches before giving up
-            - Use the URL from the tool's response (prefer the Thumbnail URL)
-
-            At the END of your response, on its own line, write:
-            IMAGE_URL: <the URL here>
-
-            Only write IMAGE_URL: none after trying 2+ searches.""",
+            Do not search for or include an image URL. Return only the requested content JSON.""",
             expected_output=f"""One valid JSON object (tittel/ingress/seksjoner/begreper/kjeder/verk)
-            containing a well-written educational text in English about {topic} for VGS,
-            followed by IMAGE_URL: <url> on the last line after the JSON.""",
+            containing a well-written educational text in English about {topic} for VGS.""",
             agent=content_creator,
         )
     else:
@@ -1447,22 +1406,9 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
             {narrative_guidelines_no}
             {STRUCTURED_OUTPUT_RULES_NO}
 
-            OBLIGATORISK - BILDESØK (IKKE hopp over dette):
-            Etter at du har skrevet teksten, BRUK wikimedia_image_search verktøyet for å finne ett relevant bilde.
-
-            Søkestrategi:
-            - Bruk 2-4 enkle engelske ord: f.eks. "{topic} photo" eller "{topic} illustration"
-            - Hvis første søk feiler, prøv enklere/andre nøkkelord
-            - Du MÅ prøve minst 2 søk før du gir opp
-            - Bruk URL-en fra verktøyets svar (foretrekk Thumbnail-URL-en)
-
-            På SLUTTEN av svaret ditt, på en egen linje, skriv:
-            IMAGE_URL: <URL-en her>
-
-            Skriv kun IMAGE_URL: none etter å ha prøvd 2+ søk.""",
+            Ikke søk etter eller ta med en bilde-URL. Returner bare innholds-JSON-en.""",
             expected_output=f"""Ett gyldig JSON-objekt (tittel/ingress/seksjoner/begreper/kjeder/verk)
-            med en velskrevet, pedagogisk fagtekst på norsk om {topic} for VGS,
-            etterfulgt av IMAGE_URL: <url> på siste linje etter JSON-en.""",
+            med en velskrevet, pedagogisk fagtekst på norsk om {topic} for VGS.""",
             agent=content_creator,
         )
     

@@ -46,6 +46,7 @@ import {
   downloadDocx,
   createBlobUrl,
 } from "./components/api";
+import { ImageModePicker } from "@/components/image-mode-picker";
 
 export default function Home() {
   const [state, dispatch] = useReducer(appReducer, initialState);
@@ -54,7 +55,7 @@ export default function Home() {
 
   const {
     mode, subject, level, languageLevel, topic, options,
-    imageFile, description, showDescriptionTips, sourceText, showSourceText, useNdla, interest,
+    imageFile, imageMode, description, showDescriptionTips, sourceText, showSourceText, useNdla, interest,
     profiles, profileResults, batchRunning,
     selectedGoal, includeFasit, antallUker, timerPerUke,
     status, errorMessage, elapsedSeconds, progressMessage,
@@ -107,6 +108,9 @@ export default function Home() {
       if (typeof draft.description === "string") dispatch({ type: "SET_DESCRIPTION", description: draft.description });
       if (typeof draft.sourceText === "string") dispatch({ type: "SET_SOURCE_TEXT", sourceText: draft.sourceText });
       if (typeof draft.interest === "string") dispatch({ type: "SET_INTEREST", interest: draft.interest });
+      if (draft.imageMode === "none" || draft.imageMode === "commons" || draft.imageMode === "ai") {
+        dispatch({ type: "SET_IMAGE_MODE", mode: draft.imageMode });
+      }
     } catch { /* ignore corrupt local draft */ }
   }, []);
 
@@ -123,9 +127,9 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ subject, level, languageLevel, topic, description, sourceText, interest, savedAt: Date.now() }));
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ subject, level, languageLevel, topic, description, sourceText, interest, imageMode, savedAt: Date.now() }));
     } catch { /* localStorage may be unavailable */ }
-  }, [subject, level, languageLevel, topic, description, sourceText, interest]);
+  }, [subject, level, languageLevel, topic, description, sourceText, interest, imageMode]);
 
   // Save session after successful generation (læringsark only)
   useEffect(() => {
@@ -195,14 +199,14 @@ export default function Home() {
 
   // Auto-fetch image candidates after successful generation (læringsark only)
   useEffect(() => {
-    if (status !== "success" || mode !== "laeringsark" || !topic || !subject) return;
+    if (status !== "success" || mode !== "laeringsark" || imageMode !== "commons" || !topic || !subject) return;
     let cancelled = false;
     dispatch({ type: "IMAGE_CANDIDATES_LOADING" });
     fetchImageCandidates(topic, subject, 5).then((candidates) => {
       if (!cancelled) dispatch({ type: "IMAGE_CANDIDATES_LOADED", candidates });
     });
     return () => { cancelled = true; };
-  }, [status, mode, topic, subject]);
+  }, [status, mode, imageMode, topic, subject]);
 
   const startTimer = useCallback(() => {
     timerRef.current = setInterval(() => dispatch({ type: "TICK_TIMER" }), 1000);
@@ -295,6 +299,7 @@ export default function Home() {
       const result = await generateLesson({
         topic, subject, level, languageLevel, options,
         imageData: undefined,
+        imageMode,
         description: description.trim() || undefined,
         sourceText: sourceText.trim() || undefined,
         useNdla,
@@ -338,7 +343,7 @@ export default function Home() {
       abortControllerRef.current = null;
       dispatch({ type: "GENERATION_PROGRESS", message: "" });
     }
-  }, [basisText, generatedImageUrl, mode, topic, subject, level, languageLevel, options, description, sourceText, useNdla, interest, previewUrl, startTimer, stopTimer]);
+  }, [basisText, generatedImageUrl, imageMode, mode, topic, subject, level, languageLevel, options, description, sourceText, useNdla, interest, previewUrl, startTimer, stopTimer]);
 
   const handleOppdaterPdf = useCallback(async () => {
     if (!basisText || !worksheetText) return;
@@ -477,7 +482,7 @@ export default function Home() {
 
         if (mode === "differensiert") {
           result = await generateDifferentiated({
-            topic, subject, level, languageLevel, options, imageData,
+            topic, subject, level, languageLevel, options, imageData, imageMode,
             description: description.trim() || undefined,
             sourceText: sourceText.trim() || undefined,
             useNdla,
@@ -501,7 +506,7 @@ export default function Home() {
           });
         } else {
           result = await generateLesson({
-            topic, subject, level, languageLevel, options, imageData,
+            topic, subject, level, languageLevel, options, imageData, imageMode,
             description: description.trim() || undefined,
             sourceText: sourceText.trim() || undefined,
             useNdla,
@@ -559,7 +564,7 @@ export default function Home() {
     },
     [
       isFormValid, mode, topic, subject, level, languageLevel,
-      options, imageFile, description, sourceText, useNdla, interest, includeFasit,
+      options, imageFile, imageMode, description, sourceText, useNdla, interest, includeFasit,
       antallUker, timerPerUke, selectedGoal,
       previewUrl, startTimer, stopTimer,
     ]
@@ -591,6 +596,7 @@ export default function Home() {
             topic, subject, level,
             languageLevel: p.languageLevel,
             options: { ...options, reading_friendly: p.readingFriendly },
+            imageMode,
             description: description.trim() || undefined,
             sourceText: sourceText.trim() || undefined,
             useNdla,
@@ -624,7 +630,7 @@ export default function Home() {
       abortControllerRef.current = null;
       dispatch({ type: "BATCH_DONE" });
     }
-  }, [isFormValid, profiles, profileResults, topic, subject, level, options, description, sourceText, useNdla, startTimer, stopTimer]);
+  }, [isFormValid, profiles, profileResults, topic, subject, level, options, imageMode, description, sourceText, useNdla, startTimer, stopTimer]);
 
   const generateLabel =
     isProve
@@ -1001,7 +1007,18 @@ export default function Home() {
                 </div>
               )}
 
-              {/* ── Image Upload (læringsark + differensiert only) ───────────── */}
+              {/* ── Pedagogical image mode ───────────────────────────────────── */}
+              {!isProve && !isSekvens && (
+                <div className="mb-7">
+                  <ImageModePicker
+                    value={imageMode}
+                    onChange={(nextMode) => dispatch({ type: "SET_IMAGE_MODE", mode: nextMode })}
+                    disabled={status === "loading" || !!imageFile}
+                  />
+                </div>
+              )}
+
+              {/* ── Custom upload overrides the selected mode ────────────────── */}
               {!isProve && !isSekvens && (
                 <div className="mb-7">
                   <label htmlFor="image-upload" className="field-label">
@@ -1042,7 +1059,7 @@ export default function Home() {
                     )}
                   </div>
                   <p className="text-xs text-stone-400 mt-2">
-                    Maks 5MB (JPG, PNG, WebP). Lar du denne stå tom, finnes et bilde automatisk.
+                    Maks 5MB (JPG, PNG, WebP). Et opplastet bilde overstyrer bildemodusen over.
                   </p>
                 </div>
               )}

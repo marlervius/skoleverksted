@@ -23,6 +23,7 @@ import { HistoryPanel } from "../components/HistoryPanel";
 import { LoginForm } from "../components/LoginForm";
 import { OptionToggle } from "../components/OptionToggle";
 import { PreviewModal } from "../components/PreviewModal";
+import { ImageModePicker, type ImageMode } from "@/components/image-mode-picker";
 import {
   APP_PASSWORD_STORAGE_KEY,
   DEFAULT_ACCESSIBILITY,
@@ -88,6 +89,7 @@ export default function HomeContent() {
 
   // --- #5 Custom image ---
   const [customImage, setCustomImage] = useState<File | null>(null);
+  const [imageMode, setImageMode] = useState<ImageMode>("none");
   const [imageError, setImageError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -158,6 +160,9 @@ export default function HomeContent() {
       if (typeof draft.specialInstructions === "string") setSpecialInstructions(draft.specialInstructions);
       if (typeof draft.sourceText === "string") setSourceText(draft.sourceText);
       if (typeof draft.sourceName === "string") setSourceName(draft.sourceName);
+      if (draft.imageMode === "none" || draft.imageMode === "commons" || draft.imageMode === "ai") {
+        setImageMode(draft.imageMode);
+      }
     } catch { /* ignore corrupt local draft */ }
   }, []);
 
@@ -174,9 +179,9 @@ export default function HomeContent() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ subject, level, topic, specialInstructions, sourceText, sourceName, savedAt: Date.now() }));
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ subject, level, topic, specialInstructions, sourceText, sourceName, imageMode, savedAt: Date.now() }));
     } catch { /* localStorage may be unavailable */ }
-  }, [subject, level, topic, specialInstructions, sourceText, sourceName]);
+  }, [subject, level, topic, specialInstructions, sourceText, sourceName, imageMode]);
 
   // --- Auth config + restore password from session ---
   useEffect(() => {
@@ -379,6 +384,7 @@ export default function HomeContent() {
           source_name: sourceText ? sourceName || "lærerens kildemateriale" : null,
           series: seriesEnabled ? series : null,
           accessibility,
+          image_mode: imageMode,
         }),
       });
       if (!res.ok) await throwFromResponse(res);
@@ -401,6 +407,7 @@ export default function HomeContent() {
           source_name: sourceText ? sourceName || "lærerens kildemateriale" : null,
           series: seriesEnabled ? series : null,
           accessibility,
+          image_mode: imageMode,
         }),
       });
       if (!res.ok) await throwFromResponse(res);
@@ -445,6 +452,7 @@ export default function HomeContent() {
         source_name: sourceText ? sourceName || "lærerens kildemateriale" : null,
         series: seriesEnabled ? series : null,
         accessibility,
+        image_mode: imageMode,
       }),
     });
     if (!res.ok) await throwFromResponse(res);
@@ -493,6 +501,7 @@ export default function HomeContent() {
         source_name: sourceText ? sourceName || "lærerens kildemateriale" : null,
         series: seriesEnabled ? series : null,
         accessibility,
+        image_mode: imageMode,
       }),
     });
     if (!res.ok) await throwFromResponse(res);
@@ -550,6 +559,10 @@ export default function HomeContent() {
           text: previewData.text,
           worksheet: previewData.worksheet,
           image_url: previewData.image_url,
+          image_mode: previewData.image_mode || imageMode,
+          image_caption: previewData.image_caption || "",
+          image_credit: previewData.image_credit || "",
+          image_source_page: previewData.image_source_page || null,
           language_exercises: previewData.language_exercises,
           options,
           accessibility,
@@ -1277,6 +1290,18 @@ export default function HomeContent() {
               </div>
 
               {/* ---------------------------------------------------------------- */}
+              {/* Pedagogical image mode                                             */}
+              {/* ---------------------------------------------------------------- */}
+              <div className="mb-5">
+                <ImageModePicker
+                  value={imageMode}
+                  onChange={setImageMode}
+                  disabled={formDisabled || !!customImage}
+                  compact
+                />
+              </div>
+
+              {/* ---------------------------------------------------------------- */}
               {/* #5 Custom image upload                                            */}
               {/* ---------------------------------------------------------------- */}
               <div className="mb-5">
@@ -1332,7 +1357,7 @@ export default function HomeContent() {
                 )}
                 {customImage && (
                   <p className="text-xs text-stone-500 mt-1">
-                    Wikimedia-søk hoppes over – bildet ditt brukes i PDF-en.
+                    Bildemodusen hoppes over – bildet ditt brukes i PDF-en.
                   </p>
                 )}
               </div>

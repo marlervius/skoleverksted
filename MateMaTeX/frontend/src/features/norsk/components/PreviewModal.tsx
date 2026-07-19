@@ -64,7 +64,7 @@ export function PreviewModal({
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={previewData.image_url}
-                alt={previewData.topic}
+                alt={previewData.image_caption || previewData.topic}
                 className="max-h-64 object-contain rounded-lg border border-stone-200 shadow-card"
                 onError={(e) => {
                   e.currentTarget.style.display = "none";
@@ -78,7 +78,30 @@ export function PreviewModal({
                   }
                 }}
               />
-              <p className="text-xs text-stone-400 mt-2">Bilde fra Wikimedia Commons</p>
+              {previewData.image_caption && (
+                <p className="mt-2 text-sm italic text-stone-600">{previewData.image_caption}</p>
+              )}
+              <p className="mt-1 max-w-2xl text-center text-xs text-stone-400">
+                {previewData.image_credit || "Kilde: Wikimedia Commons"}
+                {previewData.image_source_page && (
+                  <>
+                    {" · "}
+                    <a
+                      href={previewData.image_source_page}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline hover:text-stone-600"
+                    >
+                      kildeside
+                    </a>
+                  </>
+                )}
+              </p>
+            </div>
+          )}
+          {previewData.image_mode === "ai" && !previewData.image_url && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              KI-illustrasjonen lages først når du velger «Lag PDF», slik at forhåndsvisning ikke utløser et ekstra betalt bildekall.
             </div>
           )}
 

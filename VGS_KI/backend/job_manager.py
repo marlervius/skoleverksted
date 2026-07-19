@@ -312,7 +312,7 @@ def run_job_in_thread(
             )
 
             done_event: dict = {"type": "done", "filename": filename}
-            for field in ("basis_text", "image_url", "worksheet_text",
+            for field in ("basis_text", "image_url", "image_metadata", "worksheet_text",
                           "faktarapport_text", "language_exercises", "warnings",
                           "source_name", "prompt_version", "lint_issues"):
                 if job_meta.get(field):

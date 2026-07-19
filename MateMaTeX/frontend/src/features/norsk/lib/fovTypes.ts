@@ -56,5 +56,9 @@ export interface LessonResponse {
   text: string;
   worksheet: string;
   image_url?: string | null;
+  image_mode?: "none" | "commons" | "ai";
+  image_caption?: string;
+  image_credit?: string;
+  image_source_page?: string | null;
   language_exercises?: LanguageExercisesPayload | null;
 }
