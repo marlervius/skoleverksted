@@ -12,6 +12,7 @@ Modes:
 from __future__ import annotations
 
 import base64
+from importlib.metadata import PackageNotFoundError, version
 import json
 import logging
 import os
@@ -86,7 +87,7 @@ def _api_key() -> str:
 
 
 def _text_model() -> str:
-    return os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
+    return os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
 
 
 def _image_model() -> str:
@@ -445,6 +446,45 @@ graphic violence, medical diagnoses and unsafe instructions. Aspect ratio 4:3.
 """
 
 
+def _decode_image_data(value: object) -> Optional[bytes]:
+    if isinstance(value, str):
+        try:
+            return base64.b64decode(value)
+        except (ValueError, TypeError):
+            return None
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    return None
+
+
+def _extract_generated_image(response: object) -> tuple[Optional[bytes], str]:
+    """Read image output from both Interactions 2.x and generate_content."""
+    output_image = getattr(response, "output_image", None)
+    image_bytes = _decode_image_data(getattr(output_image, "data", None))
+    if image_bytes:
+        return image_bytes, str(getattr(output_image, "mime_type", None) or "image/png")
+
+    parts = list(getattr(response, "parts", None) or [])
+    for candidate in getattr(response, "candidates", None) or []:
+        content = getattr(candidate, "content", None)
+        parts.extend(getattr(content, "parts", None) or [])
+
+    for part in parts:
+        inline = getattr(part, "inline_data", None)
+        image_bytes = _decode_image_data(getattr(inline, "data", None))
+        if image_bytes:
+            return image_bytes, str(getattr(inline, "mime_type", None) or "image/png")
+    return None, "image/png"
+
+
+def _supports_current_interactions_schema() -> bool:
+    """Interactions requires google-genai 2.x after Google's June 2026 sunset."""
+    try:
+        return int(version("google-genai").split(".", 1)[0]) >= 2
+    except (PackageNotFoundError, ValueError):
+        return False
+
+
 def generate_ai_image(prompt: str) -> Optional[str]:
     """Generate one image using Google's current Gemini image API."""
     key = _api_key()
@@ -453,6 +493,7 @@ def generate_ai_image(prompt: str) -> Optional[str]:
         return None
     try:
         from google import genai
+        from google.genai import types
     except ImportError:
         logger.warning("google-genai er ikke installert; KI-bilde hoppes over")
         return None
@@ -460,40 +501,51 @@ def generate_ai_image(prompt: str) -> Optional[str]:
     client = genai.Client(api_key=key)
     full_prompt = f"{prompt.strip()}\n{_AI_STYLE_RULES}".strip()
     image_bytes: Optional[bytes] = None
-    try:
-        # Preferred current API.  Keep a generate_content fallback for SDK
-        # versions that predate the Interactions convenience endpoint.
-        interactions = getattr(client, "interactions", None)
-        if interactions is not None:
-            interaction = interactions.create(model=_image_model(), input=full_prompt)
-            output_image = getattr(interaction, "output_image", None)
-            raw = getattr(output_image, "data", None)
-            if isinstance(raw, str):
-                image_bytes = base64.b64decode(raw)
-            elif isinstance(raw, (bytes, bytearray)):
-                image_bytes = bytes(raw)
+    mime_type = "image/png"
 
-        if not image_bytes:
-            response = client.models.generate_content(model=_image_model(), contents=[full_prompt])
-            parts = getattr(response, "parts", None) or []
-            for part in parts:
-                inline = getattr(part, "inline_data", None)
-                raw = getattr(inline, "data", None)
-                if isinstance(raw, str):
-                    image_bytes = base64.b64decode(raw)
-                elif isinstance(raw, (bytes, bytearray)):
-                    image_bytes = bytes(raw)
-                if image_bytes:
-                    break
-    except Exception as exc:
-        logger.warning("Google-bildegenerering feilet (%s): %s", _image_model(), exc)
-        return None
+    # Preferred API. Its failure must not suppress the independent legacy
+    # generate_content fallback; that mistake previously made image mode fail
+    # completely during Google's Interactions schema migration.
+    interactions = getattr(client, "interactions", None)
+    if interactions is not None and _supports_current_interactions_schema():
+        try:
+            interaction = interactions.create(
+                model=_image_model(),
+                input=full_prompt,
+                response_format={
+                    "type": "image",
+                    "mime_type": "image/png",
+                    "aspect_ratio": "4:3",
+                    "image_size": "1K",
+                },
+            )
+            image_bytes, mime_type = _extract_generated_image(interaction)
+        except Exception as exc:
+            logger.warning(
+                "Google Interactions-bildekall feilet (%s); prøver generate_content: %s",
+                _image_model(),
+                exc,
+            )
+    elif interactions is not None:
+        logger.info("google-genai 1.x oppdaget; bruker generate_content for KI-bildet")
+
+    if not image_bytes:
+        try:
+            response = client.models.generate_content(
+                model=_image_model(),
+                contents=[full_prompt],
+                config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+            )
+            image_bytes, mime_type = _extract_generated_image(response)
+        except Exception as exc:
+            logger.warning("Google generate_content-bildekall feilet (%s): %s", _image_model(), exc)
 
     if not image_bytes or len(image_bytes) > MAX_GENERATED_IMAGE_BYTES:
         logger.warning("Google returnerte ingen gyldig bildedata")
         return None
 
-    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_ai_", suffix=".png", delete=False)
+    suffix = ".jpg" if mime_type in {"image/jpeg", "image/jpg"} else ".png"
+    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_ai_", suffix=suffix, delete=False)
     try:
         handle.write(image_bytes)
         return handle.name
@@ -510,7 +562,8 @@ def _ai_image(plan: dict, subject: str) -> Optional[ImageResult]:
         return None
     try:
         with open(local_path, "rb") as image_file:
-            approved = _verify_image_bytes(plan, image_file.read(), "image/png", "KI")
+            mime_type = "image/jpeg" if local_path.lower().endswith((".jpg", ".jpeg")) else "image/png"
+            approved = _verify_image_bytes(plan, image_file.read(), mime_type, "KI")
     except OSError:
         approved = False
     if not approved:

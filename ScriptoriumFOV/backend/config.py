@@ -17,7 +17,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-GOOGLE_MODEL: str = os.getenv("GOOGLE_MODEL", "gemini-2.0-flash")
+GOOGLE_MODEL: str = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
 
 # ---------------------------------------------------------------------------
 # Lesson generation cache

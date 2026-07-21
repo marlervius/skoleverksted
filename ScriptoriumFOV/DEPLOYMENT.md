@@ -7,7 +7,7 @@ The canonical production configuration lives in `backend/render.yaml` (Docker bu
 Set at least:
 
 - `GOOGLE_API_KEY` – Gemini / LiteLLM
-- `GOOGLE_MODEL` – e.g. `gemini-2.0-flash`
+- `GOOGLE_MODEL` – e.g. `gemini-3.5-flash`
 - `APP_PASSWORD` – **required in production**: shared password; frontend sends `Authorization: Bearer <APP_PASSWORD>`. If unset, the API does not require a password (local dev only).
 - `ALLOWED_ORIGINS` – comma-separated frontend URLs (not `*` in production)
 

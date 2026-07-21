@@ -700,7 +700,9 @@ def extract_image_url(text: str) -> tuple[str, str | None]:
         logger.info("Agent explicitly reported no image found")
         return cleaned_text, None
 
-    logger.warning("Could not extract image URL from agent output")
+    # The shared post-generation image crew owns image selection now. Missing
+    # legacy IMAGE_URL output is therefore normal, not a warning condition.
+    logger.debug("No legacy image URL in agent output")
     return cleaned_text, None
 
 

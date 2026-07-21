@@ -25,7 +25,7 @@ class RenderBlueprintTests(unittest.TestCase):
         self.assertEqual(env_vars["OUTPUT_DIR"]["value"], "/var/data/output")
         self.assertEqual(
             env_vars["SKOLEVERKSTED_PUBLIC_FRONTEND_URL"]["value"],
-            "https://skoleverksted-3npg.vercel.app",
+            "https://skoleverksted.vercel.app,https://skoleverksted-3npg.vercel.app",
         )
         self.assertEqual(
             env_vars["SKOLEVERKSTED_DB_PATH"]["value"],
@@ -33,6 +33,8 @@ class RenderBlueprintTests(unittest.TestCase):
         )
         self.assertFalse(env_vars["GOOGLE_API_KEY"]["sync"])
         self.assertNotIn("value", env_vars["GOOGLE_API_KEY"])
+        self.assertEqual(env_vars["GOOGLE_MODEL"]["value"], "gemini-3.5-flash")
+        self.assertEqual(env_vars["GOOGLE_IMAGE_MODEL"]["value"], "gemini-3.1-flash-image")
         self.assertTrue(env_vars["MATE_API_KEY"]["generateValue"])
 
     def test_render_image_includes_crewai_gemini_provider(self):

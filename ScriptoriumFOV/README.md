@@ -90,11 +90,11 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for env vars (including optional `REDIS_URL`)
 
 ## Troubleshooting: Gemini `429` / quota
 
-If you see **RESOURCE_EXHAUSTED** or **quota exceeded** for `gemini-2.0-flash`:
+If you see **RESOURCE_EXHAUSTED** or **quota exceeded** for `gemini-3.5-flash`:
 
 - **Free tier** has low per-minute and per-day limits. Features that run **several generations in parallel** (e.g. multi-level ZIP, dual nabonivå) use more quota quickly.
 - **Mitigations:** wait for the limit window to reset; enable **billing** in [Google AI Studio](https://aistudio.google.com/) for higher limits; temporarily use a single PDF instead of multi-level/dual.
-- **Model:** set `GOOGLE_MODEL` to another model your project still has quota for (check [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)), e.g. `gemini-2.0-flash-lite` or `gemini-1.5-flash` if available.
+- **Model:** use the stable `gemini-3.5-flash`, or `gemini-3.1-flash-lite` when lower cost is more important (check [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)).
 
 The backend retries rate-limited calls a few times using the API’s suggested delay when present.
 
