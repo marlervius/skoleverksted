@@ -173,3 +173,93 @@ def test_visual_verifier_keeps_google_client_open_during_request(monkeypatch) ->
         "KI",
     )
     assert events == ["request", "close"]
+
+
+def test_commons_download_retries_429_and_reuses_successful_bytes(monkeypatch) -> None:
+    calls: list[str] = []
+    delays: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status: int, data: bytes = b"") -> None:
+            self.status_code = status
+            self.headers = {
+                "Content-Type": "image/jpeg",
+                **({"Retry-After": "1.5"} if status == 429 else {}),
+            }
+            self._data = data
+            self.closed = False
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+        def iter_content(self, chunk_size: int):
+            yield self._data
+
+        def close(self) -> None:
+            self.closed = True
+
+    responses = iter([FakeResponse(429), FakeResponse(200, b"verified-image")])
+    fake_requests = ModuleType("requests")
+
+    def fake_get(url: str, **kwargs):
+        calls.append(url)
+        return next(responses)
+
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setattr(images.time, "sleep", delays.append)
+
+    downloaded = images._download_remote_candidate(
+        {"title": "Relevant mosaic", "url": "https://upload.wikimedia.org/example.jpg"}
+    )
+
+    assert downloaded == (b"verified-image", "image/jpeg")
+    assert len(calls) == 2
+    assert delays == [1.5]
+
+
+def test_commons_uses_verified_reserve_and_returns_local_copy(tmp_path, monkeypatch) -> None:
+    first = {
+        "url": "https://upload.wikimedia.org/first.jpg",
+        "title": "First",
+        "description": "Relevant first candidate",
+        "creator": "Creator A",
+        "license": "CC BY 4.0",
+        "page_url": "https://commons.wikimedia.org/wiki/File:First",
+    }
+    reserve = {
+        "url": "https://upload.wikimedia.org/reserve.jpg",
+        "title": "Reserve",
+        "description": "Relevant reserve candidate",
+        "creator": "Creator B",
+        "license": "CC BY-SA 4.0",
+        "page_url": "https://commons.wikimedia.org/wiki/File:Reserve",
+    }
+    local_copy = tmp_path / "commons.jpg"
+    local_copy.write_bytes(b"same-bytes-used-for-verification-and-pdf")
+    attempted: list[str] = []
+
+    monkeypatch.setattr(images, "_search_wikimedia", lambda *args, **kwargs: [first, reserve])
+    monkeypatch.setattr(images, "_select_candidate", lambda plan, candidates: first)
+
+    def fake_verified_path(plan: dict, candidate: dict):
+        attempted.append(candidate["title"])
+        return None if candidate is first else str(local_copy)
+
+    monkeypatch.setattr(images, "_verified_remote_candidate_path", fake_verified_path)
+
+    result = images._commons_image(
+        {
+            "motif": "Roman mosaic",
+            "search_queries": ["Roman mosaic"],
+            "caption": "Romersk mosaikk",
+            "alt_text": "En romersk mosaikk",
+        }
+    )
+
+    assert result is not None
+    assert attempted == ["First", "Reserve"]
+    assert result.title == "Reserve"
+    assert result.local_path == str(local_copy)
+    assert result.image_url == reserve["url"]

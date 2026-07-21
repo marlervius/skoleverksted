@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from html import unescape
 from typing import Any, Literal, Optional
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 ImageMode = Literal["none", "commons", "ai"]
 
 WIKIMEDIA_API = "https://commons.wikimedia.org/w/api.php"
-USER_AGENT = "Skoleverksted/1.0 (pedagogisk bildecrew)"
+USER_AGENT = "Skoleverksted/1.0 (educational app; https://github.com/marlervius/skoleverksted)"
 TEXT_EXCERPT_CHARS = 3000
 MAX_GENERATED_IMAGE_BYTES = 15 * 1024 * 1024
 
@@ -394,23 +395,98 @@ Svar KUN som JSON:
         return False
 
 
-def _verify_remote_candidate(plan: dict, candidate: dict) -> bool:
+def _download_remote_candidate(candidate: dict) -> Optional[tuple[bytes, str]]:
+    """Download a Commons image with bounded retries and size checks."""
     try:
         import requests
+    except ImportError:
+        logger.warning("requests er ikke installert; Commons-bildet kan ikke lastes ned")
+        return None
 
-        response = requests.get(
-            candidate["url"],
-            headers={"User-Agent": USER_AGENT},
-            timeout=20,
-        )
-        response.raise_for_status()
-        content_type = response.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
-        if content_type not in {"image/jpeg", "image/png", "image/webp"}:
-            return False
-        return _verify_image_bytes(plan, response.content, content_type, "Wikimedia Commons")
-    except Exception as exc:
-        logger.warning("Kunne ikke laste kandidat for visuell kontroll: %s", exc)
-        return False
+    urls: list[str] = []
+    for value in (candidate.get("url"), candidate.get("original_url")):
+        url = str(value or "").strip()
+        if url and url not in urls:
+            urls.append(url)
+
+    last_error: object = "ingen gyldig bilde-URL"
+    for url in urls:
+        for attempt in range(3):
+            response = None
+            status = 0
+            retry_after = 0.0
+            try:
+                response = requests.get(
+                    url,
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        "Accept": "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.8",
+                    },
+                    timeout=20,
+                    stream=True,
+                )
+                status = int(getattr(response, "status_code", 0) or 0)
+                if status == 429:
+                    try:
+                        retry_after = float(response.headers.get("Retry-After", "0"))
+                    except (TypeError, ValueError):
+                        retry_after = 0.0
+                response.raise_for_status()
+                content_type = response.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
+                if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+                    raise ValueError(f"Ustøttet bildetype: {content_type}")
+
+                chunks: list[bytes] = []
+                size = 0
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    size += len(chunk)
+                    if size > MAX_GENERATED_IMAGE_BYTES:
+                        raise ValueError("Wikimedia-bildet er større enn 15 MB")
+                    chunks.append(chunk)
+                image_bytes = b"".join(chunks)
+                if not image_bytes:
+                    raise ValueError("Wikimedia returnerte en tom bildefil")
+                return image_bytes, content_type
+            except Exception as exc:
+                last_error = exc
+            finally:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+
+            retryable = status == 429 or status >= 500 or status == 0
+            if not retryable or attempt == 2:
+                break
+            delay = min(max(retry_after, 0.5 * (2**attempt)), 4.0)
+            logger.info(
+                "Wikimedia svarte %s; prøver kandidaten igjen om %.1f s",
+                status or "med nettverksfeil",
+                delay,
+            )
+            time.sleep(delay)
+
+    logger.warning("Kunne ikke laste Commons-kandidaten %r: %s", candidate.get("title", ""), last_error)
+    return None
+
+
+def _verified_remote_candidate_path(plan: dict, candidate: dict) -> Optional[str]:
+    """Download, visually verify and persist the exact bytes used by the PDF."""
+    downloaded = _download_remote_candidate(candidate)
+    if not downloaded:
+        return None
+    image_bytes, content_type = downloaded
+    if not _verify_image_bytes(plan, image_bytes, content_type, "Wikimedia Commons"):
+        return None
+
+    suffix = ".jpg" if content_type in {"image/jpeg", "image/jpg"} else ".png"
+    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_commons_", suffix=suffix, delete=False)
+    try:
+        handle.write(image_bytes)
+        return handle.name
+    finally:
+        handle.close()
 
 
 def _commons_image(plan: dict) -> Optional[ImageResult]:
@@ -427,22 +503,33 @@ def _commons_image(plan: dict) -> Optional[ImageResult]:
     chosen = _select_candidate(plan, candidates)
     if not chosen:
         return None
-    if not _verify_remote_candidate(plan, chosen):
-        return None
-    creator = chosen.get("creator") or "ukjent opphav"
-    credit = f'Kilde: Wikimedia Commons · «{chosen["title"]}» · {creator} · {chosen["license"]}'
-    return ImageResult(
-        source="wikimedia",
-        image_url=chosen["url"],
-        source_page_url=chosen["page_url"],
-        title=chosen["title"],
-        creator=chosen.get("creator"),
-        license=chosen["license"],
-        credit=credit[:500],
-        caption=str(plan.get("caption", ""))[:120],
-        alt_text=str(plan.get("alt_text") or plan.get("motif", ""))[:240],
-        rationale=str(plan.get("rationale", ""))[:500],
-    )
+
+    # The metadata critic's choice is tried first. Search-ranked reserves still
+    # pass the stricter pixel-level Gemini gate before they can reach the PDF.
+    ordered = [chosen] + [candidate for candidate in candidates if candidate is not chosen]
+    for candidate in ordered[:4]:
+        local_path = _verified_remote_candidate_path(plan, candidate)
+        if not local_path:
+            continue
+        creator = candidate.get("creator") or "ukjent opphav"
+        credit = (
+            f'Kilde: Wikimedia Commons · «{candidate["title"]}» · '
+            f'{creator} · {candidate["license"]}'
+        )
+        return ImageResult(
+            source="wikimedia",
+            image_url=candidate["url"],
+            local_path=local_path,
+            source_page_url=candidate["page_url"],
+            title=candidate["title"],
+            creator=candidate.get("creator"),
+            license=candidate["license"],
+            credit=credit[:500],
+            caption=str(plan.get("caption", ""))[:120],
+            alt_text=str(plan.get("alt_text") or plan.get("motif", ""))[:240],
+            rationale=str(plan.get("rationale", ""))[:500],
+        )
+    return None
 
 
 _AI_STYLE_RULES = """
@@ -516,8 +603,9 @@ def generate_ai_image(prompt: str) -> Optional[str]:
     # Preferred API. Its failure must not suppress the independent legacy
     # generate_content fallback; that mistake previously made image mode fail
     # completely during Google's Interactions schema migration.
-    interactions = getattr(client, "interactions", None)
-    if interactions is not None and _supports_current_interactions_schema():
+    supports_interactions = _supports_current_interactions_schema()
+    interactions = getattr(client, "interactions", None) if supports_interactions else None
+    if interactions is not None:
         try:
             interaction = interactions.create(
                 model=_image_model(),
@@ -536,7 +624,7 @@ def generate_ai_image(prompt: str) -> Optional[str]:
                 _image_model(),
                 exc,
             )
-    elif interactions is not None:
+    elif not supports_interactions:
         logger.info("google-genai 1.x oppdaget; bruker generate_content for KI-bildet")
 
     if not image_bytes:
