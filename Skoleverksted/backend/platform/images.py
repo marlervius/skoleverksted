@@ -367,13 +367,23 @@ kan forveksles med historisk bevis, eller åpenbare anatomiske/fysiske feil.
 
 Svar KUN som JSON:
 {{"approved": true eller false, "reason": "<kort begrunnelse>"}}"""
-        response = genai.Client(api_key=_api_key()).models.generate_content(
-            model=model,
-            contents=[
-                prompt,
-                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            ],
-        )
+        # Keep a strong reference to the client until the request completes.
+        # Chaining ``genai.Client(...).models.generate_content(...)`` can let
+        # google-genai close the temporary client before the models call sends
+        # its request, which makes every otherwise valid image fail this gate.
+        client = genai.Client(api_key=_api_key())
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                ],
+            )
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
         verdict = _extract_json(getattr(response, "text", None) or response) or {}
         approved = verdict.get("approved") is True
         if not approved:

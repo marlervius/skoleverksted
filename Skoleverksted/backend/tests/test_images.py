@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import weakref
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -125,3 +126,50 @@ def test_image_generation_falls_back_when_interactions_fails(monkeypatch) -> Non
     finally:
         if path:
             Path(path).unlink(missing_ok=True)
+
+
+def test_visual_verifier_keeps_google_client_open_during_request(monkeypatch) -> None:
+    events: list[str] = []
+
+    class FakeModels:
+        def __init__(self, client) -> None:
+            self._client = weakref.ref(client)
+
+        def generate_content(self, **kwargs):
+            client = self._client()
+            if client is None or client.closed:
+                raise RuntimeError("Cannot send a request, as the client has been closed.")
+            events.append("request")
+            return SimpleNamespace(text='{"approved": true, "reason": "relevant"}')
+
+    class FakeClient:
+        def __init__(self, **kwargs) -> None:
+            self.closed = False
+            self.models = FakeModels(self)
+
+        def close(self) -> None:
+            if not self.closed:
+                self.closed = True
+                events.append("close")
+
+        def __del__(self) -> None:
+            self.close()
+
+    fake_genai = ModuleType("google.genai")
+    fake_genai.Client = FakeClient
+    fake_genai.types = SimpleNamespace(
+        Part=SimpleNamespace(from_bytes=lambda **kwargs: SimpleNamespace(**kwargs))
+    )
+    fake_google = ModuleType("google")
+    fake_google.genai = fake_genai
+    monkeypatch.setitem(sys.modules, "google", fake_google)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
+    monkeypatch.setattr(images, "_api_key", lambda: "test-key")
+
+    assert images._verify_image_bytes(
+        {"motif": "Et vulkanutbrudd", "rationale": "Forklare geologiske prosesser"},
+        b"fake-image",
+        "image/png",
+        "KI",
+    )
+    assert events == ["request", "close"]
