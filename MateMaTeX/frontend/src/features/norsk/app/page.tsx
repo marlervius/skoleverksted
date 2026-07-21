@@ -43,15 +43,14 @@ import type {
   Status,
 } from "../lib/fovTypes";
 import { nextPollDelayMs } from "../lib/polling";
+import { serviceBackendUrl } from "@/lib/backend-url";
 
 // ---------------------------------------------------------------------------
 // Root
 // ---------------------------------------------------------------------------
 
 export default function HomeContent() {
-  const apiUrl =
-    process.env.NEXT_PUBLIC_NORSK_API_URL ||
-    `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/norsk`;
+  const apiUrl = serviceBackendUrl(process.env.NEXT_PUBLIC_NORSK_API_URL, "api/norsk");
 
   // --- Core form state ---
   const [subject, setSubject] = useState("");

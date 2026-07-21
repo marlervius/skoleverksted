@@ -1,3 +1,5 @@
+import { internalBackendUrl } from "@/lib/backend-url";
+
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
@@ -11,14 +13,7 @@ export const dynamic = "force-dynamic";
  * https://matematex-api.onrender.com/health directly.
  */
 export async function GET() {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-
-  if (!apiUrl) {
-    return Response.json(
-      { ok: false, error: "NEXT_PUBLIC_API_URL not configured" },
-      { status: 500 }
-    );
-  }
+  const apiUrl = internalBackendUrl();
 
   try {
     const res = await fetch(`${apiUrl}/health`, {

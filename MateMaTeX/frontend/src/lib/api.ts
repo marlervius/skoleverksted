@@ -10,16 +10,16 @@ import type {
   StreamCurrentAgentPayload,
   StreamStepPayload,
 } from "@/types/generation";
+import { internalServiceBackendUrl } from "@/lib/backend-url";
 
 function getApiBase(): string {
   if (typeof window !== "undefined") {
     return "/api/backend";
   }
-  return (
-    process.env.BACKEND_INTERNAL_URL ||
-    process.env.NEXT_PUBLIC_MATE_API_URL ||
-    `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/matematikk`
-  ).replace(/\/$/, "");
+  return internalServiceBackendUrl(
+    process.env.NEXT_PUBLIC_MATE_API_URL,
+    "api/matematikk",
+  );
 }
 
 function apiUrl(path: string): string {

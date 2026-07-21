@@ -1,15 +1,15 @@
 import type { NextRequest } from "next/server";
+import { internalServiceBackendUrl } from "@/lib/backend-url";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 function backendBase(): string {
-  return (
-    process.env.MATE_BACKEND_INTERNAL_URL ||
-    process.env.NEXT_PUBLIC_MATE_API_URL ||
-    `${process.env.BACKEND_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/matematikk`
-  ).replace(/\/$/, "");
+  return internalServiceBackendUrl(
+    process.env.MATE_BACKEND_INTERNAL_URL || process.env.NEXT_PUBLIC_MATE_API_URL,
+    "api/matematikk",
+  );
 }
 
 // Only the route prefixes the app actually uses may pass through. The proxy

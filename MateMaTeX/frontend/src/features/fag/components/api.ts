@@ -1,9 +1,8 @@
 import type { LessonOptions } from "./constants";
 import type { ImageMode } from "@/components/image-mode-picker";
+import { serviceBackendUrl } from "@/lib/backend-url";
 
-const API_URL =
-  process.env.NEXT_PUBLIC_VGS_API_URL ||
-  `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/fag`;
+const API_URL = serviceBackendUrl(process.env.NEXT_PUBLIC_VGS_API_URL, "api/fag");
 
 function projectHeaders(): Record<string, string> {
   if (typeof window === "undefined") return {};

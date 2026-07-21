@@ -1,3 +1,5 @@
+import { serviceBackendUrl } from "./backend-url";
+
 export type ProjectStatus = "draft" | "ready" | "generating" | "completed" | "archived";
 
 export interface Project {
@@ -81,7 +83,7 @@ export interface PlatformJob {
   updated_at: string;
 }
 
-const baseUrl = () => `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/platform`;
+const baseUrl = () => serviceBackendUrl(undefined, "api/platform");
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl()}${path}`, {

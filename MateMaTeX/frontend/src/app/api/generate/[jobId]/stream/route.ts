@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { internalServiceBackendUrl } from "@/lib/backend-url";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,11 +16,10 @@ export async function GET(
 ) {
   const params = await Promise.resolve(context.params);
   const jobId = params.jobId;
-  const backend = (
-    process.env.MATE_BACKEND_INTERNAL_URL ||
-    process.env.NEXT_PUBLIC_MATE_API_URL ||
-    `${process.env.BACKEND_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/matematikk`
-  ).replace(/\/$/, "");
+  const backend = internalServiceBackendUrl(
+    process.env.MATE_BACKEND_INTERNAL_URL || process.env.NEXT_PUBLIC_MATE_API_URL,
+    "api/matematikk",
+  );
 
   const key = process.env.MATE_API_KEY?.trim() || "";
   const headers: Record<string, string> = {
