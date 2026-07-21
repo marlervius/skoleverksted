@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 from Skoleverksted.backend.platform import images
 
@@ -93,8 +94,6 @@ def test_visual_quality_gate_requires_available_verification(monkeypatch) -> Non
 
 
 def test_image_generation_falls_back_when_interactions_fails(monkeypatch) -> None:
-    from google import genai
-
     expected = b"small-fake-png"
 
     class BrokenInteractions:
@@ -107,7 +106,15 @@ def test_image_generation_falls_back_when_interactions_fails(monkeypatch) -> Non
             return SimpleNamespace(parts=[SimpleNamespace(inline_data=inline)])
 
     fake_client = SimpleNamespace(interactions=BrokenInteractions(), models=WorkingModels())
-    monkeypatch.setattr(genai, "Client", lambda **kwargs: fake_client)
+    fake_genai = ModuleType("google.genai")
+    fake_genai.Client = lambda **kwargs: fake_client
+    fake_genai.types = SimpleNamespace(
+        GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    fake_google = ModuleType("google")
+    fake_google.genai = fake_genai
+    monkeypatch.setitem(sys.modules, "google", fake_google)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
     monkeypatch.setattr(images, "_api_key", lambda: "test-key")
     monkeypatch.setattr(images, "_supports_current_interactions_schema", lambda: True)
 
