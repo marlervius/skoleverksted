@@ -132,6 +132,7 @@ def _fallback_plan(topic: str, subject: str, level: str) -> dict:
             f"{topic} educational illustration",
             topic,
         ],
+        "fallback_search_queries": [topic, f"{topic} {subject}"],
         "generation_prompt": (
             f"A clear educational illustration of {topic} for a {subject} lesson at level {level}. "
             "Show the core concept concretely with one obvious focal point."
@@ -189,6 +190,7 @@ Svar KUN med ett JSON-objekt:
   "motif": "<hva bildet konkret viser>",
   "rationale": "<hvordan bildet støtter læringen>",
   "search_queries": ["<engelsk Commons-søk 1>", "<søk 2>", "<søk 3>"],
+  "fallback_search_queries": ["<kort, bredt engelsk søk 1>", "<bredt søk 2>"],
   "generation_prompt": "<detaljert engelsk bildeprompt>",
   "caption": "<kort bildetekst på samme språk som læringsarket, maks 12 ord>",
   "alt_text": "<kort, konkret alternativ tekst>"
@@ -219,7 +221,12 @@ def _is_free_license(license_name: str) -> bool:
 def _query_terms(plan: dict) -> set[str]:
     source = " ".join(
         [str(plan.get("motif", ""))]
-        + [str(q) for q in plan.get("search_queries", []) if isinstance(q, str)]
+        + [
+            str(q)
+            for field in ("search_queries", "fallback_search_queries")
+            for q in plan.get(field, [])
+            if isinstance(q, str)
+        ]
     ).lower()
     stop = {"with", "from", "that", "this", "photo", "image", "illustration", "educational", "the", "and"}
     return {word for word in re.findall(r"[a-zæøå0-9]{4,}", source) if word not in stop}
@@ -359,12 +366,22 @@ def _verify_image_bytes(plan: dict, image_bytes: bytes, mime_type: str, source: 
 
 Planlagt motiv: {plan.get('motif')}
 Pedagogisk hensikt: {plan.get('rationale')}
+Undervisningstema: {plan.get('context_topic', '')}
+Fag og nivå: {plan.get('context_subject', '')} {plan.get('context_level', '')}
 Kildekategori: {source}
 
-Godkjenn bare hvis bildet faktisk og entydig viser hovedmotivet, er faglig
-forsvarlig, forståelig på papir og uten irrelevant tekst, logo, vannmerke,
-stereotypi eller visuelt rot. For KI-bilder: avvis også dokumentarisk stil som
-kan forveksles med historisk bevis, eller åpenbare anatomiske/fysiske feil.
+Godkjenn hvis hovedmotivet er identifiserbart, faglig relevant og forståelig på
+papir. Vurder pedagogisk brukbarhet fremfor estetisk perfeksjon. For autentiske
+Wikimedia-bilder av historiske gjenstander, kunstverk, ruiner, manuskripter eller
+naturmateriale er alder, patina, sprekker, manglende fragmenter, ujevn bakgrunn
+og dokumentasjon av skader IKKE i seg selv avslagsgrunn. Slike spor kan være
+faglig verdifulle. Avvis dem bare hvis skadene faktisk skjuler hovedmotivet eller
+gjør bildet uleselig i forventet utskriftsstørrelse.
+
+Avvis fortsatt bilder som er feil tema, misvisende, uforståelige, dominert av
+irrelevant tekst, logo eller vannmerke, eller har så mye visuelt rot at eleven
+ikke finner hovedmotivet. For KI-bilder: avvis også dokumentarisk stil som kan
+forveksles med historisk bevis, eller åpenbare anatomiske/fysiske feil.
 
 Svar KUN som JSON:
 {{"approved": true eller false, "reason": "<kort begrunnelse>"}}"""
@@ -489,17 +506,21 @@ def _verified_remote_candidate_path(plan: dict, candidate: dict) -> Optional[str
         handle.close()
 
 
-def _commons_image(plan: dict) -> Optional[ImageResult]:
-    queries = [q.strip() for q in plan.get("search_queries", []) if isinstance(q, str) and q.strip()]
-    if not queries:
-        queries = [str(plan.get("motif", ""))]
-    seen: set[str] = set()
+def _collect_commons_candidates(
+    plan: dict,
+    queries: list[str],
+    seen: set[str],
+) -> list[dict]:
     candidates: list[dict] = []
     for query in queries[:3]:
         for item in _search_wikimedia(query, plan):
             if item["url"] and item["url"] not in seen:
                 seen.add(item["url"])
                 candidates.append(item)
+    return candidates
+
+
+def _try_commons_candidates(plan: dict, candidates: list[dict]) -> Optional[ImageResult]:
     chosen = _select_candidate(plan, candidates)
     if not chosen:
         return None
@@ -530,6 +551,31 @@ def _commons_image(plan: dict) -> Optional[ImageResult]:
             rationale=str(plan.get("rationale", ""))[:500],
         )
     return None
+
+
+def _commons_image(plan: dict) -> Optional[ImageResult]:
+    primary_queries = [
+        q.strip() for q in plan.get("search_queries", []) if isinstance(q, str) and q.strip()
+    ]
+    if not primary_queries:
+        primary_queries = [str(plan.get("motif", ""))]
+
+    seen: set[str] = set()
+    primary = _collect_commons_candidates(plan, primary_queries, seen)
+    result = _try_commons_candidates(plan, primary)
+    if result:
+        return result
+
+    fallback_queries = [
+        q.strip()
+        for q in plan.get("fallback_search_queries", [])
+        if isinstance(q, str) and q.strip() and q.strip() not in primary_queries
+    ]
+    if not fallback_queries:
+        fallback_queries = [str(plan.get("context_topic") or plan.get("motif", ""))]
+    logger.info("Første Commons-runde ga ikke et godkjent bilde; prøver bredere søk")
+    fallback = _collect_commons_candidates(plan, fallback_queries, seen)
+    return _try_commons_candidates(plan, fallback)
 
 
 _AI_STYLE_RULES = """
@@ -700,6 +746,12 @@ def resolve_image(
         return None
     try:
         plan = _plan_image(topic, subject, level, text, selected)
+        plan = {
+            **plan,
+            "context_topic": topic,
+            "context_subject": subject,
+            "context_level": level,
+        }
         return _ai_image(plan, subject) if selected == "ai" else _commons_image(plan)
     except Exception as exc:
         logger.exception("Bildepipeline feilet; PDF fortsetter uten bilde: %s", exc)

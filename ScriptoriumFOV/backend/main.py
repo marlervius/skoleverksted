@@ -227,7 +227,9 @@ def generate_lesson_background(
 
         # Step 4: Store PDF bytes in progress for retrieval
         image_warning = (
-            " Bildecrewet fant ikke et bilde som bestod kvalitetskontrollen, så PDF-en er laget uten bilde."
+            " Ingen tilstrekkelig relevant og fritt tilgjengelig bilde ble funnet. "
+            "PDF-en er laget uten bilde; prøv Commons-søket på nytt, velg KI-illustrasjon "
+            "eller last opp et eget bilde."
             if image_mode != "none" and not processed_image_path
             else ""
         )
@@ -713,7 +715,9 @@ def generate_pdf_from_json_background(
         # Store PDF
         requested_image = normalize_image_mode(request.image_mode) != "none"
         image_warning = (
-            " Bildecrewet fant ikke et bilde som bestod kvalitetskontrollen, så PDF-en er laget uten bilde."
+            " Ingen tilstrekkelig relevant og fritt tilgjengelig bilde ble funnet. "
+            "PDF-en er laget uten bilde; prøv Commons-søket på nytt, velg KI-illustrasjon "
+            "eller last opp et eget bilde."
             if requested_image and not processed_image_path
             else ""
         )

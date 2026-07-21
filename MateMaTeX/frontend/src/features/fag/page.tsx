@@ -46,7 +46,7 @@ import {
   downloadDocx,
   createBlobUrl,
 } from "./components/api";
-import { ImageModePicker } from "@/components/image-mode-picker";
+import { ImageModePicker, type ImageMode } from "@/components/image-mode-picker";
 
 export default function Home() {
   const [state, dispatch] = useReducer(appReducer, initialState);
@@ -68,6 +68,9 @@ export default function Home() {
   const isDifferensiert = mode === "differensiert";
   const isProve = mode === "prove";
   const isSekvens = mode === "sekvens";
+  const imageFallbackNeeded = warnings.some((warning) =>
+    warning.includes("PDF-en ble laget uten bilde")
+  );
 
   // ── localStorage session save / restore ─────────────────────────────────────
   const LS_KEY = "vgs_ki_session";
@@ -285,7 +288,10 @@ export default function Home() {
     }
   }, [basisText, worksheetText, faktarapportText, topic, subject, level]);
 
-  const handleRegenerate = useCallback(async () => {
+  const regenerateWithImageMode = useCallback(async (
+    requestedImageMode: ImageMode,
+    imageUrlOverride?: string,
+  ) => {
     if (!basisText || mode !== "laeringsark") return;
     if (abortControllerRef.current) abortControllerRef.current.abort();
     const controller = new AbortController();
@@ -299,13 +305,13 @@ export default function Home() {
       const result = await generateLesson({
         topic, subject, level, languageLevel, options,
         imageData: undefined,
-        imageMode,
+        imageMode: requestedImageMode,
         description: description.trim() || undefined,
         sourceText: sourceText.trim() || undefined,
         useNdla,
         interest: interest.trim() || undefined,
         basisText,
-        imageUrlOverride: generatedImageUrl || undefined,
+        imageUrlOverride,
         signal: controller.signal, onProgress,
       });
       stopTimer();
@@ -315,7 +321,7 @@ export default function Home() {
         url: createBlobUrl(result.blob),
         filename: result.filename,
         basisText: result.basisText ?? basisText,
-        imageUrl: result.imageUrl ?? generatedImageUrl ?? undefined,
+        imageUrl: result.imageUrl ?? imageUrlOverride,
         worksheetText: result.worksheetText,
         faktarapportText: result.faktarapportText,
         languageExercises: result.languageExercises,
@@ -328,6 +334,7 @@ export default function Home() {
         rapportBlob: result.rapportBlob,
         rapportFilename: result.rapportFilename,
       });
+      dispatch({ type: "SET_IMAGE_MODE", mode: requestedImageMode });
       setTimeout(() => dispatch({ type: "GENERATION_IDLE" }), 8000);
     } catch (error) {
       stopTimer();
@@ -343,7 +350,15 @@ export default function Home() {
       abortControllerRef.current = null;
       dispatch({ type: "GENERATION_PROGRESS", message: "" });
     }
-  }, [basisText, generatedImageUrl, imageMode, mode, topic, subject, level, languageLevel, options, description, sourceText, useNdla, interest, previewUrl, startTimer, stopTimer]);
+  }, [basisText, mode, topic, subject, level, languageLevel, options, description, sourceText, useNdla, interest, previewUrl, startTimer, stopTimer]);
+
+  const handleRegenerate = useCallback(() => {
+    void regenerateWithImageMode(imageMode, generatedImageUrl || undefined);
+  }, [generatedImageUrl, imageMode, regenerateWithImageMode]);
+
+  const handleImageFallback = useCallback((nextMode: ImageMode) => {
+    void regenerateWithImageMode(nextMode);
+  }, [regenerateWithImageMode]);
 
   const handleOppdaterPdf = useCallback(async () => {
     if (!basisText || !worksheetText) return;
@@ -1421,6 +1436,43 @@ export default function Home() {
                           <li key={i}>{w}</li>
                         ))}
                       </ul>
+                    </div>
+                  )}
+                  {imageFallbackNeeded && basisText && mode === "laeringsark" && (
+                    <div className="p-3 rounded-lg bg-white border border-stone-200">
+                      <p className="text-sm font-semibold text-stone-800">Vil du prøve et annet bildevalg?</p>
+                      <p className="text-xs text-stone-500 mt-1">
+                        Fagteksten beholdes. KI brukes bare dersom du velger det selv.
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
+                        <button
+                          type="button"
+                          onClick={() => handleImageFallback("commons")}
+                          className="btn-secondary px-3 py-2 text-xs"
+                        >
+                          <ImageIcon className="w-4 h-4" aria-hidden="true" />
+                          Prøv Commons på nytt
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleImageFallback("ai")}
+                          className="btn-secondary px-3 py-2 text-xs"
+                        >
+                          <Sparkles className="w-4 h-4" aria-hidden="true" />
+                          Lag KI-illustrasjon
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            dispatch({ type: "GENERATION_IDLE" });
+                            document.getElementById("image-upload")?.click();
+                          }}
+                          className="btn-secondary px-3 py-2 text-xs"
+                        >
+                          <ImageIcon className="w-4 h-4" aria-hidden="true" />
+                          Last opp eget bilde
+                        </button>
+                      </div>
                     </div>
                   )}
                   <div className="flex gap-2.5">

@@ -130,6 +130,7 @@ def test_image_generation_falls_back_when_interactions_fails(monkeypatch) -> Non
 
 def test_visual_verifier_keeps_google_client_open_during_request(monkeypatch) -> None:
     events: list[str] = []
+    requests: list[dict] = []
 
     class FakeModels:
         def __init__(self, client) -> None:
@@ -140,6 +141,7 @@ def test_visual_verifier_keeps_google_client_open_during_request(monkeypatch) ->
             if client is None or client.closed:
                 raise RuntimeError("Cannot send a request, as the client has been closed.")
             events.append("request")
+            requests.append(kwargs)
             return SimpleNamespace(text='{"approved": true, "reason": "relevant"}')
 
     class FakeClient:
@@ -167,12 +169,22 @@ def test_visual_verifier_keeps_google_client_open_during_request(monkeypatch) ->
     monkeypatch.setattr(images, "_api_key", lambda: "test-key")
 
     assert images._verify_image_bytes(
-        {"motif": "Et vulkanutbrudd", "rationale": "Forklare geologiske prosesser"},
+        {
+            "motif": "Et vulkanutbrudd",
+            "rationale": "Forklare geologiske prosesser",
+            "context_topic": "Historiske spor",
+            "context_subject": "Historie",
+            "context_level": "VG1",
+        },
         b"fake-image",
         "image/png",
         "KI",
     )
     assert events == ["request", "close"]
+    prompt = requests[0]["contents"][0]
+    assert "Historiske spor" in prompt
+    assert "sprekker" in prompt
+    assert "IKKE i seg selv avslagsgrunn" in prompt
 
 
 def test_commons_download_retries_429_and_reuses_successful_bytes(monkeypatch) -> None:
@@ -263,3 +275,46 @@ def test_commons_uses_verified_reserve_and_returns_local_copy(tmp_path, monkeypa
     assert result.title == "Reserve"
     assert result.local_path == str(local_copy)
     assert result.image_url == reserve["url"]
+
+
+def test_commons_runs_broader_search_after_empty_primary_round(tmp_path, monkeypatch) -> None:
+    fallback_candidate = {
+        "url": "https://upload.wikimedia.org/broad.jpg",
+        "title": "Broad result",
+        "description": "Relevant broad result",
+        "creator": "Creator",
+        "license": "CC BY-SA 4.0",
+        "page_url": "https://commons.wikimedia.org/wiki/File:Broad",
+    }
+    local_copy = tmp_path / "broad.jpg"
+    local_copy.write_bytes(b"verified")
+    searches: list[str] = []
+
+    def fake_search(query: str, plan: dict):
+        searches.append(query)
+        return [fallback_candidate] if query == "Roman mosaic" else []
+
+    monkeypatch.setattr(images, "_search_wikimedia", fake_search)
+    monkeypatch.setattr(
+        images,
+        "_select_candidate",
+        lambda plan, candidates: candidates[0] if candidates else None,
+    )
+    monkeypatch.setattr(
+        images,
+        "_verified_remote_candidate_path",
+        lambda plan, candidate: str(local_copy),
+    )
+
+    result = images._commons_image(
+        {
+            "motif": "Late Roman villa floor mosaic with daily life scene",
+            "search_queries": ["Dominus Julius detailed educational photograph"],
+            "fallback_search_queries": ["Roman mosaic"],
+            "caption": "Romersk mosaikk",
+        }
+    )
+
+    assert result is not None
+    assert searches == ["Dominus Julius detailed educational photograph", "Roman mosaic"]
+    assert result.local_path == str(local_copy)

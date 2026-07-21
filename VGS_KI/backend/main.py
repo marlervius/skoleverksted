@@ -488,7 +488,11 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
             ctx.set_meta(
                 "warnings",
                 list(content.get("warnings") or [])
-                + ["Bildecrewet fant ikke et bilde som bestod kvalitetskontrollen. PDF-en ble laget uten bilde."],
+                + [
+                    "Ingen tilstrekkelig relevant og fritt tilgjengelig bilde ble funnet. "
+                    "PDF-en ble laget uten bilde. Du kan prøve Commons-søket på nytt, "
+                    "velge en KI-illustrasjon eller laste opp et eget bilde."
+                ],
             )
 
     structured = content.get("structured")
@@ -625,7 +629,11 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
             ctx.set_meta(
                 "warnings",
                 list(content.get("warnings") or [])
-                + ["Bildecrewet fant ikke et bilde som bestod kvalitetskontrollen. PDF-en ble laget uten bilde."],
+                + [
+                    "Ingen tilstrekkelig relevant og fritt tilgjengelig bilde ble funnet. "
+                    "PDF-en ble laget uten bilde. Du kan prøve Commons-søket på nytt, "
+                    "velge en KI-illustrasjon eller laste opp et eget bilde."
+                ],
             )
 
     try:

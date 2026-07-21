@@ -16,6 +16,7 @@ import {
   Accessibility,
   BookOpen,
   Languages,
+  Image as ImageIcon,
 } from "lucide-react";
 
 import { GenerationStatus } from "../components/GenerationStatus";
@@ -91,6 +92,7 @@ export default function HomeContent() {
   const [imageMode, setImageMode] = useState<ImageMode>("none");
   const [imageError, setImageError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   // --- #7 History ---
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -104,6 +106,7 @@ export default function HomeContent() {
   const [isDual, setIsDual] = useState(false);
   const [previewData, setPreviewData] = useState<LessonResponse | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(false);
+  const [imageFallbackNeeded, setImageFallbackNeeded] = useState(false);
   const pollingRef = useRef<boolean>(false);
 
   // --- Simple password gate (when backend has APP_PASSWORD set) ---
@@ -635,6 +638,7 @@ export default function HomeContent() {
     setErrorMessage("");
     setProgress({ step: 0, totalSteps: 4, message: "Starter generering..." });
     setGenerationId(null);
+    setImageFallbackNeeded(false);
     pollingRef.current = true;
 
     try {
@@ -670,6 +674,12 @@ export default function HomeContent() {
       if (!res.ok) throw new Error("Kunne ikke hente status");
 
       const progressData = await res.json();
+      if (
+        typeof progressData.message === "string" &&
+        progressData.message.includes("PDF-en er laget uten bilde")
+      ) {
+        setImageFallbackNeeded(true);
+      }
       setProgress({
         step: progressData.step,
         totalSteps: progressData.total_steps,
@@ -701,6 +711,13 @@ export default function HomeContent() {
     }
   };
 
+  const retryWithImageMode = (nextMode: ImageMode) => {
+    setImageMode(nextMode);
+    setImageFallbackNeeded(false);
+    setStatus("idle");
+    window.setTimeout(() => formRef.current?.requestSubmit(), 0);
+  };
+
   const pollProgress = async (gId: string, dual: boolean, attempt = 0) => {
     if (!pollingRef.current) return;
 
@@ -709,6 +726,12 @@ export default function HomeContent() {
       if (!res.ok) throw new Error("Kunne ikke hente status");
 
       const progressData = await res.json();
+      if (
+        typeof progressData.message === "string" &&
+        progressData.message.includes("PDF-en er laget uten bilde")
+      ) {
+        setImageFallbackNeeded(true);
+      }
       setProgress({
         step: progressData.step,
         totalSteps: progressData.total_steps,
@@ -881,7 +904,7 @@ export default function HomeContent() {
             onClear={clearHistory}
           />
 
-          <form onSubmit={handleSubmit}>
+          <form ref={formRef} onSubmit={handleSubmit}>
             <div className="surface-card p-6 sm:p-7">
 
               {/* Subject */}
@@ -1456,6 +1479,45 @@ export default function HomeContent() {
                 isDual={isDual}
                 onDismissError={() => setStatus("idle")}
               />
+              {imageFallbackNeeded && (
+                <div className="mt-4 p-4 rounded-lg bg-amber-50 border border-amber-200">
+                  <p className="text-sm font-semibold text-amber-900">
+                    Ingen passende Commons-bilde ble funnet
+                  </p>
+                  <p className="text-xs text-amber-800 mt-1">
+                    PDF-en er laget uten bilde. KI brukes bare dersom du velger det selv.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => retryWithImageMode("commons")}
+                      className="btn-secondary px-3 py-2 text-xs"
+                    >
+                      <ImageIcon className="w-4 h-4" aria-hidden="true" />
+                      Prøv Commons på nytt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => retryWithImageMode("ai")}
+                      className="btn-secondary px-3 py-2 text-xs"
+                    >
+                      <Sparkles className="w-4 h-4" aria-hidden="true" />
+                      Lag KI-illustrasjon
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStatus("idle");
+                        fileInputRef.current?.click();
+                      }}
+                      className="btn-secondary px-3 py-2 text-xs"
+                    >
+                      <Upload className="w-4 h-4" aria-hidden="true" />
+                      Last opp eget bilde
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </form>
 
