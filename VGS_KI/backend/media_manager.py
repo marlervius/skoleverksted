@@ -117,6 +117,38 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"Unexpected error processing base64 image: {e}")
             return None
+
+    def process_image_from_path(self, local_path: str) -> Optional[str]:
+        """Validate and optimize a local image for PDF embedding.
+
+        AI-generated images are already stored on disk, so routing them
+        through the URL downloader is both unnecessary and unsupported.  The
+        source file remains owned by the caller and is not deleted here.
+        """
+        if not local_path or not os.path.isfile(local_path):
+            logger.warning(f"Local image not found at path: {local_path}")
+            return None
+
+        try:
+            with open(local_path, "rb") as image_file:
+                image_data = image_file.read()
+            if not image_data:
+                logger.warning(f"Local image file is empty: {local_path}")
+                return None
+
+            image = self._validate_image(image_data)
+            if image is None:
+                return None
+            output_path = self._optimize_image(image)
+            if output_path:
+                logger.info(f"Local image processed: {output_path}")
+            return output_path
+        except OSError as e:
+            logger.warning(f"Could not read local image {local_path}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error processing local image: {e}")
+            return None
     
     def _download_image(self, url: str) -> Optional[bytes]:
         """
