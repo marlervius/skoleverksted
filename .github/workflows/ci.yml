@@ -74,15 +74,14 @@ jobs:
         working-directory: VGS_KI/backend
         env:
           PYTHONPATH: ${{ github.workspace }}
-          GOOGLE_API_KEY: test-key-not-used
-        run: pytest -q tests
+        run: GOOGLE_API_KEY=test-key-not-used python -m pytest -q tests
       - name: Test Norsklæring
         working-directory: ScriptoriumFOV/backend
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q tests
+        run: python -m pytest -q tests
       - name: Test Matematikk
         working-directory: MateMaTeX/backend
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q tests
+        run: python -m pytest -q tests
