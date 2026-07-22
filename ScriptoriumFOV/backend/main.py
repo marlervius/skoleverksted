@@ -21,6 +21,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from Skoleverksted.backend.platform.images import ImageResult, normalize_image_mode, resolve_image
+from Skoleverksted.backend.platform.queue import get_durable_job_queue
 
 if __package__:
     from .agents import generate_lesson_content
@@ -560,6 +561,29 @@ def download_zip(generation_id: str, _auth: AuthPasswordDep):
 # Main lesson generation endpoints
 # ---------------------------------------------------------------------------
 
+def _run_durable_fov_job(
+    generation_id: str,
+    kind: str,
+    payload,
+    project_id: str | None,
+    target,
+    *args,
+) -> None:
+    """Run every FOV background job through the shared durable capacity gate."""
+    queue = get_durable_job_queue()
+    queue.enqueue(generation_id, module="norsk", kind=kind, payload=payload, project_id=project_id)
+
+    def announce(position: int) -> None:
+        update_progress(generation_id, 0, 4, f"Venter i kø (plass {position}) …")
+
+    with queue.claim(generation_id, on_wait=announce, auto_complete=False):
+        target(*args)
+    progress = get_progress(generation_id) or {}
+    if int(progress.get("step", 0)) < 0:
+        queue.fail(generation_id, str(progress.get("message") or "Genereringen feilet"))
+    else:
+        queue.finish(generation_id)
+
 @app.post("/generate-lesson")
 @limiter.limit("5/minute")
 async def generate_lesson(
@@ -576,7 +600,11 @@ async def generate_lesson(
     """
     generation_id = str(uuid.uuid4())
     update_progress(generation_id, 0, 4, "Starter generering...")
-    background_tasks.add_task(generate_lesson_background, generation_id, lesson_request)
+    background_tasks.add_task(
+        _run_durable_fov_job,
+        generation_id, "lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_background,
+        generation_id, lesson_request,
+    )
 
     return {"generation_id": generation_id}
 
@@ -652,7 +680,11 @@ async def generate_lesson_json(
     """
     generation_id = str(uuid.uuid4())
     update_progress(generation_id, 0, 2, "Starter forhåndsvisning...")
-    background_tasks.add_task(generate_lesson_json_background, generation_id, lesson_request)
+    background_tasks.add_task(
+        _run_durable_fov_job,
+        generation_id, "preview", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_json_background,
+        generation_id, lesson_request,
+    )
 
     return {"generation_id": generation_id}
 
@@ -744,7 +776,11 @@ async def generate_pdf_from_json(
     """Generate PDF directly from preview content."""
     generation_id = str(uuid.uuid4())
     update_progress(generation_id, 0, 3, "Starter PDF-generering...")
-    background_tasks.add_task(generate_pdf_from_json_background, generation_id, preview_request)
+    background_tasks.add_task(
+        _run_durable_fov_job,
+        generation_id, "preview_pdf", preview_request, request.headers.get("X-Skoleverksted-Project"), generate_pdf_from_json_background,
+        generation_id, preview_request,
+    )
     
     return {"generation_id": generation_id}
 
@@ -865,7 +901,11 @@ async def generate_dual_lesson(
     """
     generation_id = str(uuid.uuid4())
     update_progress(generation_id, 0, 4, "Starter dual generering...")
-    background_tasks.add_task(_generate_dual_background, generation_id, lesson_request)
+    background_tasks.add_task(
+        _run_durable_fov_job,
+        generation_id, "dual_lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), _generate_dual_background,
+        generation_id, lesson_request,
+    )
 
     return {"generation_id": generation_id, "dual": True}
 
@@ -922,7 +962,11 @@ async def generate_multi_lesson(
     """
     generation_id = str(uuid.uuid4())
     update_progress(generation_id, 0, 4, "Starter flernivå-generering...")
-    background_tasks.add_task(_generate_multi_level_background, generation_id, lesson_request)
+    background_tasks.add_task(
+        _run_durable_fov_job,
+        generation_id, "multi_lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), _generate_multi_level_background,
+        generation_id, lesson_request,
+    )
 
     return {"generation_id": generation_id, "zip_download": True}
 
@@ -1054,6 +1098,11 @@ async def generate_lesson_with_image(
 
     # Pass the pre-processed image path so background task skips URL download
     background_tasks.add_task(
+        _run_durable_fov_job,
+        generation_id,
+        "lesson_with_image",
+        lesson_request,
+        request.headers.get("X-Skoleverksted-Project"),
         generate_lesson_background,
         generation_id,
         lesson_request,

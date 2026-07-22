@@ -21,6 +21,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from Skoleverksted.backend.platform.queue import get_durable_job_queue
+
 if __package__:
     from .media_manager import image_processor
     from . import config
@@ -196,6 +198,7 @@ def run_job_in_thread(
     worker: Callable[[JobContext], tuple[bytes, str]],
     cache_key: Optional[str] = None,
     cache=None,
+    project_id: str | None = None,
 ) -> None:
     """Spawn a background thread that runs `worker(ctx)` and manages job state.
 
@@ -211,9 +214,26 @@ def run_job_in_thread(
     loop = asyncio.get_event_loop()
 
     req_logger = RequestLogger(logger, {'request_id': job_id[:8]})
+    durable_queue = get_durable_job_queue()
+    payload_kind = type(request_payload).__name__.replace("Request", "").lower() or "generation"
+    durable_queue.enqueue(
+        job_id,
+        module="fag",
+        kind=payload_kind,
+        payload=request_payload,
+        project_id=project_id,
+    )
+
+    def schedule_event(event: dict) -> None:
+        """Best-effort SSE delivery; clients/tests may close their loop first."""
+        try:
+            if not loop.is_closed():
+                loop.call_soon_threadsafe(queue.put_nowait, event)
+        except RuntimeError:
+            pass
 
     def push(msg: str) -> None:
-        loop.call_soon_threadsafe(queue.put_nowait, {"type": "progress", "message": msg})
+        schedule_event({"type": "progress", "message": msg})
 
     def thread_main() -> None:
         job_start = time.time()
@@ -324,7 +344,7 @@ def run_job_in_thread(
             # Tell the UI a separate teacher fact-report PDF exists (bytes
             # themselves never go over SSE).
             done_event["has_faktarapport"] = bool(job_meta.get("rapport_pdf"))
-            loop.call_soon_threadsafe(queue.put_nowait, done_event)
+            schedule_event(done_event)
 
         except Exception as e:
             err_str = str(e)
@@ -349,12 +369,21 @@ def run_job_in_thread(
                 if job:
                     job.error = f"{err_msg} (request_id: {job_id[:8]})"
                     job.done = True
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {"type": "error", "message": f"{err_msg} (request_id: {job_id[:8]})"},
-            )
+            schedule_event({"type": "error", "message": f"{err_msg} (request_id: {job_id[:8]})"})
 
-    threading.Thread(target=thread_main, daemon=True, name=f"job-{job_id[:8]}").start()
+    def queued_thread_main() -> None:
+        def announce(position: int) -> None:
+            push(f"Venter i kø (plass {position}) …")
+
+        with durable_queue.claim(job_id, on_wait=announce, auto_complete=False):
+            thread_main()
+        job = get_job(job_id)
+        if job and job.error:
+            durable_queue.fail(job_id, job.error)
+        elif job and job.done:
+            durable_queue.finish(job_id)
+
+    threading.Thread(target=queued_thread_main, daemon=True, name=f"job-{job_id[:8]}").start()
 
 
 # ── Helper for sanitising filenames ───────────────────────────────────────────

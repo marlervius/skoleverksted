@@ -3,6 +3,7 @@
  */
 
 import type { GenerationRequest } from "@/lib/store";
+import { loadLocal, saveLocal } from "@/lib/private-storage";
 
 const HISTORY_KEY = "matematex_history_v1";
 const MAX_ENTRIES = 40;
@@ -22,20 +23,14 @@ export interface HistoryEntry {
 
 function readRaw(): HistoryEntry[] {
   if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as HistoryEntry[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  const parsed = loadLocal<HistoryEntry[]>(HISTORY_KEY);
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 function writeRaw(entries: HistoryEntry[]) {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
+    saveLocal(HISTORY_KEY, entries.slice(0, MAX_ENTRIES));
   } catch {
     /* quota */
   }

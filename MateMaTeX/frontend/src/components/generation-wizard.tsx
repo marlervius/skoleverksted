@@ -24,6 +24,8 @@ import {
   loadPreferences,
   materialTypeFromTemplate,
 } from "@/lib/user-preferences";
+import { getProject } from "@/lib/platform-api";
+import { loadLocal, saveLocal } from "@/lib/private-storage";
 
 /* -----------------------------------------------------------------------
    Data
@@ -178,15 +180,13 @@ export function GenerationWizard() {
   useEffect(() => {
     const prefs = loadPreferences();
     const params = new URLSearchParams(window.location.search);
-    let draft: Record<string, unknown> = {};
-    try {
-      draft = JSON.parse(localStorage.getItem("skoleverksted_matte_draft_v1") || "{}");
-    } catch { /* ignore corrupt draft */ }
+    const draft = loadLocal<Record<string, unknown>>("skoleverksted_matte_draft_v1") || {};
     const template = params.get("template");
     const materialTypeParam = params.get("materialType");
     const topicParam = params.get("topic");
     const gradeParam = params.get("grade") || params.get("level");
     const languageLevelParam = params.get("languageLevel");
+    const projectId = params.get("project");
     const defaultGrade =
       prefs.grade ||
       (LAUNCH_GRADES.length > 0 ? LAUNCH_GRADES[0] : GRADES[0]?.value) ||
@@ -200,12 +200,18 @@ export function GenerationWizard() {
         ? materialTypeFromTemplate(template)
         : materialTypeParam || prefs.materialType,
     });
+    if (projectId) {
+      void getProject(projectId).then((project) => {
+        const source = typeof project.metadata?.source_text === "string" ? project.metadata.source_text : "";
+        const sourceName = typeof project.metadata?.source_name === "string" ? project.metadata.source_name : "felles temakilde";
+        const sharedContext = [project.description, source ? `Bruk ${sourceName} som felles datagrunnlag:\n${source.slice(0, 6000)}` : ""].filter(Boolean).join("\n\n");
+        setRequest({ competencyGoals: project.competency_goals, extraInstructions: sharedContext || request.extraInstructions });
+      }).catch(() => undefined);
+    }
   }, [setRequest]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem("skoleverksted_matte_draft_v1", JSON.stringify(request));
-    } catch { /* localStorage may be unavailable */ }
+    try { saveLocal("skoleverksted_matte_draft_v1", request); } catch { /* storage may be unavailable */ }
   }, [request]);
 
   useEffect(() => {

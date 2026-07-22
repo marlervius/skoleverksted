@@ -25,6 +25,11 @@ import { LoginForm } from "../components/LoginForm";
 import { OptionToggle } from "../components/OptionToggle";
 import { PreviewModal } from "../components/PreviewModal";
 import { ImageModePicker, type ImageMode } from "@/components/image-mode-picker";
+import { AdvancedOptions, GenerationJourney, GenerationSummary } from "@/components/generation-flow";
+import { GenerationFeedback } from "@/components/generation-feedback";
+import { RevisionActions } from "@/components/revision-actions";
+import { getProject } from "@/lib/platform-api";
+import { loadLocal, saveLocal } from "@/lib/private-storage";
 import {
   APP_PASSWORD_STORAGE_KEY,
   DEFAULT_ACCESSIBILITY,
@@ -142,10 +147,8 @@ export default function HomeContent() {
   // --- Load history from localStorage on mount ---
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(HISTORY_KEY);
-      if (stored) {
-        setHistory(JSON.parse(stored));
-      }
+      const stored = loadLocal<HistoryItem[]>(HISTORY_KEY);
+      if (stored) setHistory(stored);
     } catch {
       // ignore corrupt storage
     }
@@ -153,9 +156,8 @@ export default function HomeContent() {
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (!raw) return;
-      const draft = JSON.parse(raw) as Record<string, unknown>;
+      const draft = loadLocal<Record<string, unknown>>(DRAFT_KEY);
+      if (!draft) return;
       if (typeof draft.subject === "string") setSubject(draft.subject);
       if (typeof draft.level === "string") setLevel(draft.level);
       if (typeof draft.topic === "string") setTopic(draft.topic);
@@ -174,14 +176,23 @@ export default function HomeContent() {
     const querySubject = params.get("subject");
     const queryLevel = params.get("languageLevel") || params.get("level");
     const queryTopic = params.get("topic");
+    const projectId = params.get("project");
     if (querySubject) setSubject(querySubject);
     if (queryLevel) setLevel(queryLevel);
     if (queryTopic) setTopic(queryTopic);
+    if (projectId) {
+      void getProject(projectId).then((project) => {
+        const sharedSource = project.metadata?.source_text;
+        const sharedSourceName = project.metadata?.source_name;
+        if (typeof sharedSource === "string" && sharedSource) setSourceText(sharedSource);
+        if (typeof sharedSourceName === "string" && sharedSourceName) setSourceName(sharedSourceName);
+      }).catch(() => undefined);
+    }
   }, []);
 
   useEffect(() => {
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ subject, level, topic, specialInstructions, sourceText, sourceName, imageMode, savedAt: Date.now() }));
+      saveLocal(DRAFT_KEY, { subject, level, topic, specialInstructions, sourceText, sourceName, imageMode });
     } catch { /* localStorage may be unavailable */ }
   }, [subject, level, topic, specialInstructions, sourceText, sourceName, imageMode]);
 
@@ -291,7 +302,7 @@ export default function HomeContent() {
     setHistory((prev) => {
       const updated = [item, ...prev].slice(0, MAX_HISTORY);
       try {
-        localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+        saveLocal(HISTORY_KEY, updated);
       } catch {
         // Storage full — silently ignore
       }
@@ -852,9 +863,9 @@ export default function HomeContent() {
 
   if (!authConfigLoaded) {
     return (
-      <main className="min-h-screen bg-bg flex items-center justify-center">
+      <div className="min-h-screen bg-bg flex items-center justify-center">
         <Loader2 className="w-10 h-10 animate-spin text-accent-600" aria-label="Laster" />
-      </main>
+      </div>
     );
   }
 
@@ -871,7 +882,7 @@ export default function HomeContent() {
   }
 
   return (
-    <main className="min-h-screen bg-bg">
+    <div className="min-h-screen bg-bg">
       <div className="mx-auto max-w-2xl px-4 py-8 sm:py-10">
         {/* Page intro */}
         <div className="mb-6 relative">
@@ -905,6 +916,7 @@ export default function HomeContent() {
           />
 
           <form ref={formRef} onSubmit={handleSubmit}>
+            <GenerationJourney current={topic.trim() ? (sourceText.trim() || imageMode !== "none" || customImage ? 3 : 2) : 1} />
             <div className="surface-card p-6 sm:p-7">
 
               {/* Subject */}
@@ -1174,11 +1186,8 @@ export default function HomeContent() {
               </div>
 
               {/* Advanced Modules */}
-              <div className="mb-5 panel">
-                <label className="flex items-center gap-2 text-sm font-semibold text-stone-800 mb-3">
-                  <Sparkles className="w-4 h-4 text-accent-600" aria-hidden="true" />
-                  Avanserte moduler
-                </label>
+              <div className="mb-5">
+                <AdvancedOptions title="Avanserte moduler" description="Rollespill, skriveramme og ekstra språkaktiviteter">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                   <OptionToggle label="Rollespill" checked={options.role_play}
                     onChange={(val) => setOptions({ ...options, role_play: val })}
@@ -1196,6 +1205,7 @@ export default function HomeContent() {
                     onChange={(val) => setOptions({ ...options, real_case: val })}
                     disabled={formDisabled} description="E-post, SMS eller offisielt brev" advanced />
                 </div>
+                </AdvancedOptions>
               </div>
 
               {/* ---------------------------------------------------------------- */}
@@ -1417,6 +1427,16 @@ export default function HomeContent() {
               )}
 
               {/* Submit / Preview */}
+              {status === "idle" && (
+                <div className="mb-4">
+                  <GenerationSummary items={[
+                    { label: "Fag og nivå", value: subject && level ? `${subject} · ${level}` : null },
+                    { label: "Tema", value: topic },
+                    { label: "Kilde", value: sourceText ? sourceName || "Lærerens kilde" : "Ingen egen kilde" },
+                    { label: "Bilde", value: customImage ? "Eget bilde" : imageMode === "ai" ? "KI-generert" : imageMode === "commons" ? "Wikimedia Commons" : "Uten bilde" },
+                  ]} />
+                </div>
+              )}
               <div className="flex gap-3">
                 <button
                   type="button"
@@ -1479,6 +1499,7 @@ export default function HomeContent() {
                 isDual={isDual}
                 onDismissError={() => setStatus("idle")}
               />
+              {status === "success" && <div className="mt-4 space-y-3"><RevisionActions onSelect={(instruction) => { setSpecialInstructions((current) => [current, instruction].filter(Boolean).join("\n")); window.setTimeout(() => formRef.current?.requestSubmit(), 0); }} /><GenerationFeedback module="norsk" /></div>}
               {imageFallbackNeeded && (
                 <div className="mt-4 p-4 rounded-lg bg-amber-50 border border-amber-200">
                   <p className="text-sm font-semibold text-amber-900">
@@ -1549,6 +1570,6 @@ export default function HomeContent() {
           onGeneratePdf={generatePdfFromPreview}
         />
       )}
-    </main>
+    </div>
   );
 }

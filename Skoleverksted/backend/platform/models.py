@@ -54,6 +54,9 @@ class Job(BaseModel):
     request_summary: dict[str, Any] = Field(default_factory=dict)
     result_summary: dict[str, Any] = Field(default_factory=dict)
     quality_passport: dict[str, Any] = Field(default_factory=dict)
+    queue_position: int | None = Field(default=None, ge=1)
+    retryable: bool = False
+    attempt: int = Field(default=1, ge=1)
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
 
@@ -101,6 +104,8 @@ class ThemePackRequest(BaseModel):
     norwegian_level: str = Field(default="B1", max_length=20)
     duration_lessons: int = Field(default=4, ge=1, le=30)
     description: str = Field(default="", max_length=4000)
+    source_text: str = Field(default="", max_length=120_000)
+    source_name: str = Field(default="", max_length=240)
     competency_goals: list[str] = Field(default_factory=list, max_length=30)
     include_assessment: bool = True
     include_teacher_guide: bool = True
@@ -120,4 +125,17 @@ class ThemePack(BaseModel):
     project: Project
     tasks: list[ThemePackTask]
     quality_passport: QualityPassport
+    created_at: str = Field(default_factory=utc_now)
+
+
+class FeedbackCreate(BaseModel):
+    module: Literal["fag", "norsk", "matematikk", "platform"]
+    artifact_id: str = Field(default="", max_length=120)
+    project_id: str | None = Field(default=None, max_length=64)
+    rating: Literal["up", "down"]
+    reason: str = Field(default="", max_length=500)
+
+
+class Feedback(FeedbackCreate):
+    id: str = Field(default_factory=lambda: uuid4().hex)
     created_at: str = Field(default_factory=utc_now)

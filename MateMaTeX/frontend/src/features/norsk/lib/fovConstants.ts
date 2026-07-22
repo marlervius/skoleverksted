@@ -5,7 +5,7 @@ export const SUBJECTS = [
   { value: "Engelsk", label: "Engelsk", icon: "🇬🇧" },
   { value: "Samfunnsfag", label: "Samfunnsfag", icon: "🏛️" },
   { value: "Naturfag", label: "Naturfag", icon: "🔬" },
-  { value: "Matematikk", label: "Matematikk", icon: "📐" },
+  { value: "Matematikk", label: "Matematikk med norskstøtte", icon: "📐" },
   { value: "Utdanningsvalg", label: "Utdanningsvalg", icon: "🎓" },
 ] as const;
 

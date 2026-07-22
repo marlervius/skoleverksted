@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from Skoleverksted.backend.platform.models import Job, ProjectCreate, ProjectUpdate
+from Skoleverksted.backend.platform.models import FeedbackCreate, Job, ProjectCreate, ProjectUpdate
 from Skoleverksted.backend.platform.store import PlatformStore
 
 
@@ -34,6 +34,31 @@ class PlatformStoreTests(unittest.TestCase):
             jobs = store.list_jobs()
             self.assertEqual({job.module for job in jobs}, {"fag", "norsk", "matematikk"})
             self.assertEqual(store.get_job("matte-1").status, "needs_review")  # type: ignore[union-attr]
+
+    def test_queue_positions_and_restart_recovery_are_durable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PlatformStore(Path(tmp) / "platform.sqlite3")
+            store.upsert_job(Job(id="first", module="fag", status="queued"))
+            store.upsert_job(Job(id="second", module="norsk", status="queued"))
+
+            self.assertEqual(store.get_job("first").queue_position, 1)  # type: ignore[union-attr]
+            self.assertEqual(store.get_job("second").queue_position, 2)  # type: ignore[union-attr]
+            self.assertEqual(store.recover_incomplete_jobs(), 2)
+
+            recovered = store.get_job("second")
+            self.assertEqual(recovered.status, "needs_review")  # type: ignore[union-attr]
+            self.assertTrue(recovered.retryable)  # type: ignore[union-attr]
+            self.assertIn("startet på nytt", recovered.message)  # type: ignore[union-attr]
+
+    def test_feedback_is_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PlatformStore(Path(tmp) / "platform.sqlite3")
+            saved = store.create_feedback(FeedbackCreate(
+                module="fag", artifact_id="job-1", rating="down", reason="Fasit mangler"
+            ))
+
+            self.assertTrue(saved.id)
+            self.assertEqual(store.list_feedback(), [saved])
 
 
 if __name__ == "__main__":

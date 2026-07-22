@@ -63,6 +63,8 @@ export interface ThemePackInput {
   norwegian_level: string;
   duration_lessons: number;
   description: string;
+  source_text: string;
+  source_name: string;
   competency_goals: string[];
   include_assessment: boolean;
   include_teacher_guide: boolean;
@@ -79,6 +81,9 @@ export interface PlatformJob {
   request_summary: Record<string, unknown>;
   result_summary: Record<string, unknown>;
   quality_passport: Partial<QualityPassport>;
+  queue_position: number | null;
+  retryable: boolean;
+  attempt: number;
   created_at: string;
   updated_at: string;
 }
@@ -101,8 +106,30 @@ export const listProjects = (limit = 50) => requestJson<Project[]>(`/projects?li
 export const getProject = (id: string) => requestJson<Project>(`/projects/${encodeURIComponent(id)}`);
 export const listPlatformJobs = (limit = 100, projectId?: string) =>
   requestJson<PlatformJob[]>(`/jobs?limit=${limit}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`);
+export const listQueue = (limit = 100) => requestJson<PlatformJob[]>(`/queue?limit=${limit}`);
+export const cancelPlatformJob = (jobId: string) =>
+  requestJson<PlatformJob>(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
 export const createThemePack = (input: ThemePackInput) =>
   requestJson<ThemePack>("/theme-packs", { method: "POST", body: JSON.stringify(input) });
+export const submitGenerationFeedback = (input: {
+  module: PlatformJob["module"];
+  artifact_id?: string;
+  project_id?: string | null;
+  rating: "up" | "down";
+  reason?: string;
+}) => requestJson<{ id: string }>("/feedback", { method: "POST", body: JSON.stringify(input) });
+
+export async function downloadThemePackGuide(projectId: string): Promise<void> {
+  const response = await fetch(`${baseUrl()}/theme-packs/${encodeURIComponent(projectId)}/teacher-guide`);
+  if (!response.ok) throw new Error(`Kunne ikke laste ned lærerveiledningen (${response.status}).`);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "temapakke-laererveiledning.md";
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
 
 export function projectTasks(project: Project): ThemePackTask[] {
   const tasks = project.metadata?.tasks;

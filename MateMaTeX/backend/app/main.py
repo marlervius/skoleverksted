@@ -38,6 +38,7 @@ from slowapi.errors import RateLimitExceeded
 from app.auth import get_current_user, require_stream_access
 from app.config import get_config, get_settings
 from app.job_store import cleanup_old_snapshots, evict_terminal_jobs, get_job_memory, persist_terminal_job, resolve_job
+from Skoleverksted.backend.platform.queue import get_durable_job_queue
 from app.pipeline.cancel import cancel_job, clear_cancel
 from app.logging_config import configure_logging
 from app.models.state import GenerationRequest, PipelineState, PipelineStatus
@@ -273,6 +274,15 @@ async def start_generation(
         )
 
     _jobs[state.job_id] = state
+
+    project_id = request.headers.get("X-Skoleverksted-Project")
+    get_durable_job_queue().enqueue(
+        state.job_id,
+        module="matematikk",
+        kind=generation_request.material_type,
+        payload=generation_request,
+        project_id=project_id,
+    )
 
     loop = asyncio.get_event_loop()
     loop.run_in_executor(_executor, _run_job, state.job_id, generation_request, user_id)
@@ -652,7 +662,7 @@ async def health_ready():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _run_job(job_id: str, request: GenerationRequest, owner_id: str = "") -> None:
+def _run_job_body(job_id: str, request: GenerationRequest, owner_id: str = "") -> None:
     """Run a generation job in a background thread."""
     from app.pipeline.graph import run_pipeline
 
@@ -695,6 +705,18 @@ def _run_job(job_id: str, request: GenerationRequest, owner_id: str = "") -> Non
             state.error_message = str(e)
             persist_terminal_job(state)
         logger.error("job_failed", job_id=job_id, error=str(e))
+
+
+def _run_job(job_id: str, request: GenerationRequest, owner_id: str = "") -> None:
+    """Run through the process-wide durable queue before invoking the pipeline."""
+    queue = get_durable_job_queue()
+    with queue.claim(job_id, auto_complete=False):
+        _run_job_body(job_id, request, owner_id)
+    state = _jobs.get(job_id)
+    if state and state.status == PipelineStatus.FAILED:
+        queue.fail(job_id, state.error_message or "Matematikkgenereringen feilet")
+    elif state and state.status in {PipelineStatus.COMPLETED, PipelineStatus.COMPLETED_WITH_WARNINGS}:
+        queue.finish(job_id, message="Ferdig" if state.status == PipelineStatus.COMPLETED else "Ferdig med merknader")
 
 
 def _authorize_job(state: PipelineState, user_id: str) -> None:

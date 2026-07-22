@@ -1,0 +1,27 @@
+[
+  {
+    "name": "fag_kildebelagt_godkjent",
+    "request": {"module": "fag", "title": "Energi", "content": "Energi kan overføres mellom ulike former [K]. Elevene undersøker energikjeder og forklarer observasjonene med fagbegreper. Oppgavene går fra gjenkalling til anvendelse og refleksjon. Læreren kontrollerer eksemplene før utdeling og bruker fasiten i felles gjennomgang. Et praktisk forsøk lar gruppene registrere data, sammenligne resultatene og drøfte mulige feilkilder. Avslutningen kobler funnene tydelig tilbake til læringsmålet.", "sources": ["NDLA: Energi"], "competency_goals": ["utforske energiomforming"], "has_answer_key": true, "compiled": true, "prompt_version": "skoleverksted-v2"},
+    "expected": "passed"
+  },
+  {
+    "name": "norsk_mangler_kilde",
+    "request": {"module": "norsk", "title": "Arbeidsliv", "content": "Teksten forklarer hvordan en arbeidstaker kan forberede seg til en samtale. Først leser eleven en kort dialog. Deretter arbeider eleven med ord, setninger og en egen melding. Oppgavene støtter muntlig og skriftlig trening på nivå B1. Begrepslisten forklarer sentrale ord med korte eksempler. Til slutt øver par på dialogen og gir hverandre en konkret tilbakemelding på uttale, innhold og høflige formuleringer.", "sources": [], "competency_goals": ["samtale om arbeidsliv"], "has_answer_key": true, "compiled": true, "prompt_version": "skoleverksted-v2"},
+    "expected": "needs_review"
+  },
+  {
+    "name": "matematikk_verifisert",
+    "request": {"module": "matematikk", "title": "Prosent", "content": "Elevene beregner prosentvis endring i realistiske situasjoner [K]. Hver oppgave viser nødvendige data og en tydelig bestilling. Fasit forklarer framgangsmåten, og uttrykkene er kontrollert maskinelt. Til slutt vurderer eleven om svaret er rimelig i konteksten. Oppgavesettet begynner med en støttet modell og går videre til selvstendige sammenligninger. Elevene skal både vise utregning, angi enhet og forklare svaret med en fullstendig setning.", "sources": ["SSB prisindeks"], "competency_goals": ["bruke prosent i praktiske situasjoner"], "has_answer_key": true, "compiled": true, "math_incorrect": 0, "math_unparseable": 0, "prompt_version": "skoleverksted-v2"},
+    "expected": "passed"
+  },
+  {
+    "name": "matematikk_feil_fasit",
+    "request": {"module": "matematikk", "title": "Likninger", "content": "Elevene løser likninger og forklarer hvert trinn i løsningen. Oppgavene har gradvis progresjon fra enkle uttrykk til sammensatte problem. Fasit følger dokumentet, men den automatiske kontrollen har funnet en feil som må rettes før læreren deler arket.", "sources": ["LK20"], "competency_goals": ["utforske algebra"], "has_answer_key": true, "compiled": true, "math_incorrect": 1, "math_unparseable": 0, "prompt_version": "skoleverksted-v2"},
+    "expected": "failed"
+  },
+  {
+    "name": "uferdig_plassholder",
+    "request": {"module": "fag", "title": "Demokrati", "content": "Denne fagteksten presenterer demokratiske institusjoner og lar elevene sammenligne ulike former for deltakelse. Elevene bruker begrepene representasjon, medborgerskap og ytringsfrihet i korte drøftingsoppgaver. TODO: legg inn riktig kilde før dokumentet deles med klassen.", "sources": [], "competency_goals": [], "has_answer_key": false, "compiled": true, "prompt_version": "skoleverksted-v2"},
+    "expected": "failed"
+  }
+]

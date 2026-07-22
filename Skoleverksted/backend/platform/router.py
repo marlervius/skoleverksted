@@ -4,9 +4,12 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 
 from .models import (
     Job,
+    Feedback,
+    FeedbackCreate,
     Project,
     ProjectCreate,
     ProjectUpdate,
@@ -18,6 +21,7 @@ from .models import (
 )
 from .quality import build_quality_passport
 from .store import get_platform_store
+from .queue import get_durable_job_queue
 
 
 router = APIRouter(tags=["platform"])
@@ -62,6 +66,27 @@ def get_job(job_id: str):
     return job
 
 
+@router.get("/queue", response_model=list[Job])
+def list_queue(limit: int = Query(default=100, ge=1, le=300)):
+    return [
+        job for job in get_platform_store().list_jobs(limit=limit)
+        if job.status in {"queued", "planning", "generating", "verifying", "rendering"}
+    ]
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=Job)
+def cancel_job(job_id: str):
+    job = get_durable_job_queue().cancel(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Jobben finnes ikke i plattformhistorikken.")
+    return job
+
+
+@router.post("/feedback", response_model=Feedback, status_code=201)
+def create_feedback(request: FeedbackCreate):
+    return get_platform_store().create_feedback(request)
+
+
 @router.post("/quality-passports", response_model=QualityPassport)
 def create_quality_passport(request: QualityPassportRequest):
     return build_quality_passport(request)
@@ -83,6 +108,8 @@ def create_theme_pack(request: ThemePackRequest):
             "duration_lessons": request.duration_lessons,
             "include_assessment": request.include_assessment,
             "include_teacher_guide": request.include_teacher_guide,
+            "source_text": request.source_text,
+            "source_name": request.source_name,
         },
     )
     project = store.create_project(project_request, status="ready")
@@ -130,3 +157,21 @@ def create_theme_pack(request: ThemePackRequest):
     metadata["tasks"] = [task.model_dump() for task in tasks]
     project = store.update_project(project.id, ProjectUpdate(metadata=metadata)) or project
     return ThemePack(id=uuid4().hex, project=project, tasks=tasks, quality_passport=passport)
+
+
+@router.get("/theme-packs/{project_id}/teacher-guide")
+def theme_pack_teacher_guide(project_id: str):
+    project = get_platform_store().get_project(project_id)
+    if project is None or project.metadata.get("kind") != "theme_pack":
+        raise HTTPException(status_code=404, detail="Temapakken finnes ikke.")
+    tasks = project.metadata.get("tasks", [])
+    goals = "\n".join(f"- {goal}" for goal in project.competency_goals) or "- Legg til relevante kompetansemål før bruk."
+    task_lines = "\n".join(f"{index}. **{task.get('title', 'Del')}** – {task.get('brief', '')}" for index, task in enumerate(tasks, 1))
+    source = project.metadata.get("source_name") or "Ingen felles kilde oppgitt"
+    guide = f"""# {project.title}\n\n## Felles ramme\n\nTema: {project.theme}\n\nFag/nivå: {project.subject} / {project.level}\n\nKilde: {source}\n\n{project.description}\n\n## Kompetansemål\n\n{goals}\n\n## Deler\n\n{task_lines}\n\n## Lærerens sluttkontroll\n\n- Kontroller fakta og kildehenvisninger.\n- Kontroller at språk- og regnenivå passer elevgruppen.\n- Gjennomfør oppgavene og fasiten før utdeling.\n- Tilpass personopplysninger og eksempler til klassen.\n"""
+    filename = "".join(character if character.isalnum() or character in "-_" else "-" for character in project.title).strip("-") or "temapakke"
+    return Response(
+        guide,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}-laererveiledning.md"'},
+    )

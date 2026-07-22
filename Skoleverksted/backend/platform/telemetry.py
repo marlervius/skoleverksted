@@ -196,6 +196,9 @@ class JobTelemetryMiddleware:
                 request_summary=current.request_summary if current else {},
                 result_summary={"path": path, "status_code": status_code},
                 quality_passport=quality or (current.quality_passport if current else {}),
+                queue_position=current.queue_position if current else None,
+                retryable=current.retryable if current else status in {"failed", "needs_review"},
+                attempt=current.attempt if current else 1,
                 created_at=current.created_at if current else utc_now(),
                 updated_at=utc_now(),
             )

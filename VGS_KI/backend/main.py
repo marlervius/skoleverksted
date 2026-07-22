@@ -740,7 +740,8 @@ async def start_lesson_generation(request: Request, lesson_request: LessonReques
     job_id, queue = register_job()
     cache_key = compute_cache_key("pdf_lesson", lesson_request)
     run_job_in_thread(job_id, queue, lesson_request, _lesson_worker,
-                      cache_key=cache_key, cache=cache)
+                      cache_key=cache_key, cache=cache,
+                      project_id=request.headers.get("X-Skoleverksted-Project"))
     return {"job_id": job_id}
 
 
@@ -769,7 +770,8 @@ async def start_differentiated_generation(request: Request, lesson_request: Less
     # Differensiering varies enough that we don't share PDF cache with standard lesson.
     cache_key = compute_cache_key("pdf_diff", lesson_request)
     run_job_in_thread(job_id, queue, lesson_request, _differentiated_worker,
-                      cache_key=cache_key, cache=cache)
+                      cache_key=cache_key, cache=cache,
+                      project_id=request.headers.get("X-Skoleverksted-Project"))
     return {"job_id": job_id}
 
 
@@ -781,7 +783,8 @@ async def start_prove_generation(request: Request, prove_request: ProveRequest):
     job_id, queue = register_job()
     cache_key = compute_cache_key("pdf_prove", prove_request)
     run_job_in_thread(job_id, queue, prove_request, _prove_worker,
-                      cache_key=cache_key, cache=cache)
+                      cache_key=cache_key, cache=cache,
+                      project_id=request.headers.get("X-Skoleverksted-Project"))
     return {"job_id": job_id}
 
 
@@ -803,7 +806,8 @@ async def start_sequence_generation(request: Request, seq_request: SequenceReque
     job_id, queue = register_job()
     cache_key = compute_cache_key("pdf_sequence", seq_request)
     run_job_in_thread(job_id, queue, seq_request, _sequence_worker,
-                      cache_key=cache_key, cache=cache)
+                      cache_key=cache_key, cache=cache,
+                      project_id=request.headers.get("X-Skoleverksted-Project"))
     return {"job_id": job_id}
 
 

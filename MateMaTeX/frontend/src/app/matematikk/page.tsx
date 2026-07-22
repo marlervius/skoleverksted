@@ -5,6 +5,7 @@ import { useAppStore } from "@/lib/store";
 import { GenerationWizard } from "@/components/generation-wizard";
 import { PipelineProgress } from "@/components/pipeline-progress";
 import { ResultView } from "@/components/result-view";
+import { GenerationFeedback } from "@/components/generation-feedback";
 import { TrustSignals } from "@/components/trust-signals";
 import { M1CoverageCard } from "@/components/m1-coverage";
 import { LatexEditor } from "@/components/latex-editor";
@@ -133,6 +134,7 @@ export default function HomePage() {
             transition={{ duration: 0.25 }}
           >
             <ResultView />
+            <div className="mx-auto mt-4 max-w-content"><GenerationFeedback module="matematikk" artifactId={result.jobId} /></div>
           </motion.div>
         )}
       </AnimatePresence>

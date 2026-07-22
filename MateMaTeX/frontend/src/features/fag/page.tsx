@@ -47,11 +47,17 @@ import {
   createBlobUrl,
 } from "./components/api";
 import { ImageModePicker, type ImageMode } from "@/components/image-mode-picker";
+import { AdvancedOptions, GenerationJourney, GenerationSummary } from "@/components/generation-flow";
+import { GenerationFeedback } from "@/components/generation-feedback";
+import { RevisionActions } from "@/components/revision-actions";
+import { getProject } from "@/lib/platform-api";
+import { loadLocal, saveLocal } from "@/lib/private-storage";
 
 export default function Home() {
   const [state, dispatch] = useReducer(appReducer, initialState);
   const abortControllerRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
 
   const {
     mode, subject, level, languageLevel, topic, options,
@@ -89,9 +95,8 @@ export default function Home() {
   // Load saved session on mount
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return;
-      const s: SavedSession = JSON.parse(raw);
+      const s = loadLocal<SavedSession>(LS_KEY, SESSION_MAX_AGE_MS);
+      if (!s) return;
       if (s.basisText && s.savedAt && Date.now() - s.savedAt < SESSION_MAX_AGE_MS) {
         setPendingRestore(s);
       }
@@ -101,9 +106,8 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (!raw) return;
-      const draft = JSON.parse(raw) as Record<string, unknown>;
+      const draft = loadLocal<Record<string, unknown>>(DRAFT_KEY);
+      if (!draft) return;
       if (typeof draft.subject === "string") dispatch({ type: "SET_SUBJECT", subject: draft.subject });
       if (typeof draft.level === "string") dispatch({ type: "SET_LEVEL", level: draft.level });
       if (typeof draft.languageLevel === "string") dispatch({ type: "SET_LANGUAGE_LEVEL", languageLevel: draft.languageLevel });
@@ -123,14 +127,22 @@ export default function Home() {
     const querySubject = params.get("subject");
     const queryLevel = params.get("level");
     const queryTopic = params.get("topic");
+    const projectId = params.get("project");
     if (querySubject) dispatch({ type: "SET_SUBJECT", subject: querySubject });
     if (queryLevel) dispatch({ type: "SET_LEVEL", level: queryLevel });
     if (queryTopic) dispatch({ type: "SET_TOPIC", topic: queryTopic });
+    if (projectId) {
+      void getProject(projectId).then((project) => {
+        const sharedSource = project.metadata?.source_text;
+        if (typeof sharedSource === "string" && sharedSource) dispatch({ type: "SET_SOURCE_TEXT", sourceText: sharedSource });
+        if (project.competency_goals[0]) dispatch({ type: "SET_GOAL", goal: { kode: project.competency_goals[0], tittel: project.competency_goals[0], laereplan: "Temapakke" } as CompetencyGoal });
+      }).catch(() => undefined);
+    }
   }, []);
 
   useEffect(() => {
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ subject, level, languageLevel, topic, description, sourceText, interest, imageMode, savedAt: Date.now() }));
+      saveLocal(DRAFT_KEY, { subject, level, languageLevel, topic, description, sourceText, interest, imageMode });
     } catch { /* localStorage may be unavailable */ }
   }, [subject, level, languageLevel, topic, description, sourceText, interest, imageMode]);
 
@@ -138,7 +150,7 @@ export default function Home() {
   useEffect(() => {
     if (status === "success" && basisText && mode === "laeringsark") {
       try {
-        localStorage.setItem(LS_KEY, JSON.stringify({
+        saveLocal(LS_KEY, {
           topic, subject, level, mode,
           basisText, worksheetText: worksheetText ?? "",
           faktarapportText: faktarapportText ?? null,
@@ -146,7 +158,7 @@ export default function Home() {
           languageExercises: languageExercises ?? null,
           interest: interest || undefined,
           savedAt: Date.now(),
-        } satisfies SavedSession));
+        } satisfies SavedSession);
       } catch { /* ignore quota errors */ }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -657,7 +669,7 @@ export default function Home() {
       : "Generer læringsark";
 
   return (
-    <main className="min-h-screen bg-bg">
+    <div className="min-h-screen bg-bg">
       {/* Skip link */}
       <a
         href="#lesson-form"
@@ -722,7 +734,8 @@ export default function Home() {
 
         {/* Main Card */}
         <div className="w-full">
-          <form onSubmit={handleSubmit} id="lesson-form" aria-label="Generer dokument">
+          <form ref={formRef} onSubmit={handleSubmit} id="lesson-form" aria-label="Generer dokument">
+            <GenerationJourney current={topic.trim() ? (sourceText.trim() || imageMode !== "none" ? 3 : 2) : 1} />
             <div className="surface-card p-6 sm:p-7">
 
               {/* ── Session restore banner ───────────────────────────────────── */}
@@ -1217,11 +1230,8 @@ export default function Home() {
                     </div>
                   </fieldset>
 
-                  <fieldset className="mb-5 panel">
-                    <legend className="flex items-center gap-2 text-sm font-semibold text-stone-800 px-1">
-                      <Sparkles className="w-4 h-4 text-accent-600" aria-hidden="true" />
-                      Avanserte moduler
-                    </legend>
+                  <div className="mb-5">
+                    <AdvancedOptions title="Avanserte moduler" description="Case, visuell analyse og ekstra arbeidsmåter">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mt-3" role="group" aria-label="Avanserte moduler">
                       <OptionToggle
                         label="Case-studie"
@@ -1259,7 +1269,8 @@ export default function Home() {
                         description="Relevant for yrkesfag"
                       />
                     </div>
-                  </fieldset>
+                    </AdvancedOptions>
+                  </div>
 
                   <fieldset className="mb-7 panel">
                     <legend className="flex items-center gap-2 text-sm font-semibold text-stone-800 px-1">
@@ -1389,6 +1400,16 @@ export default function Home() {
               )}
 
               {/* ── Submit / Cancel / Success buttons ────────────────────────── */}
+              {status === "idle" && (
+                <div className="mb-4">
+                  <GenerationSummary items={[
+                    { label: "Dokument", value: APP_MODES.find((item) => item.value === mode)?.label },
+                    { label: "Fag og nivå", value: subject && level ? `${subject} · ${level}` : null },
+                    { label: "Tema", value: topic },
+                    { label: "Bilde", value: imageFile ? "Eget bilde" : imageMode === "ai" ? "KI-generert" : imageMode === "commons" ? "Wikimedia Commons" : "Uten bilde" },
+                  ]} />
+                </div>
+              )}
               {status === "loading" ? (
                 <div className="flex gap-3">
                   <button
@@ -1636,6 +1657,7 @@ export default function Home() {
                 elapsedSeconds={elapsedSeconds}
                 progressMessage={progressMessage}
               />
+              {status === "success" && <div className="mt-4 space-y-3"><RevisionActions onSelect={(instruction) => { dispatch({ type: "SET_DESCRIPTION", description: [description, instruction].filter(Boolean).join("\n") }); window.setTimeout(() => formRef.current?.requestSubmit(), 0); }} /><GenerationFeedback module="fag" /></div>}
 
               {/* ── Batch results per student group ──────────────────────────── */}
               {profileResults.length > 0 && (
@@ -1712,6 +1734,6 @@ export default function Home() {
           <p>VGS Lærerassistent · Videregående skole</p>
         </footer>
       </div>
-    </main>
+    </div>
   );
 }

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .models import Job, Project, ProjectCreate, ProjectUpdate, utc_now
+from .models import Feedback, FeedbackCreate, Job, Project, ProjectCreate, ProjectUpdate, utc_now
 
 
 def _default_db_path() -> Path:
@@ -75,6 +75,15 @@ class PlatformStore:
                 CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id);
+                CREATE TABLE IF NOT EXISTS feedback (
+                    id TEXT PRIMARY KEY,
+                    module TEXT NOT NULL,
+                    project_id TEXT,
+                    rating TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at DESC);
                 """
             )
 
@@ -143,10 +152,76 @@ class PlatformStore:
             )
         return job
 
+    def update_job_state(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        message: str = "",
+        progress: int | None = None,
+        retryable: bool | None = None,
+    ) -> Job | None:
+        current = self.get_job(job_id)
+        if current is None:
+            return None
+        payload = current.model_dump()
+        payload.update(status=status, message=message, updated_at=utc_now())
+        if progress is not None:
+            payload["progress"] = max(0, min(100, progress))
+        if retryable is not None:
+            payload["retryable"] = retryable
+        if status != "queued":
+            payload["queue_position"] = None
+        return self.upsert_job(Job.model_validate(payload))
+
+    def queue_position(self, job_id: str) -> int | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT created_at,status FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None or row["status"] != "queued":
+                return None
+            ahead = conn.execute(
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND created_at<=?",
+                (row["created_at"],),
+            ).fetchone()["n"]
+        return max(1, int(ahead))
+
+    def recover_incomplete_jobs(self) -> int:
+        """Mark work lost during a process restart as safely retryable."""
+        active = ("queued", "planning", "generating", "verifying", "rendering")
+        placeholders = ",".join("?" for _ in active)
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                f"SELECT payload FROM jobs WHERE status IN ({placeholders})",
+                active,
+            ).fetchall()
+            for row in rows:
+                payload = json.loads(row["payload"])
+                payload.update(
+                    status="needs_review",
+                    progress=0,
+                    retryable=True,
+                    queue_position=None,
+                    message="Serveren startet på nytt før jobben var ferdig. Prøv igjen med samme utkast.",
+                    updated_at=utc_now(),
+                )
+                conn.execute(
+                    "UPDATE jobs SET payload=?,status=?,updated_at=? WHERE id=?",
+                    (self._json(payload), "needs_review", payload["updated_at"], payload["id"]),
+                )
+        return len(rows)
+
     def get_job(self, job_id: str) -> Job | None:
         with self._connection() as conn:
             row = conn.execute("SELECT payload FROM jobs WHERE id=?", (job_id,)).fetchone()
-        return Job.model_validate_json(row["payload"]) if row else None
+        if not row:
+            return None
+        job = Job.model_validate_json(row["payload"])
+        if job.status == "queued":
+            job.queue_position = self.queue_position(job.id)
+        return job
 
     def list_jobs(self, *, limit: int = 100, project_id: str | None = None) -> list[Job]:
         query = "SELECT payload FROM jobs"
@@ -158,7 +233,25 @@ class PlatformStore:
         params.append(limit)
         with self._connection() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [Job.model_validate_json(row["payload"]) for row in rows]
+        jobs = [Job.model_validate_json(row["payload"]) for row in rows]
+        for job in jobs:
+            if job.status == "queued":
+                job.queue_position = self.queue_position(job.id)
+        return jobs
+
+    def create_feedback(self, request: FeedbackCreate) -> Feedback:
+        feedback = Feedback(**request.model_dump())
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                "INSERT INTO feedback(id,module,project_id,rating,payload,created_at) VALUES(?,?,?,?,?,?)",
+                (feedback.id, feedback.module, feedback.project_id, feedback.rating, self._json(feedback.model_dump()), feedback.created_at),
+            )
+        return feedback
+
+    def list_feedback(self, *, limit: int = 100) -> list[Feedback]:
+        with self._connection() as conn:
+            rows = conn.execute("SELECT payload FROM feedback ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [Feedback.model_validate_json(row["payload"]) for row in rows]
 
 
 _store: PlatformStore | None = None

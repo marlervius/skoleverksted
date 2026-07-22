@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { PlatformSwitcher } from "@/components/platform-switcher";
@@ -37,7 +38,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       // Cmd+N — New generation
       if ((e.metaKey || e.ctrlKey) && e.key === "n") {
         e.preventDefault();
-        window.location.href = "/matematikk";
+        const destination = pathname.startsWith("/fag") ? "/fag" : pathname.startsWith("/norsk") ? "/norsk" : "/matematikk";
+        window.location.assign(destination);
       }
       // Escape — Close modals
       if (e.key === "Escape") {
@@ -46,7 +48,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [pathname]);
 
   // Get breadcrumb from path
   const pageTitle = PAGE_TITLES[pathname] || (pathname.startsWith("/projects/") ? "Prosjekt" : "");
@@ -72,7 +74,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   {pageTitle}
                 </h1>
               </div>
-              <div className="absolute left-1/2 -translate-x-1/2">
+              <div className="absolute left-1/2 hidden -translate-x-1/2 md:block">
                 <PlatformSwitcher compact />
               </div>
               <div className="flex items-center gap-2">
@@ -118,7 +120,7 @@ function MobileBottomBar({ pathname }: { pathname: string }) {
         {tabs.map((tab) => {
           const active = pathname === tab.href;
           return (
-            <a
+            <Link
               key={tab.href}
               href={tab.href}
               className={`flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] transition-colors ${
@@ -127,7 +129,7 @@ function MobileBottomBar({ pathname }: { pathname: string }) {
             >
               <span className="text-lg">{tab.icon}</span>
               <span>{tab.label}</span>
-            </a>
+            </Link>
           );
         })}
       </div>

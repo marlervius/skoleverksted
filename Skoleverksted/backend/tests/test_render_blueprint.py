@@ -35,7 +35,8 @@ class RenderBlueprintTests(unittest.TestCase):
         self.assertNotIn("value", env_vars["GOOGLE_API_KEY"])
         self.assertEqual(env_vars["GOOGLE_MODEL"]["value"], "gemini-3.5-flash")
         self.assertEqual(env_vars["GOOGLE_IMAGE_MODEL"]["value"], "gemini-3.1-flash-image")
-        self.assertTrue(env_vars["MATE_API_KEY"]["generateValue"])
+        self.assertFalse(env_vars["MATE_API_KEY"]["sync"])
+        self.assertNotIn("generateValue", env_vars["MATE_API_KEY"])
 
     def test_render_image_includes_crewai_gemini_provider(self):
         for requirements_path in (

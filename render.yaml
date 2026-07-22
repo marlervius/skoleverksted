@@ -45,7 +45,9 @@ services:
       - key: APP_PASSWORD
         sync: false
       - key: MATE_API_KEY
-        generateValue: true
+        # Shared with the server-side Vercel proxy. A generated value is unsafe
+        # here because Blueprint sync cannot propagate it to Vercel.
+        sync: false
       - key: FRONTEND_URL
         sync: false
       - key: ALLOWED_ORIGINS

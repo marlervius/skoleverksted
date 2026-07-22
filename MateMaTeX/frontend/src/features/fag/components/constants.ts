@@ -3,7 +3,7 @@ export const SUBJECTS = [
   { value: "Engelsk", label: "Engelsk", icon: "🇬🇧" },
   { value: "Samfunnsfag", label: "Samfunnsfag", icon: "🏛️" },
   { value: "Naturfag", label: "Naturfag", icon: "🔬" },
-  { value: "Matematikk", label: "Matematikk", icon: "📐" },
+  { value: "Matematikk", label: "Matematikk (fagtekst)", icon: "📐" },
   { value: "Historie", label: "Historie", icon: "📜" },
   { value: "Geografi", label: "Geografi", icon: "🌍" },
   { value: "Religion", label: "Religion og etikk", icon: "⚖️" },

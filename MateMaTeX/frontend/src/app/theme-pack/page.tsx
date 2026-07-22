@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { ArrowRight, BookOpenText, Calculator, Languages, Loader2, PackageOpen, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, BookOpenText, Calculator, CheckCircle2, Download, Languages, Loader2, PackageOpen, Sparkles } from "lucide-react";
 import { QualityPassport } from "@/components/quality-passport";
-import { createThemePack, type ThemePack, type ThemePackInput } from "@/lib/platform-api";
+import { createThemePack, downloadThemePackGuide, listPlatformJobs, type PlatformJob, type ThemePack, type ThemePackInput } from "@/lib/platform-api";
 
 const initialForm: ThemePackInput = {
   title: "",
@@ -14,6 +14,8 @@ const initialForm: ThemePackInput = {
   norwegian_level: "B1",
   duration_lessons: 4,
   description: "",
+  source_text: "",
+  source_name: "",
   competency_goals: [],
   include_assessment: true,
   include_teacher_guide: true,
@@ -27,6 +29,17 @@ export default function ThemePackPage() {
   const [pack, setPack] = useState<ThemePack | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [jobs, setJobs] = useState<PlatformJob[]>([]);
+
+  useEffect(() => {
+    if (!pack) return;
+    const refresh = () => void listPlatformJobs(100, pack.project.id).then(setJobs).catch(() => undefined);
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(timer);
+  }, [pack]);
+
+  const completedModules = useMemo(() => new Set(jobs.filter((job) => job.status === "completed").map((job) => job.module)), [jobs]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -51,17 +64,18 @@ export default function ThemePackPage() {
           <div className="mb-2 flex items-center gap-2 text-sm text-accent-teal"><PackageOpen className="h-4 w-4" /> Temapakke klar</div>
           <h1 className="font-display text-4xl">{pack.project.title}</h1>
           <p className="mt-2 max-w-3xl text-text-secondary">
-            Planen er lagret som ett prosjekt. Åpne delene i ønsket rekkefølge; tema, nivå og prosjekt-ID følger med.
+            Felles kilde, mål, tema og prosjekt-ID følger alle delene. Arbeid deg gjennom delene; fremdriften samles automatisk her.
           </p>
         </header>
         <div className="grid gap-4 md:grid-cols-3">
           {pack.tasks.map((task, index) => {
             const Icon = moduleIcon[task.module];
+            const complete = completedModules.has(task.module);
             return (
               <article key={task.id} className="card flex flex-col">
                 <div className="mb-4 flex items-center justify-between">
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-blue/10 text-accent-blue"><Icon className="h-5 w-5" /></div>
-                  <span className="badge bg-surface-elevated text-text-muted">Del {index + 1}</span>
+                  <span className={`badge ${complete ? "bg-accent-teal/10 text-accent-teal" : "bg-surface-elevated text-text-muted"}`}>{complete ? <><CheckCircle2 className="h-3 w-3" /> Ferdig</> : `Del ${index + 1}`}</span>
                 </div>
                 <h2 className="font-semibold">{task.title}</h2>
                 <p className="mt-2 flex-1 text-sm leading-relaxed text-text-secondary">{task.brief}</p>
@@ -71,7 +85,8 @@ export default function ThemePackPage() {
           })}
         </div>
         <QualityPassport passport={pack.quality_passport} />
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
+          <button className="btn-primary" onClick={() => void downloadThemePackGuide(pack.project.id)}><Download className="h-4 w-4" /> Last ned lærerveiledning</button>
           <Link href={`/projects/${pack.project.id}`} className="btn-secondary">Se prosjektet</Link>
           <button className="btn-ghost" onClick={() => setPack(null)}>Lag en ny pakke</button>
         </div>
@@ -96,13 +111,17 @@ export default function ThemePackPage() {
           <label className="text-sm font-medium">Antall undervisningstimer<input type="number" min={1} max={30} className="input mt-2" value={form.duration_lessons} onChange={(e) => setForm({ ...form, duration_lessons: Number(e.target.value) })} /></label>
         </div>
         <label className="block text-sm font-medium">Ramme og ønsket læringsutbytte<textarea className="input mt-2 min-h-24" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Hva skal elevene sitte igjen med? Hvilke kilder eller vinklinger skal brukes?" /></label>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="text-sm font-medium">Navn på felles kilde<input className="input mt-2" value={form.source_name} onChange={(e) => setForm({ ...form, source_name: e.target.value })} placeholder="F.eks. NDLA: Drivhuseffekten" /></label>
+          <label className="text-sm font-medium sm:col-span-2">Felles kildetekst<textarea className="input mt-2 min-h-32" value={form.source_text} onChange={(e) => setForm({ ...form, source_text: e.target.value })} placeholder="Lim inn den kvalitetssikrede kjerneteksten som alle tre delene skal bygge på." /></label>
+        </div>
         <label className="block text-sm font-medium">Kompetansemål, ett per linje<textarea className="input mt-2 min-h-20" value={goals} onChange={(e) => setGoals(e.target.value)} placeholder="Lim inn kode og/eller måltekst" /></label>
         <div className="flex flex-wrap gap-5 text-sm">
           <label className="flex items-center gap-2"><input type="checkbox" checked={form.include_teacher_guide} onChange={(e) => setForm({ ...form, include_teacher_guide: e.target.checked })} /> Lærerveiledning</label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={form.include_assessment} onChange={(e) => setForm({ ...form, include_assessment: e.target.checked })} /> Fasit og vurderingsgrunnlag</label>
         </div>
         {error && <div role="alert" className="rounded-lg border border-accent-red/30 bg-accent-red/5 p-3 text-sm text-accent-red">{error}</div>}
-        <button disabled={loading} className="btn-primary w-full py-3">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageOpen className="h-4 w-4" />} Opprett temapakke</button>
+        <button disabled={loading} className="btn-primary w-full py-3">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageOpen className="h-4 w-4" />} Planlegg temapakke</button>
       </form>
     </div>
   );
