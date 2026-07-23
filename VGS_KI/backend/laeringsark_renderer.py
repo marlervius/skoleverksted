@@ -166,6 +166,21 @@ def collect_text_fields(data: dict) -> str:
     return "\n".join(p for p in parts if p)
 
 
+def strip_ungrounded_k_markers(data: dict) -> dict:
+    """Remove citation markers unless an actual source was supplied.
+
+    The model occasionally emits ``[K]`` even without source material.  A
+    deterministic final gate prevents those markers from implying evidence
+    that does not exist.
+    """
+    for sek in data.get("seksjoner", []):
+        sek["avsnitt"] = [
+            re.sub(r"\s*\[K\]", "", str(avsnitt)).strip()
+            for avsnitt in sek.get("avsnitt", [])
+        ]
+    return data
+
+
 # ── Oppgave parsing (worksheet text → oppgaveboks data) ───────────────────────
 
 _TASK_LINE_RE = re.compile(r"^\s*(\d+)\s*[.)]\s*(★{1,3})?\s*(.*)$")
@@ -222,6 +237,70 @@ def parse_oppgaver(comprehension: str, discussion: str) -> list[dict]:
     return oppgaver
 
 
+def make_image_observation_task(
+    *,
+    caption: str,
+    rationale: str,
+    source: str,
+    subject: str,
+) -> dict:
+    """Build one explicit task from the image crew's approved rationale."""
+    focus = clean_field(caption or rationale or "hovedideen i læringsarket")
+    english = subject.strip().lower() == "engelsk"
+    if english and source == "ai":
+        source_prompt = (
+            "The image is AI-generated. Also identify one detail that requires "
+            "independent factual verification."
+        )
+    elif english:
+        source_prompt = (
+            "Finally, assess what the image can show and what it cannot document on its own."
+        )
+    elif source == "ai":
+        source_prompt = (
+            "Bildet er KI-generert og er ikke en historisk eller dokumentarisk kilde. "
+            "Nevn også én detalj du ikke kan bruke som bevis."
+            if subject.strip().lower() == "historie"
+            else "Bildet er KI-generert. Nevn også én detalj som må kontrolleres faglig."
+        )
+    else:
+        source_prompt = (
+            "Vurder til slutt hva bildet kan fortelle, og hva det ikke kan dokumentere alene."
+        )
+    text = (
+        f"Study the image above. Describe two concrete details and explain how they "
+        f"illuminate “{_limit_words(focus, 16)}”. {source_prompt}"
+        if english
+        else (
+            f"Studer bildet øverst. Beskriv to konkrete detaljer og forklar hvordan de "
+            f"belyser «{_limit_words(focus, 16)}». {source_prompt}"
+        )
+    )
+    return {
+        "niva": 2,
+        "tekst": text,
+        "linjer": 3,
+        "alternativer": [],
+        "image_task": True,
+    }
+
+
+def balance_oppgaver(oppgaver: list[dict]) -> tuple[list[dict], bool]:
+    """Compact long task sets so a lone task does not spill to a final page."""
+    compact = len(oppgaver) >= 6
+    if not compact:
+        return oppgaver, False
+
+    balanced: list[dict] = []
+    for oppgave in oppgaver:
+        item = dict(oppgave)
+        if not item.get("alternativer"):
+            cap = 2 if int(item.get("niva", 2)) <= 2 else 4
+            item["linjer"] = min(int(item.get("linjer", 0)), cap)
+        balanced.append(item)
+    return balanced, True
+
+
 # ── Læringsark document ───────────────────────────────────────────────────────
 
 def build_laeringsark_doc(
@@ -259,7 +338,8 @@ def build_laeringsark_doc(
         credit_s = _esc(image_credit or "Kilde: Wikimedia Commons")
         lines += [
             "#align(center)[",
-            f'  #block(clip: true, radius: 6pt, width: 88%)[#image("{image_filename}", width: 100%)]',
+            f'  #block(clip: true, radius: 6pt, width: 88%)[#image("{image_filename}", '
+            'width: 100%, height: 68mm, fit: "contain")]',
             "  #v(2pt)",
             *([f"  #text(size: 9pt, fill: gray-600, style: \"italic\")[{caption_s}]", "  #linebreak()"] if caption_s else []),
             f"  #text(size: 7.5pt, fill: gray-400)[{credit_s}]",
@@ -328,6 +408,7 @@ def build_laeringsark_doc(
 
     # ── Oppgaver ──
     if oppgaver:
+        oppgaver, compact_tasks = balance_oppgaver(oppgaver)
         lines += ["#seksjonstittel([Oppgaver])", ""]
         for nr, opp in enumerate(oppgaver, 1):
             tekst = _esc_prose(opp["tekst"])
@@ -335,7 +416,9 @@ def build_laeringsark_doc(
                 alt_lines = " \\\n  ".join(_esc_prose(a) for a in opp["alternativer"])
                 tekst = f"{tekst} \\\n  {alt_lines}"
             lines += [
-                f"#oppgaveboks({nr}, {int(opp['niva'])}, [{tekst}], linjer: {int(opp.get('linjer', 0))})",
+                f"#oppgaveboks({nr}, {int(opp['niva'])}, [{tekst}], "
+                f"linjer: {int(opp.get('linjer', 0))}, compact: "
+                f"{str(compact_tasks).lower()})",
                 "",
             ]
 
@@ -399,7 +482,10 @@ def coerce_structured_rapport(data: Any) -> Optional[dict]:
         })
 
     def _str_list(key: str) -> list[str]:
-        return [str(x).strip() for x in (data.get(key) or []) if str(x).strip()]
+        value = data.get(key) or []
+        if isinstance(value, str):
+            value = [value]
+        return [str(x).strip() for x in value if str(x).strip()]
 
     return {
         "konklusjon": str(data.get("konklusjon") or "").strip(),
@@ -408,6 +494,7 @@ def coerce_structured_rapport(data: Any) -> Optional[dict]:
         "perspektiver": _str_list("perspektiver"),
         "ikke_dekket": _str_list("ikke_dekket"),
         "kilder": _str_list("kilder"),
+        "automatiske_rettelser": _str_list("automatiske_rettelser"),
         "verk": _str_list("verk"),
     }
 
@@ -418,8 +505,9 @@ def build_faktarapport_doc(
     fag: str,
     tema: str,
     kilde: Optional[str] = None,
+    teacher_key: str = "",
 ) -> str:
-    """Build the Typst source for the SEPARATE teacher fact-report PDF.
+    """Build the separate teacher guide with fact review and answer guidance.
 
     `rapport` is either the structured dict from `coerce_structured_rapport`
     or a plain string (legacy fallback)."""
@@ -429,7 +517,7 @@ def build_faktarapport_doc(
     lines: list[str] = [
         '#import "laeringsark.typ": *',
         f"#show: doc => laeringsark-oppsett(doc, fag: {fag_s}, tema: {tema_s})",
-        f"#set document(title: {_typst_str('Faktarapport: ' + tema)}, author: \"Scriptorium for VGS\")",
+        f"#set document(title: {_typst_str('Lærerveiledning: ' + tema)}, author: \"Scriptorium for VGS\")",
         "",
         f"#faktarapport-topp([{_esc(tema)}], fag: {fag_s})",
         "",
@@ -455,6 +543,7 @@ def build_faktarapport_doc(
                 ]
 
         _rapport_list_section(lines, "Kausalnarrativ som overforenkler", rapport.get("kausalitet"))
+        _rapport_list_section(lines, "Automatiske faglige rettelser", rapport.get("automatiske_rettelser"))
         _rapport_list_section(lines, "Utelatte perspektiver", rapport.get("perspektiver"))
         _rapport_list_section(lines, "Hva teksten ikke dekker", rapport.get("ikke_dekket"))
         _rapport_list_section(lines, "Kilder for verifisering", rapport.get("kilder"))
@@ -482,6 +571,18 @@ def build_faktarapport_doc(
             para = para.strip()
             if para:
                 lines += [para.replace("\n", " \\\n"), ""]
+
+    if teacher_key and teacher_key.strip():
+        lines += [
+            "#seksjonstittel([Kort fasit og vurderingsmomenter])",
+            "#text(size: 8.5pt, fill: gray-400, style: \"italic\")["
+            "Forslagene er støtte til lærerens vurdering og må tilpasses elevgruppen.]",
+            "#v(5pt)",
+        ]
+        for paragraph in re.split(r"\n\s*\n", normalize_text(teacher_key)):
+            paragraph = paragraph.strip()
+            if paragraph:
+                lines += [_esc_prose(paragraph).replace("\n", " \\\n"), ""]
 
     return "\n".join(lines)
 

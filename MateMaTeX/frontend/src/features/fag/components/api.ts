@@ -197,7 +197,7 @@ async function runSseJob(
       const rapportRes = await fetch(rapportUrl(job_id), { signal });
       if (rapportRes.ok) {
         rapportBlob = await rapportRes.blob();
-        rapportFilename = "faktarapport.pdf";
+        rapportFilename = "laererveiledning.pdf";
         const cd = rapportRes.headers.get("Content-Disposition");
         const match = cd?.match(/filename="(.+)"/);
         if (match) rapportFilename = match[1];

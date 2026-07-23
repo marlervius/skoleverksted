@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Configure Google Generative AI SDK directly
 google_api_key = os.getenv("GOOGLE_API_KEY")
 model_name = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
-PROMPT_VERSION = os.getenv("PROMPT_VERSION", "fag-v2-grounded")
+PROMPT_VERSION = os.getenv("PROMPT_VERSION", "fag-v3-quality-gates")
 
 # Validate required environment variables at startup
 if not google_api_key:
@@ -259,6 +259,20 @@ def _level_guidelines_no(category: str, level: str) -> str:
     4. KRITISK AVSTAND — Avslutt minst én seksjon med et åpent, drøftende spørsmål.
     """
     if level == "VG2":
+        if category == "history":
+            return """
+
+    ═══ VG2-KRAV FOR HISTORIE (OBLIGATORISK) ═══
+    1. SKILL MELLOM BEGREPER — Ikke bruk omstridte samlebetegnelser som om de var ett
+       ensartet system. Skill mellom politiske, økonomiske og juridiske ordninger.
+    2. TID OG STED — Vis vesentlige regionale og kronologiske forskjeller.
+    3. FLERÅRSAKSFORKLARING — Ingen enkelt årsak skal alene forklare en langvarig utvikling.
+       Kausalkjeder er pedagogiske forenklinger og må nyanseres i brødteksten.
+    4. MAKT OG TVANG — Ikke beskriv ufrihet, underordning eller tap av rettigheter som et
+       frivillig valg dersom kildene ikke dokumenterer frivillighet.
+    5. ETTERTIDENS BEGREPER — Opplys når et sentralt begrep er omstridt eller laget av
+       historikere i ettertid.
+    """
         if category == "math":
             return """
 
@@ -793,7 +807,8 @@ def _rapport_to_plain_text(rapport: dict) -> str:
                 entry += f" — {p['kommentar']}"
             lines.append(entry)
         lines.append("")
-    for key, heading in [("kausalitet", "KAUSALNARRATIV SOM OVERFORENKLER"),
+    for key, heading in [("automatiske_rettelser", "AUTOMATISKE FAGLIGE RETTELSER"),
+                         ("kausalitet", "KAUSALNARRATIV SOM OVERFORENKLER"),
                          ("perspektiver", "UTELATTE PERSPEKTIVER"),
                          ("ikke_dekket", "HVA TEKSTEN IKKE DEKKER"),
                          ("kilder", "KILDER FOR VERIFISERING")]:
@@ -888,7 +903,7 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
         "vocabulary_tasks": True,
         "comprehension_tasks": True,
         "discussion_tasks": True,
-        "teacher_key": False,
+        "teacher_key": True,
         # Advanced modules
         "role_play": False,
         "image_description": False,
@@ -1645,9 +1660,19 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
         teacher_key_instruction = ""
         if options["teacher_key"]:
             if is_english_subject:
-                teacher_key_instruction = "\nIMPORTANT: Also create an 'ANSWER KEY' at the very end for all questions you have created."
+                teacher_key_instruction = """
+IMPORTANT: Add an 'ANSWER KEY' at the very end for every question.
+- Multiple choice: give the correct option and one-sentence justification.
+- Short answers: give a concise model answer.
+- Analysis/discussion: give 2-4 observable assessment criteria, not one supposedly perfect answer.
+Keep the key practical and under 450 words."""
             else:
-                teacher_key_instruction = "\nVIKTIG: Lag også en 'FASIT' (answer key) helt til slutt for alle spørsmålene du har laget."
+                teacher_key_instruction = """
+VIKTIG: Legg til 'FASIT' helt til slutt for alle spørsmålene.
+- Flervalg: oppgi riktig alternativ og en begrunnelse på én setning.
+- Kortsvar: gi et kort modell-/eksempelsvar.
+- Analyse og drøfting: gi 2-4 observerbare vurderingsmomenter, ikke ett «fasitsvar».
+Hold fasiten praktisk og under 450 ord."""
 
         sections_text = "\n\n".join(sections)
         
@@ -1826,9 +1851,10 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
         tasks.append(differensiering_task)
         agents.append(differentiation_agent)
 
-    # ── Task: Faktarapport (optional, only if requested) ─────────────────────
+    # ── Task: mandatory internal fact review; report delivery remains optional ──
     faktarapport_task = None
-    if options.get("faktarapport", False):
+    run_internal_fact_review = True
+    if run_internal_fact_review:
         faktarapport_agent = Agent(
             role="Faglig kvalitetssikrer og faktasjekker for VGS-undervisningsmateriell",
             goal="""Les den ferdig genererte fagteksten og lag en kort, ærlig faktarapport til læreren.
@@ -1903,6 +1929,12 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
 
             Return ONE valid JSON object with EXACTLY this structure (no markdown, no explanations):
             {{
+              "revidert_tekst": {{
+                "tittel": "same title, corrected only when necessary",
+                "ingress": "factually calibrated ingress",
+                "seksjoner": [{{"tittel": "...", "avsnitt": ["..."], "begreper": [{{"term": "...", "def": "..."}}], "kjeder": [{{"steg": ["...", "..."]}}]}}],
+                "verk": []
+              }},
               "konklusjon": "One sentence verdict for the teacher, e.g. 'Safe to use; 2 claims should be clarified orally.'",
               "punkter": [
                 {{"status": "dekket" | "strid" | "utenfor" | "usikker",
@@ -1910,6 +1942,7 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
                   "kommentar": "short justification / what to check"}}
               ],
               "kausalitet": ["each place the text implies 'X caused Y' while reality is more complex — quote the sentence and explain (missing intermediate steps, ignored structural factors, 'great man' explanations, correlation vs causation). THIS IS THE MOST IMPORTANT LIST."],
+              "automatiske_rettelser": ["short description of each factual clarification you applied to revidert_tekst"],
               "perspektiver": ["important groups, regions or viewpoints absent from the text"],
               "ikke_dekket": ["topics omitted to keep the text manageable"],
               "kilder": ["2-3 reliable sources for cross-checking"],
@@ -1919,8 +1952,13 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
             Rules:
             - "status" is ALWAYS one of the four enum strings — never a symbol or emoji.
             - NEVER use emoji anywhere. No markdown in any field.
+            - "revidert_tekst" MUST preserve the exact structured lesson schema and roughly the same
+              length. Correct factual errors, false equivalences, misleading voluntariness and
+              monocausal claims. Qualify uncertainty instead of inventing precision.
+            - When no source material was supplied, remove every [K] marker from revidert_tekst.
+              Never imply that model memory is a source.
             - List ALL specific years, numbers, names and events in "punkter".
-            - Keep the whole report under 500 words. Be direct and specific."""
+            - Keep the report fields (excluding revidert_tekst) under 500 words. Be direct and specific."""
         else:
             faktarapport_desc = f"""Du er en kritisk faglig reviewer. Les fagteksten om "{topic}" for {subject} ({level}) og lag en FAKTARAPPORT til læreren.
 
@@ -1930,6 +1968,12 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
 
             Returner ETT gyldig JSON-objekt med NØYAKTIG denne strukturen (ingen markdown, ingen forklaringer):
             {{
+              "revidert_tekst": {{
+                "tittel": "samme tittel, bare korrigert når nødvendig",
+                "ingress": "faglig kalibrert ingress",
+                "seksjoner": [{{"tittel": "...", "avsnitt": ["..."], "begreper": [{{"term": "...", "def": "..."}}], "kjeder": [{{"steg": ["...", "..."]}}]}}],
+                "verk": []
+              }},
               "konklusjon": "Én setnings dom til læreren, f.eks. 'Trygt å bruke; 2 påstander bør presiseres muntlig.'",
               "punkter": [
                 {{"status": "dekket" | "strid" | "utenfor" | "usikker",
@@ -1937,6 +1981,7 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
                   "kommentar": "kort begrunnelse / hva som bør sjekkes"}}
               ],
               "kausalitet": ["hvert sted teksten antyder 'X førte til Y' når virkeligheten er mer kompleks — sitér setningen og forklar (manglende mellomledd, ignorerte strukturelle faktorer, 'great man'-forklaringer, korrelasjon vs. kausalitet). DETTE ER VIKTIGSTE LISTE."],
+              "automatiske_rettelser": ["kort beskrivelse av hver faglige presisering du utførte i revidert_tekst"],
               "perspektiver": ["viktige grupper, regioner eller synsvinkler som mangler i teksten"],
               "ikke_dekket": ["temaer som er utelatt for å holde lengden nede"],
               "kilder": ["2-3 anerkjente kilder læreren kan sjekke mot"],
@@ -1946,12 +1991,17 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
             Regler:
             - "status" er ALLTID én av de fire enum-strengene — aldri et symbol eller emoji.
             - ALDRI bruk emoji noe sted. Ingen markdown i feltene.
+            - "revidert_tekst" SKAL beholde nøyaktig samme strukturerte læringsark-format og
+              omtrent samme lengde. Rett faktafeil, falske likestillinger, misvisende frivillighet
+              og monokausale forklaringer. Nyansér usikkerhet i stedet for å finne opp presisjon.
+            - Når kildemateriale mangler, fjern alle [K]-markører fra revidert_tekst. Modellens
+              hukommelse er aldri en kilde.
             - List ALLE spesifikke årstall, tall, navn og hendelser i "punkter".
-            - Hold hele rapporten under 500 ord. Vær direkte og konkret."""
+            - Hold rapportfeltene (utenom revidert_tekst) under 500 ord. Vær direkte og konkret."""
 
         faktarapport_task = Task(
             description=faktarapport_desc,
-            expected_output='Ett gyldig JSON-objekt med konklusjon, punkter (status-enum), kausalitet, perspektiver, ikke_dekket, kilder og verk.' if not is_english_subject else 'One valid JSON object with konklusjon, punkter (status enums), kausalitet, perspektiver, ikke_dekket, kilder and verk.',
+            expected_output='Ett gyldig JSON-objekt med revidert_tekst, konklusjon, punkter, kausalitet, automatiske_rettelser, perspektiver, ikke_dekket, kilder og verk.' if not is_english_subject else 'One valid JSON object with revidert_tekst, konklusjon, punkter, kausalitet, automatiske_rettelser, perspektiver, ikke_dekket, kilder and verk.',
             agent=faktarapport_agent,
             context=[create_text_task],
         )
@@ -2252,6 +2302,52 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
         "korrektur": "korrektur",
     }
 
+    # Fact review is deliberately sequential. The worksheet, answer key and
+    # language exercises must be based on the corrected text, not the draft
+    # that the fact reviewer just changed.
+    parallel_outputs: dict[str, str] = {}
+    warnings: list[str] = []
+    fact_review_applied = False
+    if faktarapport_task is not None:
+        fact_context = (
+            json.dumps(structured, ensure_ascii=False, indent=2)
+            if structured else text_for_context
+        )
+        if progress_callback:
+            progress_callback("Faktakontroll: gransker og presiserer fagteksten...")
+        try:
+            fact_output = _run_subtask(
+                faktarapport_task.agent,
+                faktarapport_task,
+                fact_context,
+            )
+        except Exception as e:
+            logger.warning("Mandatory fact review raised: %s", e, exc_info=True)
+            fact_output = ""
+        parallel_outputs["faktarapport"] = fact_output
+        fact_object = extract_json_object(fact_output) if fact_output.strip() else None
+        reviewed = coerce_structured_lesson(
+            fact_object.get("revidert_tekst") if fact_object else None
+        )
+        if reviewed and structured and len(reviewed["seksjoner"]) >= max(
+            1, len(structured["seksjoner"]) - 1
+        ):
+            structured = reviewed
+            text_for_context = structured_to_plain_text(structured)
+            korrektur_context = json.dumps(structured, ensure_ascii=False, indent=2)
+            fact_review_applied = True
+            logger.info("Fact review applied before dependent learning tasks")
+        elif structured:
+            msg = (
+                "Den interne faktakontrollen returnerte ikke en gyldig revidert tekst "
+                "– kontroller innholdet ekstra nøye."
+                if fact_output.strip()
+                else "Den interne faktakontrollen feilet – kontroller innholdet ekstra nøye."
+            )
+            warnings.append(msg)
+            if progress_callback:
+                progress_callback(f"⚠ {msg}")
+
     parallel_specs = []  # list of (key, agent, task, context_text, extra_note)
     if create_worksheet_task is not None:
         parallel_specs.append(("worksheet", pedagogical_developer, create_worksheet_task,
@@ -2262,16 +2358,10 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
     if differensiering_task is not None:
         parallel_specs.append(("differensiering", differentiation_agent, differensiering_task,
                                text_for_context, ""))
-    if faktarapport_task is not None:
-        # The faktarapport agent was created inline above; reuse it.
-        parallel_specs.append(("faktarapport", faktarapport_task.agent, faktarapport_task,
-                               text_for_context, ""))
     if korrektur_task is not None:
         parallel_specs.append(("korrektur", korrektur_task.agent, korrektur_task,
                                korrektur_context, korrektur_json_note))
 
-    parallel_outputs: dict[str, str] = {}
-    warnings: list[str] = []
     if parallel_specs:
         import concurrent.futures as _cf
         max_workers = min(len(parallel_specs), 5)
@@ -2329,9 +2419,24 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
     # ── Faktarapport: parse the structured JSON (status enums + konklusjon) ──
     faktarapport_structured = None
     if faktarapport_output and faktarapport_output.strip():
+        raw_rapport = extract_json_object(faktarapport_output)
         faktarapport_structured = coerce_structured_rapport(
-            extract_json_object(faktarapport_output))
+            raw_rapport)
         if faktarapport_structured:
+            reviewed = (
+                None
+                if fact_review_applied
+                else coerce_structured_lesson(
+                    raw_rapport.get("revidert_tekst") if raw_rapport else None
+                )
+            )
+            if reviewed and structured and len(reviewed["seksjoner"]) >= max(
+                1, len(structured["seksjoner"]) - 1
+            ):
+                structured = reviewed
+                logger.info("Using fact-review-corrected structured JSON as final output")
+                if progress_callback:
+                    progress_callback("Faktakontroll: faglige presiseringer er innarbeidet.")
             # Plain-text rendering for the UI text view and .docx export.
             faktarapport_output = _rapport_to_plain_text(faktarapport_structured)
         else:
@@ -2383,6 +2488,19 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
     # Whether this output was grounded in teacher-provided source material.
     source_grounded = bool(source_text and source_text.strip())
 
+    # The fact crew may fail or break its JSON contract. This deterministic
+    # gate still guarantees that ungrounded student material never displays a
+    # source marker.
+    if structured and not source_grounded:
+        try:
+            from .laeringsark_renderer import strip_ungrounded_k_markers
+        except ImportError:
+            from laeringsark_renderer import strip_ungrounded_k_markers
+        structured = strip_ungrounded_k_markers(structured)
+        text_output = structured_to_plain_text(structured)
+
+    deliver_fact_report = bool(options.get("faktarapport", True))
+
     return {
         "topic": topic,
         "subject": subject,
@@ -2392,8 +2510,8 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
         "worksheet": worksheet_output,
         "language_exercises": language_exercises,
         "image_url": image_url,
-        "faktarapport": faktarapport_output,
-        "faktarapport_structured": faktarapport_structured,
+        "faktarapport": faktarapport_output if deliver_fact_report else "",
+        "faktarapport_structured": faktarapport_structured if deliver_fact_report else None,
         "verk": list(structured.get("verk", [])) if structured else [],
         "differensiering": differensiering,
         "warnings": warnings,

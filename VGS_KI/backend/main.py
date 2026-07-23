@@ -36,7 +36,8 @@ if __package__:
     from .ndla_service import fetch_ndla_source
     from .docx_service import create_lesson_docx
     from .laeringsark_renderer import (
-        build_faktarapport_doc, build_laeringsark_doc, collect_text_fields, parse_oppgaver,
+        build_faktarapport_doc, build_laeringsark_doc, collect_text_fields,
+        make_image_observation_task, parse_oppgaver,
     )
     from .text_pipeline import lint_pdf
     from .pdf_service import (
@@ -57,7 +58,8 @@ else:
     from ndla_service import fetch_ndla_source
     from docx_service import create_lesson_docx
     from laeringsark_renderer import (
-        build_faktarapport_doc, build_laeringsark_doc, collect_text_fields, parse_oppgaver,
+        build_faktarapport_doc, build_laeringsark_doc, collect_text_fields,
+        make_image_observation_task, parse_oppgaver,
     )
     from text_pipeline import lint_pdf
     from pdf_service import (
@@ -257,7 +259,7 @@ class LessonRequest(BaseModel):
             "vocabulary_tasks": True,
             "comprehension_tasks": True,
             "discussion_tasks": True,
-            "teacher_key": False,
+            "teacher_key": True,
             "role_play": False,
             "image_description": False,
             "writing_frame": False,
@@ -497,14 +499,38 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
 
     structured = content.get("structured")
     rapport_payload = content.get("faktarapport_structured") or content.get("faktarapport")
+    worksheet_sections = parse_worksheet_content(content.get("worksheet") or "")
+    image_assessment_note = ""
 
     try:
         ctx.push("Kompilerer PDF...")
         if structured:
             # Redesigned layout (SPEC_laeringsark_redesign DEL 2): margin
             # terms, numbered colour-stripe sections, purple task boxes.
-            sections = parse_worksheet_content(content.get("worksheet") or "")
-            oppgaver = parse_oppgaver(sections["comprehension"], sections["discussion"])
+            oppgaver = parse_oppgaver(
+                worksheet_sections["comprehension"],
+                worksheet_sections["discussion"],
+            )
+            if image_path:
+                image_task = make_image_observation_task(
+                    caption=image_caption,
+                    rationale=image_asset.rationale if image_asset else req.topic,
+                    source=image_asset.source if image_asset else "teacher",
+                    subject=req.subject,
+                )
+                oppgaver.append(image_task)
+                if req.subject.strip().lower() == "engelsk":
+                    image_assessment_note = (
+                        "Image task: The student should identify two visible details, connect "
+                        "both to the lesson content, and distinguish observation from interpretation. "
+                        "For an AI image, credit explicit awareness that it is not documentary evidence."
+                    )
+                else:
+                    image_assessment_note = (
+                        "Bildeoppgave: Eleven bør peke på to synlige detaljer, koble begge til "
+                        "fagstoffet og skille observasjon fra tolkning. For KI-bilder skal eleven "
+                        "forstå at illustrasjonen ikke er dokumentarisk bevis."
+                    )
             modus = ("Fordypning"
                      if (req.options or {}).get("deep_dive") or (req.options or {}).get("lang_tekst")
                      else "Standard")
@@ -515,8 +541,10 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
                 niva=req.level,
                 modus=modus,
                 kilde=source_name,
-                har_k_markorer="[K]" in collect_text_fields(structured),
-                laeringsmaal=sections.get("learning_goals", ""),
+                har_k_markorer=bool(
+                    source_name and "[K]" in collect_text_fields(structured)
+                ),
+                laeringsmaal=worksheet_sections.get("learning_goals", ""),
                 oppgaver=oppgaver,
                 image_filename=os.path.basename(image_path) if image_path else None,
                 image_caption=image_caption,
@@ -549,21 +577,30 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
             except Exception as e:
                 ctx.req_logger.warning(f"Image cleanup failed: {e}")
 
-    # ── Separate teacher fact-report PDF (spec 2.8) ──
-    if rapport_payload:
+    # ── Separate teacher guide: fact review + answer guidance ──
+    teacher_key = worksheet_sections.get("teacher_key", "")
+    if image_assessment_note:
+        teacher_key = "\n\n".join(
+            part for part in (teacher_key.strip(), image_assessment_note) if part
+        )
+    if rapport_payload or teacher_key:
         try:
-            ctx.push("Kompilerer faktarapport (egen PDF til læreren)...")
+            ctx.push("Kompilerer lærerveiledning med faktasjekk og fasit...")
             rapport_doc = build_faktarapport_doc(
-                rapport_payload, fag=req.subject, tema=req.topic, kilde=source_name,
+                rapport_payload or {},
+                fag=req.subject,
+                tema=req.topic,
+                kilde=source_name,
+                teacher_key=teacher_key,
             )
             rapport_pdf = compile_typst(rapport_doc)
             if ctx.set_meta:
                 ctx.set_meta("rapport_pdf", rapport_pdf)
                 ctx.set_meta("rapport_filename",
-                             safe_filename("faktarapport", req.topic, req.level))
+                             safe_filename("laererveiledning", req.topic, req.level))
         except Exception as e:
-            ctx.req_logger.error(f"Faktarapport PDF failed: {e}", exc_info=True)
-            ctx.push("⚠ Faktarapporten kunne ikke kompileres som egen PDF.")
+            ctx.req_logger.error(f"Lærerveiledning PDF failed: {e}", exc_info=True)
+            ctx.push("⚠ Lærerveiledningen kunne ikke kompileres som egen PDF.")
 
     # ── PDF lint: last gate before delivery (spec 1.5) ──
     try:
@@ -757,8 +794,8 @@ async def download_lesson(job_id: str):
 
 @app.get("/generate-lesson-download-rapport/{job_id}")
 async def download_lesson_rapport(job_id: str):
-    """Separate teacher fact-report PDF (never part of the student PDF)."""
-    return await _download_job(job_id, "faktarapport.pdf", kind="rapport")
+    """Separate teacher guide (never part of the student PDF)."""
+    return await _download_job(job_id, "laererveiledning.pdf", kind="rapport")
 
 
 # ── Endpoints: differensiert ──────────────────────────────────────────────────

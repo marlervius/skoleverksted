@@ -38,6 +38,7 @@ class RenderBlueprintTests(unittest.TestCase):
         self.assertEqual(env_vars["PRIMARY_MODEL"]["value"], "gemini-3.5-flash")
         self.assertEqual(env_vars["FALLBACK_PROVIDER"]["value"], "google")
         self.assertEqual(env_vars["FALLBACK_MODEL"]["value"], "gemini-3.1-flash-lite")
+        self.assertEqual(env_vars["PROMPT_VERSION"]["value"], "skoleverksted-v3")
         self.assertEqual(env_vars["GOOGLE_IMAGE_MODEL"]["value"], "gemini-3.1-flash-image")
         self.assertFalse(env_vars["MATE_API_KEY"]["sync"])
         self.assertNotIn("generateValue", env_vars["MATE_API_KEY"])

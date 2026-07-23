@@ -54,7 +54,7 @@ export const DEFAULT_OPTIONS: LessonOptions = {
   grammar_tasks: true,
   vocabulary_tasks: true,
   discussion_tasks: true,
-  teacher_key: false,
+  teacher_key: true,
   role_play: false,
   image_description: false,
   writing_frame: false,

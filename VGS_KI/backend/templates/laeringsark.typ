@@ -36,19 +36,23 @@
     paper: "a4",
     margin: (top: 20mm, bottom: 18mm, left: 18mm, right: 16mm),
     header: context if counter(page).get().first() > 1 {
-      set text(size: 8pt)
-      grid(columns: (1fr, auto),
-        text(fill: blue-600, weight: 500)[Scriptorium · #fag],
-        text(fill: gray-400)[#tema])
-      v(2pt); line(length: 100%, stroke: 0.4pt + gray-300)
+      block(width: 100%)[
+        #set text(size: 8pt)
+        #grid(columns: (1fr, auto),
+          text(fill: blue-600, weight: 500)[Scriptorium · #fag],
+          text(fill: gray-400)[#tema])
+        #v(2pt)
+        #line(length: 100%, stroke: 0.4pt + gray-300)
+      ]
     },
-    footer: context {
-      line(length: 100%, stroke: 0.4pt + gray-300); v(3pt)
-      set text(size: 8pt, fill: gray-400)
-      grid(columns: (1fr, auto),
+    footer: context block(width: 100%)[
+      #line(length: 100%, stroke: 0.4pt + gray-300)
+      #v(3pt)
+      #set text(size: 8pt, fill: gray-400)
+      #grid(columns: (1fr, auto),
         [Scriptorium for VGS · klasserom.ai],
         [Side #counter(page).display() av #counter(page).final().first()])
-    },
+    ],
   )
 
   doc
@@ -130,23 +134,26 @@
 ]
 
 // ── 2.7 Oppgaveboks, svarlinjer og kausalkjede ───────────────────────────────
-#let svarlinjer(n) = for _ in range(n) {
-  v(13pt); line(length: 100%, stroke: 0.5pt + purple-200)
+#let svarlinjer(n, compact: false) = for _ in range(n) {
+  v(if compact { 10pt } else { 13pt })
+  line(length: 100%, stroke: 0.5pt + purple-200)
 }
 
 // breakable: false er obligatorisk — instruks og svarlinjer skal aldri
 // splittes over sidebryting. Nivået står i klartekst (ingen stjerne-legende).
-#let oppgaveboks(nr, niva, tekst, linjer: 0) = block(
+#let oppgaveboks(nr, niva, tekst, linjer: 0, compact: false) = block(
   breakable: false, fill: purple-50, radius: 6pt,
-  inset: 11pt, width: 100%, above: 1em, below: 1em)[
+  inset: if compact { 9pt } else { 11pt }, width: 100%,
+  above: if compact { 0.6em } else { 1em },
+  below: if compact { 0.6em } else { 1em })[
   #grid(columns: (1fr, auto),
     text(size: 10pt, weight: 500, fill: purple-800)[Oppgave #nr],
     text(size: 9pt, fill: purple-600)[
       #("★" * niva)#("☆" * (3 - niva)) #h(3pt)
       #if niva == 1 [Grunnleggende] else if niva == 2 [Middels] else [Avansert]])
-  #v(4pt)
+  #v(if compact { 2.5pt } else { 4pt })
   #text(size: 9.5pt, fill: purple-600)[#tekst]
-  #if linjer > 0 { svarlinjer(linjer) }
+  #if linjer > 0 { svarlinjer(linjer, compact: compact) }
 ]
 
 #let kjede(steg) = block(fill: gray-100, radius: 4pt, inset: 9pt,
@@ -170,15 +177,15 @@
   #text(size: 11pt, weight: 500)[#txt]
 ]
 
-// Topptekst-blokk for faktarapporten (egen PDF, kun for læreren).
+// Topptekst-blokk for lærerveiledningen (egen PDF, kun for læreren).
 #let faktarapport-topp(tema, fag: "") = {
   grid(columns: (1fr, auto),
     text(size: 9pt, fill: blue-600, weight: 500, tracking: 0.3pt)[Scriptorium · #fag],
     chip("Kun for læreren", fill: amber-50, ink: amber-800))
   v(4pt)
-  text(size: 19pt, weight: 500)[Faktarapport: #tema]
+  text(size: 19pt, weight: 500)[Lærerveiledning: #tema]
   v(6pt)
   box(fill: amber-50, radius: 4pt, inset: (x: 8pt, y: 4pt))[
-    #text(size: 8.5pt, fill: amber-800)[Kvalitetssikring av AI-generert innhold — skal ikke deles ut til elever]]
+    #text(size: 8.5pt, fill: amber-800)[Faktasjekk og vurderingsstøtte — skal ikke deles ut til elever]]
   v(10pt)
 }

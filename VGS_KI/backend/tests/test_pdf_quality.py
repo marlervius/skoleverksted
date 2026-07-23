@@ -17,11 +17,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from laeringsark_renderer import (  # noqa: E402
+    balance_oppgaver,
     build_faktarapport_doc,
     build_laeringsark_doc,
     coerce_structured_lesson,
     coerce_structured_rapport,
+    make_image_observation_task,
     parse_oppgaver,
+    strip_ungrounded_k_markers,
 )
 from text_pipeline import (  # noqa: E402
     extract_pdf_pages,
@@ -183,6 +186,56 @@ def test_parse_oppgaver_stars_and_mcq():
     assert all("★" not in o["tekst"] for o in oppgaver)
 
 
+def test_ungrounded_documents_never_keep_k_markers():
+    data = coerce_structured_lesson(STRUCTURED_FIXTURE)
+    cleaned = strip_ungrounded_k_markers(data)
+    assert "[K]" not in "\n".join(
+        paragraph
+        for section in cleaned["seksjoner"]
+        for paragraph in section["avsnitt"]
+    )
+
+
+def test_image_crew_rationale_becomes_explicit_source_aware_task():
+    task = make_image_observation_task(
+        caption="En vasall sverger troskap",
+        rationale="Viser det personlige lojalitetsbåndet",
+        source="ai",
+        subject="Historie",
+    )
+    assert task["image_task"] is True
+    assert task["niva"] == 2
+    assert "to konkrete detaljer" in task["tekst"]
+    assert "ikke en historisk" in task["tekst"]
+
+
+def test_long_task_sets_are_balanced_automatically():
+    tasks = [
+        {"niva": 2, "tekst": f"Oppgave {i}", "linjer": 3, "alternativer": []}
+        for i in range(5)
+    ] + [
+        {"niva": 3, "tekst": "Drøft", "linjer": 6, "alternativer": []}
+        for _ in range(2)
+    ]
+    balanced, compact = balance_oppgaver(tasks)
+    assert compact is True
+    assert [task["linjer"] for task in balanced[-2:]] == [4, 4]
+    assert all(task["linjer"] <= 2 for task in balanced[:5])
+
+
+def test_learning_sheet_caps_tall_images_to_protect_pagination():
+    data = coerce_structured_lesson(STRUCTURED_FIXTURE)
+    doc = build_laeringsark_doc(
+        data,
+        fag="Historie",
+        tema="Test",
+        niva="VG2",
+        modus="Standard",
+        image_filename="portrait.png",
+    )
+    assert 'height: 68mm, fit: "contain"' in doc
+
+
 RAPPORT_FIXTURE = {
     "konklusjon": "Trygt å bruke; 2 påstander bør presiseres muntlig.",
     "punkter": [
@@ -194,6 +247,7 @@ RAPPORT_FIXTURE = {
         {"status": "ugyldig-status", "pastand": "Noe usikkert.", "kommentar": ""},
     ],
     "kausalitet": ["«Alliansesystemet førte til krigen» — utelater julikrisens valg."],
+    "automatiske_rettelser": ["Kausalsetningen er nyansert med flere mellomledd."],
     "perspektiver": ["Kvinners rolle i krigsmobiliseringen mangler."],
     "ikke_dekket": ["Krigens gang etter 1914."],
     "kilder": ["Christopher Clark: The Sleepwalkers (2012)"],
@@ -206,7 +260,16 @@ def test_coerce_structured_rapport_normalises_status():
     assert rapport is not None
     statuses = [p["status"] for p in rapport["punkter"]]
     assert statuses == ["dekket", "strid", "utenfor", "usikker"]  # invalid -> usikker
+    assert rapport["automatiske_rettelser"]
     assert coerce_structured_rapport({}) is None
+
+
+def test_coerce_structured_rapport_does_not_split_string_fields_into_characters():
+    rapport = coerce_structured_rapport({
+        "konklusjon": "Trygt å bruke.",
+        "perspektiver": "Elevteksten viser flere synsvinkler.",
+    })
+    assert rapport["perspektiver"] == ["Elevteksten viser flere synsvinkler."]
 
 
 # ── DEL 4: acceptance render (offline) ────────────────────────────────────────
@@ -269,6 +332,8 @@ def test_acceptance_faktarapport_separate_pdf():
     doc = build_faktarapport_doc(
         rapport, fag="Historie", tema="Første verdenskrig",
         kilde="NDLA: Bakgrunnen for første verdenskrig",
+        teacher_key="Oppgave 1: Attentatet i Sarajevo.\n\n"
+        "Oppgave 2: Eleven bør forklare minst to mellomledd.",
     )
     text = _pdf_text(_compile(doc))
 
@@ -279,7 +344,12 @@ def test_acceptance_faktarapport_separate_pdf():
     assert "UTENFOR KILDEN" in text
     assert "BØR PRESISERES" in text
     assert "Kun for læreren" in text
+    assert "Lærerveiledning" in text
+    assert "Kort fasit og vurderingsmomenter" in text
+    assert "Attentatet i Sarajevo" in text
+    assert "Automatiske faglige rettelser" in text
     for ch in "📗📕📘✅⚠️🔶":
         assert ch not in text
-    # The student text must NOT be in the teacher report
-    assert "Oppgave 1" not in text
+    # The full student lesson body must not be duplicated in the teacher guide.
+    # Short task references are expected because the guide now includes an answer key.
+    assert "Sommeren 1914 gikk Europa fra fred til storkrig" not in text

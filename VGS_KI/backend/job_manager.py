@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -43,8 +44,8 @@ class Job:
     created_at: float = field(default_factory=time.time)
     pdf: Optional[bytes] = None
     filename: Optional[str] = None
-    # Separate teacher fact-report PDF (spec 2.8): never appended to the
-    # student PDF, downloaded through its own endpoint.
+    # Separate teacher guide with fact review and answer guidance: never
+    # appended to the student PDF.
     rapport_pdf: Optional[bytes] = None
     rapport_filename: Optional[str] = None
     error: Optional[str] = None
@@ -185,9 +186,16 @@ class JobContext:
 
 
 def compute_cache_key(prefix: str, payload: Any) -> str:
-    """Compute a stable cache key from a Pydantic model dump."""
-    blob = json.dumps(payload.model_dump() if hasattr(payload, 'model_dump') else payload,
-                      sort_keys=True, default=str).encode()
+    """Compute a stable cache key that changes with the prompt contract."""
+    value = payload.model_dump() if hasattr(payload, 'model_dump') else payload
+    blob = json.dumps(
+        {
+            "prompt_version": os.getenv("PROMPT_VERSION", "fag-v3-quality-gates"),
+            "payload": value,
+        },
+        sort_keys=True,
+        default=str,
+    ).encode()
     return f"{prefix}_{hashlib.md5(blob).hexdigest()}"
 
 
@@ -341,7 +349,7 @@ def run_job_in_thread(
             # distinguish "ungrounded" from "unknown".
             if "source_grounded" in job_meta:
                 done_event["source_grounded"] = bool(job_meta["source_grounded"])
-            # Tell the UI a separate teacher fact-report PDF exists (bytes
+            # Tell the UI a separate teacher guide exists (bytes
             # themselves never go over SSE).
             done_event["has_faktarapport"] = bool(job_meta.get("rapport_pdf"))
             schedule_event(done_event)

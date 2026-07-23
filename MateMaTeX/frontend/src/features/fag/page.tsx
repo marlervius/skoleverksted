@@ -1289,11 +1289,11 @@ export default function Home() {
                         description="En redaktør gjennomgår og skjerper teksten før oppgavene lages — litt lengre genereringstid"
                       />
                       <OptionToggle
-                        label="Faktarapport"
+                        label="Lærerveiledning"
                         checked={options.faktarapport}
                         onChange={(val) => handleOptionChange("faktarapport", val)}
                         disabled={status === "loading"}
-                        description="Sjekkliste med fakta og forenklinger — kun for læreren, legges til som siste side"
+                        description="Faktasjekk og kort fasit i en egen PDF til læreren"
                       />
                     </div>
                   </fieldset>
@@ -1437,7 +1437,7 @@ export default function Home() {
                     <div className="flex items-start gap-2 p-3 rounded-lg bg-accent-50 border border-accent-200 text-accent-800 text-sm">
                       <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
                       <span>
-                        <span className="font-semibold">Kildeforankret{sourceName ? <> i {sourceName}</> : ""}.</span> Påstander merket <span className="font-mono">[K]</span> kan kontrolleres mot kilden, og faktarapporten er kryssjekket mot den.
+                        <span className="font-semibold">Kildeforankret{sourceName ? <> i {sourceName}</> : ""}.</span> Påstander merket <span className="font-mono">[K]</span> kan kontrolleres mot kilden, og lærerveiledningen er kryssjekket mot den.
                       </span>
                     </div>
                   )}
@@ -1533,7 +1533,7 @@ export default function Home() {
                       title="Egen PDF til læreren — deles ikke ut til elevene"
                     >
                       <ShieldCheck className="w-4 h-4" aria-hidden="true" />
-                      Last ned faktarapport (til læreren)
+                      Last ned lærerveiledning (faktasjekk og fasit)
                     </button>
                   )}
                   {mode === "sekvens" && (
