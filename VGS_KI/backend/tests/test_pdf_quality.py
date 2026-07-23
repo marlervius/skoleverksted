@@ -236,6 +236,30 @@ def test_learning_sheet_caps_tall_images_to_protect_pagination():
     assert 'height: 68mm, fit: "contain"' in doc
 
 
+def test_markdown_answer_key_is_removed_from_student_tasks():
+    from pdf_service import parse_worksheet_content
+
+    worksheet = """
+FORSTÅELSE OG ANALYSE
+1. ★ Hva er et len?
+
+DRØFTING OG REFLEKSJON
+1. ★★★ Drøft maktforholdene.
+
+---
+
+**Fasit**
+
+Spørsmål 1: Et landområde eller rettigheter overdratt mot gjenytelser.
+"""
+    sections = parse_worksheet_content(worksheet)
+    tasks = parse_oppgaver(sections["comprehension"], sections["discussion"])
+    student_text = "\n".join(task["tekst"] for task in tasks)
+    assert "Fasit" not in student_text
+    assert "Spørsmål 1" not in student_text
+    assert sections["teacher_key"].startswith("Spørsmål 1:")
+
+
 RAPPORT_FIXTURE = {
     "konklusjon": "Trygt å bruke; 2 påstander bør presiseres muntlig.",
     "punkter": [

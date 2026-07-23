@@ -2085,13 +2085,27 @@ def parse_worksheet_content(worksheet: str) -> dict:
     # frequently emits markdown headings, which previously broke section detection.
     text = re.sub(r'(?m)^\s{0,3}#{1,6}\s*', '', text)
 
-    # Extract Fasit first (it's usually at the very end)
+    # Extract the answer key first (it is normally at the very end). Models
+    # frequently wrap the heading in Markdown (for example ``**Fasit**``),
+    # prepend a divider, or put the first answer on the same line.
     fasit_patterns = [
-        r'(?:\n\s*)?(?:FASIT|Fasit|ANSWER KEY|Answer Key|Lærerens fasit)[:\s]*\n(.*)$',
-        r'(?:\n\s*)?(?:={3,}|_{3,}|-{3,})\s*(?:FASIT|Fasit)[:\s]*\n(.*)$'
+        (
+            r'(?im)^[ \t]*(?:[-–—_=]{3,}[ \t]*)?'
+            r'(?:\*{1,2}|_{1,2})?[ \t]*'
+            r'(?:FASIT|ANSWER[ \t]+KEY|LÆRERENS[ \t]+FASIT)'
+            r'[ \t]*(?:\*{1,2}|_{1,2})?[ \t]*:?[ \t]*\r?\n+'
+            r'([\s\S]*)\Z'
+        ),
+        (
+            r'(?im)^[ \t]*(?:[-–—_=]{3,}[ \t]*)?'
+            r'(?:\*{1,2}|_{1,2})?[ \t]*'
+            r'(?:FASIT|ANSWER[ \t]+KEY|LÆRERENS[ \t]+FASIT)'
+            r'[ \t]*(?:\*{1,2}|_{1,2})?[ \t]*(?::|[–—-])[ \t]+'
+            r'(.+[\s\S]*)\Z'
+        ),
     ]
     for pattern in fasit_patterns:
-        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        match = re.search(pattern, text)
         if match:
             sections["teacher_key"] = match.group(1).strip()
             text = text[:match.start()].strip()
