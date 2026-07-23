@@ -32,6 +32,14 @@ services:
         value: "0.35"
       - key: GOOGLE_MODEL
         value: gemini-3.5-flash
+      - key: PRIMARY_PROVIDER
+        value: google
+      - key: PRIMARY_MODEL
+        value: gemini-3.5-flash
+      - key: FALLBACK_PROVIDER
+        value: google
+      - key: FALLBACK_MODEL
+        value: gemini-3.1-flash-lite
       - key: PROMPT_VERSION
         value: skoleverksted-v2
       - key: MAX_CONCURRENT_JOBS

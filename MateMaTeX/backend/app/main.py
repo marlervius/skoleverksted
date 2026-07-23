@@ -665,6 +665,7 @@ async def health_ready():
 def _run_job_body(job_id: str, request: GenerationRequest, owner_id: str = "") -> None:
     """Run a generation job in a background thread."""
     from app.pipeline.graph import run_pipeline
+    from app.public_errors import public_generation_error
 
     def _is_aborted() -> bool:
         existing = _jobs.get(job_id)
@@ -694,6 +695,11 @@ def _run_job_body(job_id: str, request: GenerationRequest, owner_id: str = "") -
             clear_cancel(job_id)
             return
         result.job_id = job_id
+        if result.status == PipelineStatus.FAILED:
+            result.error_message = public_generation_error(result.error_message)
+            for step in result.steps:
+                if step.error:
+                    step.error = public_generation_error(step.error)
         _jobs[job_id] = result
         persist_terminal_job(result)
         evict_terminal_jobs(_jobs)
@@ -702,7 +708,7 @@ def _run_job_body(job_id: str, request: GenerationRequest, owner_id: str = "") -
         state = _jobs.get(job_id)
         if state:
             state.status = PipelineStatus.FAILED
-            state.error_message = str(e)
+            state.error_message = public_generation_error(e)
             persist_terminal_job(state)
         logger.error("job_failed", job_id=job_id, error=str(e))
 

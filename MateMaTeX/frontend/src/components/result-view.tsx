@@ -472,9 +472,9 @@ export function ResultView() {
             : "!border-accent-red/30 bg-accent-red/5"
         }`}
       >
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold flex items-center gap-2">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <h2 className="flex items-center gap-2 text-lg font-semibold">
               {isSuccess ? (
                 <CheckCircle2 size={20} className="text-accent-green" />
               ) : (
@@ -486,7 +486,7 @@ export function ResultView() {
                   : "Materiale generert"
                 : "Generering feilet"}
             </h2>
-            <p className="text-sm text-text-secondary mt-1">
+            <p className="mt-1 break-words text-sm text-text-secondary">
               {isSuccess
                 ? `${result.fromCache ? "Hentet fra hurtigbuffer · " : ""}Ferdig på ${result.totalDuration.toFixed(1)} sekunder`
                 : result.error}
@@ -502,9 +502,12 @@ export function ResultView() {
               </p>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
             {!isSuccess && (
-              <button onClick={goToWizardWithSameSettings} className="btn-secondary">
+              <button
+                onClick={goToWizardWithSameSettings}
+                className="btn-secondary w-full justify-center sm:w-auto"
+              >
                 <RefreshCw size={14} />
                 Prøv igjen
               </button>
@@ -513,7 +516,7 @@ export function ResultView() {
               onClick={() => {
                 setResult(null);
               }}
-              className="btn-ghost"
+              className="btn-ghost w-full justify-center sm:w-auto"
             >
               <Plus size={16} className="rotate-45" />
               Ny generering

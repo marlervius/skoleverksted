@@ -103,6 +103,12 @@ _PROVIDER_FACTORIES = {
     "ollama": lambda m, cfg, t: _create_ollama(m, cfg.ollama_base_url, t),
 }
 
+_PROVIDER_CREDENTIALS = {
+    "google": ("google_api_key", "GOOGLE_API_KEY"),
+    "anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+    "openai": ("openai_api_key", "OPENAI_API_KEY"),
+}
+
 
 # ---------------------------------------------------------------------------
 # Unified interface
@@ -140,7 +146,13 @@ class LLMInterface:
         ):
             try:
                 self._fallback = self._build(cfg.fallback_provider, cfg.fallback_model)
-            except Exception:
+            except Exception as fallback_config_error:
+                logger.warning(
+                    "fallback_llm_disabled",
+                    provider=cfg.fallback_provider,
+                    model=cfg.fallback_model,
+                    error=str(fallback_config_error),
+                )
                 self._fallback = None
         else:
             self._fallback = None
@@ -166,6 +178,13 @@ class LLMInterface:
                 f"Unknown LLM provider: {provider!r}. "
                 f"Supported: {', '.join(_PROVIDER_FACTORIES)}"
             )
+        credential = _PROVIDER_CREDENTIALS.get(provider)
+        if credential is not None:
+            attribute, environment_variable = credential
+            if not str(getattr(self._config, attribute, "") or "").strip():
+                raise ValueError(
+                    f"{provider.title()}-leverandøren mangler {environment_variable}."
+                )
         return factory(model, self._config, self._temperature)
 
     @property
@@ -207,9 +226,13 @@ class LLMInterface:
                 except Exception as fallback_err:
                     logger.error(
                         "fallback_llm_failed",
+                        provider=self._config.fallback_provider,
+                        model=self._config.fallback_model,
                         error=str(fallback_err),
                     )
-                    raise fallback_err from primary_err
+                    # Preserve the primary failure: a secondary provider/model
+                    # must never mask the actual reason the configured model failed.
+                    raise primary_err from fallback_err
 
             raise primary_err
 
@@ -222,14 +245,28 @@ class LLMInterface:
 
         try:
             response = await self._primary.ainvoke(messages)
+            self._extract_usage(response)
             return _message_content_to_str(response.content)
         except Exception as primary_err:
+            logger.warning(
+                "primary_llm_failed",
+                provider=self._provider_name,
+                model=self._model_name,
+                error=str(primary_err),
+            )
             if self._fallback is not None:
                 try:
                     response = await self._fallback.ainvoke(messages)
+                    self._extract_usage(response)
                     return _message_content_to_str(response.content)
                 except Exception as fallback_err:
-                    raise fallback_err from primary_err
+                    logger.error(
+                        "fallback_llm_failed",
+                        provider=self._config.fallback_provider,
+                        model=self._config.fallback_model,
+                        error=str(fallback_err),
+                    )
+                    raise primary_err from fallback_err
             raise primary_err
 
 

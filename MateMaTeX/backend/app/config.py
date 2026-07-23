@@ -39,12 +39,12 @@ class Settings(BaseSettings):
     # ---- LLM defaults ----
     primary_provider: str = Field(default="google")
     primary_model: str = Field(
-        default="gemini-2.0-flash",
+        default="gemini-3.5-flash",
         description="Gemini model ID used everywhere. See https://ai.google.dev/gemini-api/docs/models",
     )
-    fallback_provider: str = Field(default="anthropic")
+    fallback_provider: str = Field(default="google")
     fallback_model: str = Field(
-        default="claude-3-5-haiku-latest",
+        default="gemini-3.1-flash-lite",
         description="Model used when primary fails.",
     )
     temperature: float = Field(default=0.15, ge=0.0, le=2.0)
