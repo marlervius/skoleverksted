@@ -8,7 +8,23 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .models import Feedback, FeedbackCreate, Job, Project, ProjectCreate, ProjectUpdate, utc_now
+from .models import (
+    Feedback,
+    FeedbackCreate,
+    Job,
+    Project,
+    ProjectCreate,
+    ProjectUpdate,
+    YearPlan,
+    YearPlanCreate,
+    YearPlanMaterial,
+    YearPlanMaterialCreate,
+    YearPlanMaterialUpdate,
+    YearPlanPeriod,
+    YearPlanPeriodUpdate,
+    YearPlanUpdate,
+    utc_now,
+)
 
 
 def _default_db_path() -> Path:
@@ -27,9 +43,16 @@ class PlatformStore:
     introduced without changing the frontend contract.
     """
 
-    def __init__(self, path: str | Path | None = None):
+    def __init__(self, path: str | Path | None = None, files_dir: str | Path | None = None):
         self.path = Path(path) if path is not None else _default_db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if files_dir is not None:
+            self.files_dir = Path(files_dir)
+        elif path is not None:
+            self.files_dir = self.path.parent / "year-plan-files"
+        else:
+            self.files_dir = Path(os.getenv("OUTPUT_DIR", "./output")) / "year-plans"
+        self.files_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._init_schema()
 
@@ -84,6 +107,18 @@ class PlatformStore:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at DESC);
+                CREATE TABLE IF NOT EXISTS year_plans (
+                    id TEXT PRIMARY KEY,
+                    subject TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    school_year TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_year_plans_updated ON year_plans(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_year_plans_subject ON year_plans(subject,level,school_year);
                 """
             )
 
@@ -252,6 +287,191 @@ class PlatformStore:
         with self._connection() as conn:
             rows = conn.execute("SELECT payload FROM feedback ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         return [Feedback.model_validate_json(row["payload"]) for row in rows]
+
+    def create_year_plan(self, request: YearPlanCreate, *, status: str = "draft") -> YearPlan:
+        plan = YearPlan(**request.model_dump(), status=status)
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """INSERT INTO year_plans(
+                       id,subject,level,school_year,status,payload,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    plan.id,
+                    plan.subject,
+                    plan.level,
+                    plan.school_year,
+                    plan.status,
+                    self._json(plan.model_dump()),
+                    plan.created_at,
+                    plan.updated_at,
+                ),
+            )
+        return plan
+
+    def get_year_plan(self, plan_id: str) -> YearPlan | None:
+        with self._connection() as conn:
+            row = conn.execute("SELECT payload FROM year_plans WHERE id=?", (plan_id,)).fetchone()
+        return YearPlan.model_validate_json(row["payload"]) if row else None
+
+    def list_year_plans(
+        self,
+        *,
+        limit: int = 50,
+        status: str | None = None,
+        school_year: str | None = None,
+    ) -> list[YearPlan]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status=?")
+            params.append(status)
+        if school_year:
+            clauses.append("school_year=?")
+            params.append(school_year)
+        query = "SELECT payload FROM year_plans"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [YearPlan.model_validate_json(row["payload"]) for row in rows]
+
+    def _save_year_plan(self, plan: YearPlan) -> YearPlan:
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """UPDATE year_plans
+                   SET subject=?,level=?,school_year=?,status=?,payload=?,updated_at=?
+                   WHERE id=?""",
+                (
+                    plan.subject,
+                    plan.level,
+                    plan.school_year,
+                    plan.status,
+                    self._json(plan.model_dump()),
+                    plan.updated_at,
+                    plan.id,
+                ),
+            )
+        return plan
+
+    def update_year_plan(self, plan_id: str, request: YearPlanUpdate) -> YearPlan | None:
+        current = self.get_year_plan(plan_id)
+        if current is None:
+            return None
+        payload = current.model_dump()
+        payload.update(request.model_dump(exclude_none=True))
+        payload["updated_at"] = utc_now()
+        return self._save_year_plan(YearPlan.model_validate(payload))
+
+    def update_year_plan_period(
+        self,
+        plan_id: str,
+        period_id: str,
+        request: YearPlanPeriodUpdate,
+    ) -> YearPlan | None:
+        plan = self.get_year_plan(plan_id)
+        if plan is None:
+            return None
+        changes = request.model_dump(exclude_none=True)
+        found = False
+        periods: list[YearPlanPeriod] = []
+        for period in plan.periods:
+            if period.id == period_id:
+                payload = period.model_dump()
+                payload.update(changes)
+                period = YearPlanPeriod.model_validate(payload)
+                found = True
+            periods.append(period)
+        if not found:
+            return None
+        payload = plan.model_dump()
+        payload["periods"] = [period.model_dump() for period in periods]
+        payload["updated_at"] = utc_now()
+        return self._save_year_plan(YearPlan.model_validate(payload))
+
+    def add_year_plan_material(
+        self,
+        plan_id: str,
+        period_id: str,
+        request: YearPlanMaterialCreate,
+        content: bytes,
+    ) -> tuple[YearPlan, YearPlanMaterial] | None:
+        if not content or len(content) > 30_000_000:
+            raise ValueError("Materialfilen må være mellom 1 byte og 30 MB.")
+        plan = self.get_year_plan(plan_id)
+        if plan is None:
+            return None
+        target = next((period for period in plan.periods if period.id == period_id), None)
+        if target is None:
+            return None
+        versions = [item.version for item in target.materials if item.kind == request.kind]
+        material = YearPlanMaterial(
+            **request.model_dump(),
+            version=(max(versions) + 1) if versions else 1,
+            size_bytes=len(content),
+        )
+        plan_dir = self.files_dir / plan_id
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        final_path = plan_dir / f"{material.id}.bin"
+        temp_path = plan_dir / f".{material.id}.tmp"
+        temp_path.write_bytes(content)
+        temp_path.replace(final_path)
+        try:
+            target.materials.append(material)
+            if request.status == "approved" and target.status == "not_started":
+                target.status = "in_progress"
+            payload = plan.model_dump()
+            payload["updated_at"] = utc_now()
+            saved = self._save_year_plan(YearPlan.model_validate(payload))
+        except Exception:
+            final_path.unlink(missing_ok=True)
+            raise
+        return saved, material
+
+    def get_year_plan_material(
+        self,
+        plan_id: str,
+        material_id: str,
+    ) -> tuple[YearPlanMaterial, Path] | None:
+        plan = self.get_year_plan(plan_id)
+        if plan is None:
+            return None
+        for period in plan.periods:
+            for material in period.materials:
+                if material.id == material_id:
+                    path = self.files_dir / plan_id / f"{material.id}.bin"
+                    return (material, path) if path.is_file() else None
+        return None
+
+    def update_year_plan_material(
+        self,
+        plan_id: str,
+        period_id: str,
+        material_id: str,
+        request: YearPlanMaterialUpdate,
+    ) -> tuple[YearPlan, YearPlanMaterial] | None:
+        plan = self.get_year_plan(plan_id)
+        if plan is None:
+            return None
+        changes = request.model_dump(exclude_none=True)
+        updated: YearPlanMaterial | None = None
+        for period in plan.periods:
+            if period.id != period_id:
+                continue
+            for index, material in enumerate(period.materials):
+                if material.id == material_id:
+                    payload = material.model_dump()
+                    payload.update(changes)
+                    payload["updated_at"] = utc_now()
+                    updated = YearPlanMaterial.model_validate(payload)
+                    period.materials[index] = updated
+                    break
+        if updated is None:
+            return None
+        payload = plan.model_dump()
+        payload["updated_at"] = utc_now()
+        return self._save_year_plan(YearPlan.model_validate(payload)), updated
 
 
 _store: PlatformStore | None = None

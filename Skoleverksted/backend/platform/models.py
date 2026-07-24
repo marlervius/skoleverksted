@@ -13,6 +13,19 @@ def utc_now() -> str:
 
 ProjectStatus = Literal["draft", "ready", "generating", "completed", "archived"]
 JobStatus = Literal["queued", "planning", "generating", "verifying", "rendering", "completed", "needs_review", "failed", "cancelled"]
+YearPlanStatus = Literal["draft", "active", "completed", "archived"]
+YearPlanPeriodStatus = Literal["not_started", "in_progress", "ready", "completed", "needs_revision"]
+MaterialStatus = Literal["draft", "approved", "used", "needs_revision"]
+MaterialKind = Literal[
+    "learning_sheet",
+    "worksheet",
+    "lesson_sequence",
+    "assessment",
+    "presentation",
+    "source_task",
+    "differentiated",
+    "other",
+]
 
 
 class ProjectCreate(BaseModel):
@@ -139,3 +152,115 @@ class FeedbackCreate(BaseModel):
 class Feedback(FeedbackCreate):
     id: str = Field(default_factory=lambda: uuid4().hex)
     created_at: str = Field(default_factory=utc_now)
+
+
+class YearPlanMaterial(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    title: str = Field(min_length=2, max_length=180)
+    kind: MaterialKind = "learning_sheet"
+    status: MaterialStatus = "approved"
+    version: int = Field(default=1, ge=1)
+    filename: str = Field(min_length=1, max_length=240)
+    mime_type: str = Field(default="application/pdf", max_length=120)
+    size_bytes: int = Field(default=0, ge=0, le=30_000_000)
+    notes: str = Field(default="", max_length=1200)
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
+
+
+class YearPlanPeriod(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    order: int = Field(default=0, ge=0, le=100)
+    title: str = Field(min_length=2, max_length=180)
+    theme: str = Field(default="", max_length=240)
+    week_start: str = Field(default="", max_length=20)
+    week_end: str = Field(default="", max_length=20)
+    duration_weeks: int = Field(default=3, ge=1, le=12)
+    lesson_count: int = Field(default=6, ge=1, le=120)
+    overview: str = Field(default="", max_length=3000)
+    learning_goals: list[str] = Field(default_factory=list, max_length=12)
+    competency_goals: list[str] = Field(default_factory=list, max_length=30)
+    key_concepts: list[str] = Field(default_factory=list, max_length=20)
+    suggested_activities: list[str] = Field(default_factory=list, max_length=15)
+    assessment: str = Field(default="", max_length=1200)
+    teacher_notes: str = Field(default="", max_length=3000)
+    status: YearPlanPeriodStatus = "not_started"
+    materials: list[YearPlanMaterial] = Field(default_factory=list, max_length=100)
+
+
+class YearPlanGenerateRequest(BaseModel):
+    title: str = Field(default="", max_length=180)
+    subject: str = Field(min_length=2, max_length=120)
+    level: str = Field(min_length=1, max_length=80)
+    school_year: str = Field(min_length=4, max_length=20)
+    lessons_per_week: int = Field(default=2, ge=1, le=15)
+    lesson_minutes: int = Field(default=45, ge=30, le=180)
+    teaching_weeks: int = Field(default=38, ge=20, le=45)
+    number_of_periods: int = Field(default=9, ge=4, le=16)
+    competency_goals: list[str] = Field(default_factory=list, max_length=80)
+    constraints: str = Field(default="", max_length=4000)
+    use_ai: bool = True
+
+
+class YearPlanCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=180)
+    subject: str = Field(min_length=2, max_length=120)
+    level: str = Field(min_length=1, max_length=80)
+    school_year: str = Field(min_length=4, max_length=20)
+    lessons_per_week: int = Field(default=2, ge=1, le=15)
+    lesson_minutes: int = Field(default=45, ge=30, le=180)
+    teaching_weeks: int = Field(default=38, ge=20, le=45)
+    competency_goals: list[str] = Field(default_factory=list, max_length=80)
+    periods: list[YearPlanPeriod] = Field(default_factory=list, max_length=30)
+    notes: str = Field(default="", max_length=4000)
+    planning_source: Literal["ai", "fallback", "manual"] = "manual"
+
+
+class YearPlan(YearPlanCreate):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    status: YearPlanStatus = "draft"
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
+
+
+class YearPlanUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=180)
+    lessons_per_week: int | None = Field(default=None, ge=1, le=15)
+    lesson_minutes: int | None = Field(default=None, ge=30, le=180)
+    teaching_weeks: int | None = Field(default=None, ge=20, le=45)
+    competency_goals: list[str] | None = Field(default=None, max_length=80)
+    periods: list[YearPlanPeriod] | None = Field(default=None, max_length=30)
+    notes: str | None = Field(default=None, max_length=4000)
+    status: YearPlanStatus | None = None
+
+
+class YearPlanPeriodUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=180)
+    theme: str | None = Field(default=None, max_length=240)
+    week_start: str | None = Field(default=None, max_length=20)
+    week_end: str | None = Field(default=None, max_length=20)
+    duration_weeks: int | None = Field(default=None, ge=1, le=12)
+    lesson_count: int | None = Field(default=None, ge=1, le=120)
+    overview: str | None = Field(default=None, max_length=3000)
+    learning_goals: list[str] | None = Field(default=None, max_length=12)
+    competency_goals: list[str] | None = Field(default=None, max_length=30)
+    key_concepts: list[str] | None = Field(default=None, max_length=20)
+    suggested_activities: list[str] | None = Field(default=None, max_length=15)
+    assessment: str | None = Field(default=None, max_length=1200)
+    teacher_notes: str | None = Field(default=None, max_length=3000)
+    status: YearPlanPeriodStatus | None = None
+
+
+class YearPlanMaterialCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=180)
+    kind: MaterialKind = "learning_sheet"
+    status: MaterialStatus = "approved"
+    filename: str = Field(min_length=1, max_length=240)
+    mime_type: str = Field(default="application/pdf", max_length=120)
+    notes: str = Field(default="", max_length=1200)
+
+
+class YearPlanMaterialUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=180)
+    status: MaterialStatus | None = None
+    notes: str | None = Field(default=None, max_length=1200)

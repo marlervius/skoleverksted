@@ -13,6 +13,8 @@ const PAGE_TITLES: Record<string, string> = {
   "/norsk": "Norsklæring",
   "/matematikk": "Matematikk",
   "/theme-pack": "Temapakke",
+  "/year-plans": "Årsplaner",
+  "/year-plans/new": "Ny årsplan",
   "/projects": "Prosjekter",
   "/exercises": "Oppgavebank",
   "/templates": "Maler",
@@ -51,7 +53,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   // Get breadcrumb from path
-  const pageTitle = PAGE_TITLES[pathname] || (pathname.startsWith("/projects/") ? "Prosjekt" : "");
+  const pageTitle = PAGE_TITLES[pathname]
+    || (pathname.startsWith("/projects/") ? "Prosjekt" : "")
+    || (pathname.startsWith("/year-plans/") ? "Årsplan" : "");
   const isImmersiveWorkspace = pathname === "/fag" || pathname === "/norsk";
 
   return (
@@ -109,16 +113,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 function MobileBottomBar({ pathname }: { pathname: string }) {
   const tabs = [
     { href: "/", label: "Oversikt", icon: "✦" },
+    { href: "/year-plans", label: "Årsplan", icon: "▦" },
     { href: "/fag", label: "Fag", icon: "▤" },
     { href: "/norsk", label: "Norsk", icon: "A" },
-    { href: "/matematikk", label: "Matte", icon: "∑" },
   ];
 
   return (
     <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-surface border-t border-border safe-area-inset-bottom">
       <div className="flex">
         {tabs.map((tab) => {
-          const active = pathname === tab.href;
+          const active = tab.href === "/" ? pathname === "/" : pathname.startsWith(tab.href);
           return (
             <Link
               key={tab.href}

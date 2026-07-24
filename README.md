@@ -12,6 +12,10 @@ kvalitetspass, drift og offentlig API-adresse er felles.
 
 ## Ny felles produktflyt
 
+- **Årsplaner** lager et redigerbart årshjul for fag, nivå, timetall og
+  kompetansemål. Hver periode kan sende en ferdig utfylt bestilling til
+  fagverkstedet, og læreren godkjenner eksplisitt PDF-en før den lagres og
+  versjoneres under riktig tema.
 - **Temapakke** oppretter ett prosjekt med koordinerte arbeidsflater for fagtekst,
   CEFR-tilpasset norsk og matematikk.
 - **Prosjekter** lagres varig i SQLite og kan senere flyttes til PostgreSQL uten
@@ -47,6 +51,10 @@ utførelsen flyttes til en felles Redis-kø uten å endre brukergrensesnittet.
 
 Felles plattform-API ligger under `/api/platform`:
 
+- `GET/POST /year-plans`
+- `POST /year-plans/generate`
+- `GET/PATCH /year-plans/{id}` og perioder under `/periods/{period_id}`
+- `POST /year-plans/{id}/periods/{period_id}/materials`
 - `GET/POST /projects`
 - `GET/PATCH /projects/{id}`
 - `GET /jobs` og `GET /jobs/{id}`
@@ -105,7 +113,8 @@ Copy-Item .\Skoleverksted\backend\.env.example .\.env
 docker compose up --build
 ```
 
-SQLite-filen og genererte dokumenter ligger i volumet `skoleverksted_data`.
+SQLite-filen, årsplanenes godkjente læremidler og genererte dokumenter ligger i
+volumet `skoleverksted_data`.
 `/health/ready` returnerer HTTP 503 hvis plattformlager, Gemini, Typst eller
 pdfLaTeX mangler. Redis vises som en valgfri driftsstatus.
 

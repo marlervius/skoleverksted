@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from .models import (
@@ -18,13 +18,145 @@ from .models import (
     ThemePack,
     ThemePackRequest,
     ThemePackTask,
+    YearPlan,
+    YearPlanCreate,
+    YearPlanGenerateRequest,
+    YearPlanMaterialCreate,
+    YearPlanMaterialUpdate,
+    YearPlanPeriodUpdate,
+    YearPlanUpdate,
 )
 from .quality import build_quality_passport
 from .store import get_platform_store
 from .queue import get_durable_job_queue
+from .year_planner import build_year_plan
 
 
 router = APIRouter(tags=["platform"])
+
+
+@router.get("/year-plans", response_model=list[YearPlan])
+def list_year_plans(
+    limit: int = Query(default=50, ge=1, le=200),
+    status: str | None = None,
+    school_year: str | None = None,
+):
+    return get_platform_store().list_year_plans(
+        limit=limit,
+        status=status,
+        school_year=school_year,
+    )
+
+
+@router.post("/year-plans", response_model=YearPlan, status_code=201)
+def create_year_plan(request: YearPlanCreate):
+    return get_platform_store().create_year_plan(request)
+
+
+@router.post("/year-plans/generate", response_model=YearPlan, status_code=201)
+def generate_year_plan(request: YearPlanGenerateRequest):
+    proposal = build_year_plan(request)
+    return get_platform_store().create_year_plan(proposal)
+
+
+@router.get("/year-plans/{plan_id}", response_model=YearPlan)
+def get_year_plan(plan_id: str):
+    plan = get_platform_store().get_year_plan(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Årsplanen finnes ikke.")
+    return plan
+
+
+@router.patch("/year-plans/{plan_id}", response_model=YearPlan)
+def update_year_plan(plan_id: str, request: YearPlanUpdate):
+    plan = get_platform_store().update_year_plan(plan_id, request)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Årsplanen finnes ikke.")
+    return plan
+
+
+@router.patch("/year-plans/{plan_id}/periods/{period_id}", response_model=YearPlan)
+def update_year_plan_period(plan_id: str, period_id: str, request: YearPlanPeriodUpdate):
+    plan = get_platform_store().update_year_plan_period(plan_id, period_id, request)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Årsplanen eller perioden finnes ikke.")
+    return plan
+
+
+@router.post("/year-plans/{plan_id}/periods/{period_id}/materials", status_code=201)
+async def save_year_plan_material(
+    plan_id: str,
+    period_id: str,
+    request: Request,
+    title: str = Query(min_length=2, max_length=180),
+    kind: str = Query(default="learning_sheet"),
+    status: str = Query(default="approved"),
+    filename: str = Query(min_length=1, max_length=240),
+    notes: str = Query(default="", max_length=1200),
+):
+    content = await request.body()
+    try:
+        metadata = YearPlanMaterialCreate(
+            title=title,
+            kind=kind,
+            status=status,
+            filename=filename,
+            mime_type=(request.headers.get("content-type") or "application/pdf").split(";", 1)[0],
+            notes=notes,
+        )
+        result = get_platform_store().add_year_plan_material(
+            plan_id,
+            period_id,
+            metadata,
+            content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Årsplanen eller perioden finnes ikke.")
+    plan, material = result
+    return {"plan": plan, "material": material}
+
+
+@router.patch("/year-plans/{plan_id}/periods/{period_id}/materials/{material_id}")
+def update_year_plan_material(
+    plan_id: str,
+    period_id: str,
+    material_id: str,
+    request: YearPlanMaterialUpdate,
+):
+    result = get_platform_store().update_year_plan_material(
+        plan_id,
+        period_id,
+        material_id,
+        request,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Læremiddelet finnes ikke.")
+    plan, material = result
+    return {"plan": plan, "material": material}
+
+
+@router.get("/year-plans/{plan_id}/materials/{material_id}/download")
+def download_year_plan_material(plan_id: str, material_id: str):
+    result = get_platform_store().get_year_plan_material(plan_id, material_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Læremiddelet eller filen finnes ikke.")
+    material, path = result
+    filename = "".join(
+        character for character in material.filename
+        if character not in {'"', "\r", "\n", "\x00"}
+    ) or "laeremiddel.pdf"
+    return Response(
+        content=path.read_bytes(),
+        media_type=material.mime_type,
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"material-{material.id[:8]}\"; "
+                f"filename*=UTF-8''{quote(filename)}"
+            ),
+        },
+    )
 
 
 @router.get("/projects", response_model=list[Project])

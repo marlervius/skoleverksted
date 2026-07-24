@@ -19,6 +19,7 @@ import {
   Download,
   CheckCircle2,
   AlertCircle,
+  FolderCheck,
 } from "lucide-react";
 
 import {
@@ -28,7 +29,7 @@ import {
   APP_MODES,
   PROFILES_STORAGE_KEY,
 } from "./components/constants";
-import type { LessonOptions, StudentProfile } from "./components/constants";
+import type { AppMode, LessonOptions, StudentProfile } from "./components/constants";
 import { appReducer, initialState } from "./components/useAppReducer";
 import { OptionToggle } from "./components/OptionToggle";
 import { ProfileManager } from "./components/ProfileManager";
@@ -50,8 +51,32 @@ import { ImageModePicker, type ImageMode } from "@/components/image-mode-picker"
 import { AdvancedOptions, GenerationJourney, GenerationSummary } from "@/components/generation-flow";
 import { GenerationFeedback } from "@/components/generation-feedback";
 import { RevisionActions } from "@/components/revision-actions";
-import { getProject } from "@/lib/platform-api";
+import {
+  getProject,
+  saveYearPlanMaterial,
+  type MaterialKind,
+} from "@/lib/platform-api";
 import { loadLocal, saveLocal } from "@/lib/private-storage";
+
+type YearPlanContext = {
+  planId: string;
+  periodId: string;
+  materialType: MaterialKind;
+};
+
+const MATERIAL_LABELS: Record<MaterialKind, string> = {
+  learning_sheet: "Læringsark",
+  worksheet: "Oppgaveark",
+  lesson_sequence: "Undervisningssekvens",
+  assessment: "Vurdering",
+  presentation: "Presentasjon",
+  source_task: "Kildeoppgave",
+  differentiated: "Differensiert læremiddel",
+  other: "Læremiddel",
+};
+
+const MATERIAL_KINDS = new Set<MaterialKind>(Object.keys(MATERIAL_LABELS) as MaterialKind[]);
+const APP_MODE_VALUES = new Set<AppMode>(["laeringsark", "differensiert", "prove", "sekvens"]);
 
 export default function Home() {
   const [state, dispatch] = useReducer(appReducer, initialState);
@@ -91,6 +116,9 @@ export default function Home() {
     interest?: string;
   };
   const [pendingRestore, setPendingRestore] = useState<SavedSession | null>(null);
+  const [yearPlanContext, setYearPlanContext] = useState<YearPlanContext | null>(null);
+  const [planSaveStatus, setPlanSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [planSaveMessage, setPlanSaveMessage] = useState("");
 
   // Load saved session on mount
   useEffect(() => {
@@ -127,10 +155,26 @@ export default function Home() {
     const querySubject = params.get("subject");
     const queryLevel = params.get("level");
     const queryTopic = params.get("topic");
+    const queryDescription = params.get("description");
+    const queryMode = params.get("mode");
     const projectId = params.get("project");
+    const yearPlanId = params.get("yearPlan");
+    const periodId = params.get("period");
+    const materialType = params.get("materialType");
     if (querySubject) dispatch({ type: "SET_SUBJECT", subject: querySubject });
     if (queryLevel) dispatch({ type: "SET_LEVEL", level: queryLevel });
     if (queryTopic) dispatch({ type: "SET_TOPIC", topic: queryTopic });
+    if (queryDescription) dispatch({ type: "SET_DESCRIPTION", description: queryDescription });
+    if (queryMode && APP_MODE_VALUES.has(queryMode as AppMode)) {
+      dispatch({ type: "SET_MODE", mode: queryMode as AppMode });
+    }
+    if (yearPlanId && periodId && materialType && MATERIAL_KINDS.has(materialType as MaterialKind)) {
+      setYearPlanContext({
+        planId: yearPlanId,
+        periodId,
+        materialType: materialType as MaterialKind,
+      });
+    }
     if (projectId) {
       void getProject(projectId).then((project) => {
         const sharedSource = project.metadata?.source_text;
@@ -139,6 +183,11 @@ export default function Home() {
       }).catch(() => undefined);
     }
   }, []);
+
+  useEffect(() => {
+    setPlanSaveStatus("idle");
+    setPlanSaveMessage("");
+  }, [previewBlob]);
 
   useEffect(() => {
     try {
@@ -300,6 +349,54 @@ export default function Home() {
     }
   }, [basisText, worksheetText, faktarapportText, topic, subject, level]);
 
+  const handleSaveToYearPlan = useCallback(async () => {
+    if (!yearPlanContext || !previewBlob || planSaveStatus === "saving") return;
+    setPlanSaveStatus("saving");
+    setPlanSaveMessage("");
+    const label = MATERIAL_LABELS[yearPlanContext.materialType];
+    try {
+      await saveYearPlanMaterial({
+        planId: yearPlanContext.planId,
+        periodId: yearPlanContext.periodId,
+        title: `${label}: ${topic}`,
+        kind: yearPlanContext.materialType,
+        filename: previewFilename || `${label.toLowerCase().replace(/\s+/g, "-")}.pdf`,
+        blob: previewBlob,
+        status: "approved",
+        notes: `Godkjent og lagret fra Fag & læring (${subject}, ${level}).`,
+      });
+      if (rapportBlob) {
+        await saveYearPlanMaterial({
+          planId: yearPlanContext.planId,
+          periodId: yearPlanContext.periodId,
+          title: `Lærerveiledning: ${topic}`,
+          kind: "other",
+          filename: rapportFilename || "laererveiledning.pdf",
+          blob: rapportBlob,
+          status: "approved",
+          notes: `Lærerveiledning til ${label.toLowerCase()}.`,
+        });
+      }
+      setPlanSaveStatus("saved");
+      setPlanSaveMessage(rapportBlob
+        ? "Læremiddelet og lærerveiledningen er godkjent og lagret i årsplanen."
+        : "Læremiddelet er godkjent og lagret i årsplanen.");
+    } catch (error) {
+      setPlanSaveStatus("error");
+      setPlanSaveMessage(error instanceof Error ? error.message : "Kunne ikke lagre i årsplanen.");
+    }
+  }, [
+    yearPlanContext,
+    previewBlob,
+    previewFilename,
+    rapportBlob,
+    rapportFilename,
+    planSaveStatus,
+    topic,
+    subject,
+    level,
+  ]);
+
   const regenerateWithImageMode = useCallback(async (
     requestedImageMode: ImageMode,
     imageUrlOverride?: string,
@@ -347,7 +444,6 @@ export default function Home() {
         rapportFilename: result.rapportFilename,
       });
       dispatch({ type: "SET_IMAGE_MODE", mode: requestedImageMode });
-      setTimeout(() => dispatch({ type: "GENERATION_IDLE" }), 8000);
     } catch (error) {
       stopTimer();
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -408,7 +504,6 @@ export default function Home() {
         sourceGrounded: sourceGrounded ?? undefined,
         sourceName: sourceName ?? undefined,
       });
-      setTimeout(() => dispatch({ type: "GENERATION_IDLE" }), 8000);
     } catch (error) {
       stopTimer();
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -459,7 +554,6 @@ export default function Home() {
         sourceGrounded: sourceGrounded ?? undefined,
         sourceName: sourceName ?? undefined,
       });
-      setTimeout(() => dispatch({ type: "GENERATION_IDLE" }), 8000);
     } catch (error) {
       stopTimer();
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -565,7 +659,6 @@ export default function Home() {
           rapportFilename: result.rapportFilename,
         });
 
-        setTimeout(() => dispatch({ type: "GENERATION_IDLE" }), 8000);
       } catch (error) {
         stopTimer();
 
@@ -1494,6 +1587,54 @@ export default function Home() {
                           Last opp eget bilde
                         </button>
                       </div>
+                    </div>
+                  )}
+                  {yearPlanContext && (
+                    <div className={`rounded-xl border p-4 ${
+                      planSaveStatus === "saved"
+                        ? "border-accent-green/30 bg-accent-green/10"
+                        : planSaveStatus === "error"
+                          ? "border-red-200 bg-red-50"
+                          : "border-accent-purple/25 bg-accent-purple/5"
+                    }`}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="flex items-center gap-2 text-sm font-semibold text-stone-900">
+                            <FolderCheck className="h-4 w-4 text-accent-purple" aria-hidden="true" />
+                            Knyttet til årsplan · {MATERIAL_LABELS[yearPlanContext.materialType]}
+                          </p>
+                          <p className="mt-1 text-xs text-stone-600">
+                            Se gjennom PDF-en først. Den legges ikke i årsplanen før du godkjenner den.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveToYearPlan()}
+                          disabled={planSaveStatus === "saving" || planSaveStatus === "saved"}
+                          className={planSaveStatus === "saved" ? "btn-secondary" : "btn-primary"}
+                        >
+                          {planSaveStatus === "saving"
+                            ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                            : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
+                          {planSaveStatus === "saving"
+                            ? "Lagrer …"
+                            : planSaveStatus === "saved"
+                              ? "Godkjent og lagret"
+                              : "Godkjenn og lagre"}
+                        </button>
+                      </div>
+                      {planSaveMessage && (
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <span className={planSaveStatus === "error" ? "text-red-700" : "text-accent-green"}>
+                            {planSaveMessage}
+                          </span>
+                          {planSaveStatus === "saved" && (
+                            <a href={`/year-plans/${yearPlanContext.planId}`} className="font-medium text-accent-blue hover:underline">
+                              Tilbake til årsplanen
+                            </a>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="flex gap-2.5">

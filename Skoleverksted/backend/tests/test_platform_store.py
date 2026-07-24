@@ -2,7 +2,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from Skoleverksted.backend.platform.models import FeedbackCreate, Job, ProjectCreate, ProjectUpdate
+from Skoleverksted.backend.platform.models import (
+    FeedbackCreate,
+    Job,
+    ProjectCreate,
+    ProjectUpdate,
+    YearPlanCreate,
+    YearPlanMaterialCreate,
+    YearPlanPeriod,
+    YearPlanPeriodUpdate,
+)
 from Skoleverksted.backend.platform.store import PlatformStore
 
 
@@ -59,6 +68,43 @@ class PlatformStoreTests(unittest.TestCase):
 
             self.assertTrue(saved.id)
             self.assertEqual(store.list_feedback(), [saved])
+
+    def test_year_plan_periods_and_materials_are_durable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = PlatformStore(root / "platform.sqlite3")
+            created = store.create_year_plan(YearPlanCreate(
+                title="Historie VG2",
+                subject="Historie",
+                level="VG2",
+                school_year="2026-2027",
+                periods=[YearPlanPeriod(title="Middelalderen", lesson_count=8)],
+            ))
+            period = created.periods[0]
+            updated = store.update_year_plan_period(
+                created.id,
+                period.id,
+                YearPlanPeriodUpdate(status="ready", teacher_notes="Fungerer godt."),
+            )
+            self.assertIsNotNone(updated)
+            self.assertEqual(updated.periods[0].status, "ready")  # type: ignore[union-attr]
+
+            result = store.add_year_plan_material(
+                created.id,
+                period.id,
+                YearPlanMaterialCreate(
+                    title="Læringsark om middelalderen",
+                    filename="middelalderen.pdf",
+                ),
+                b"%PDF-test",
+            )
+            self.assertIsNotNone(result)
+            saved_plan, material = result  # type: ignore[misc]
+            self.assertEqual(saved_plan.periods[0].materials[0].version, 1)
+            loaded = PlatformStore(root / "platform.sqlite3").get_year_plan(created.id)
+            self.assertEqual(loaded.periods[0].materials[0].title, material.title)  # type: ignore[union-attr]
+            stored = store.get_year_plan_material(created.id, material.id)
+            self.assertEqual(stored[1].read_bytes(), b"%PDF-test")  # type: ignore[index]
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, BookOpenText, Calculator, Languages, PackagePlus, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowRight, BookOpenText, Calculator, CalendarRange, Languages, PackagePlus, ShieldCheck, Sparkles } from "lucide-react";
 import { platformTools } from "@/components/platform-switcher";
 
 const cardStyles = [
@@ -29,8 +29,23 @@ export default function HomePage() {
       </section>
 
       <Link
+        href="/year-plans"
+        className="group mt-9 flex flex-col items-start justify-between gap-5 overflow-hidden rounded-2xl border border-accent-blue/25 bg-gradient-to-r from-accent-blue/10 via-surface to-accent-teal/10 p-6 shadow-soft-sm transition hover:border-accent-blue/50 sm:flex-row sm:items-center"
+      >
+        <div className="flex items-start gap-4">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-blue/15 text-accent-blue"><CalendarRange className="h-5 w-5" /></div>
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wide text-accent-blue">Fra plan til ferdige læremidler</div>
+            <h2 className="mt-1 text-lg font-semibold">Planlegg hele skoleåret</h2>
+            <p className="mt-1 text-sm text-text-secondary">Lag en redigerbar årsplan, produser materiell for hvert tema og se hva som er godkjent og klart.</p>
+          </div>
+        </div>
+        <span className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium">Åpne årsplaner <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" /></span>
+      </Link>
+
+      <Link
         href="/theme-pack"
-        className="group mt-9 flex flex-col items-start justify-between gap-5 overflow-hidden rounded-2xl border border-accent-orange/25 bg-gradient-to-r from-accent-orange/10 via-surface to-accent-purple/10 p-6 shadow-soft-sm transition hover:border-accent-orange/50 sm:flex-row sm:items-center"
+        className="group mt-4 flex flex-col items-start justify-between gap-5 overflow-hidden rounded-2xl border border-accent-orange/25 bg-gradient-to-r from-accent-orange/10 via-surface to-accent-purple/10 p-6 shadow-soft-sm transition hover:border-accent-orange/50 sm:flex-row sm:items-center"
       >
         <div className="flex items-start gap-4">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-orange/15 text-accent-orange"><PackagePlus className="h-5 w-5" /></div>
