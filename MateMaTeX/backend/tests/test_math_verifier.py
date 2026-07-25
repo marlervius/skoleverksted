@@ -40,7 +40,25 @@ class TestEquationVerification:
         """Fraction: 6/3 = 2."""
         latex = r"Vi får $\frac{6}{3} = 2$."
         result = checker.verify(latex)
+        assert result.claims_checked == 1
+        assert result.claims_correct == 1
         assert result.claims_incorrect == 0
+
+    def test_wrong_fraction_answer_is_caught(self, checker: MathChecker):
+        """Braces must not hide a wrong answer from SymPy (grunnlov §1)."""
+        latex = r"Regn ut: $\frac{1}{2} + \frac{1}{3} = \frac{2}{5}$."
+        result = checker.verify(latex)
+        assert result.claims_incorrect == 1
+
+    def test_wrong_square_root_answer_is_caught(self, checker: MathChecker):
+        latex = r"Vi får $\sqrt{16} = 5$."
+        result = checker.verify(latex)
+        assert result.claims_incorrect == 1
+
+    def test_wrong_braced_exponent_is_caught(self, checker: MathChecker):
+        latex = r"Da er $2^{3} = 9$."
+        result = checker.verify(latex)
+        assert result.claims_incorrect == 1
 
     def test_incorrect_fraction(self, checker: MathChecker):
         """Fraction error: 6/4 = 2."""

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from functools import lru_cache
 from pathlib import Path
 
 import structlog
@@ -52,6 +53,39 @@ _DOUBLE_PASS_TRIGGERS = (
 _ENGINE_PREFERENCE = ("lualatex", "xelatex", "pdflatex")
 _VALID_ENGINES = frozenset(_ENGINE_PREFERENCE)
 
+# The OpenType engines only work when the font loader that fontspec needs is
+# installed too. On Debian the binaries ship in texlive-binaries while the
+# loader lives in texlive-luatex / texlive-xetex, so a TeX Live installation
+# can have a lualatex that fails every document with "metric data not found".
+_ENGINE_SUPPORT_FILES = {
+    "lualatex": "luaotfload-main.lua",
+    "xelatex": "fontspec.sty",
+}
+
+
+@lru_cache(maxsize=8)
+def engine_is_usable(engine: str) -> bool:
+    """Return True when the engine is installed *and* can load OpenType fonts."""
+    if not shutil.which(engine):
+        return False
+    support_file = _ENGINE_SUPPORT_FILES.get(engine)
+    if support_file is None:
+        return True
+    try:
+        probe = subprocess.run(
+            ["kpsewhich", support_file],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # Without kpsewhich we cannot prove the engine is broken; trust it.
+        return True
+    usable = probe.returncode == 0 and bool(probe.stdout.strip())
+    if not usable:
+        logger.warning("latex_engine_unusable", engine=engine, missing=support_file)
+    return usable
+
 
 def resolve_engine(preferred: str | None = None) -> str:
     """
@@ -73,18 +107,18 @@ def resolve_engine(preferred: str | None = None) -> str:
     pref = (preferred or "auto").strip().lower()
 
     if pref in _VALID_ENGINES:
-        if shutil.which(pref):
+        if engine_is_usable(pref):
             return pref
-        # Requested engine missing — degrade gracefully to anything available.
+        # Requested engine missing or unusable — degrade to anything that works.
         for eng in _ENGINE_PREFERENCE:
-            if shutil.which(eng):
+            if engine_is_usable(eng):
                 logger.warning("latex_engine_fallback", requested=pref, using=eng)
                 return eng
         return "pdflatex"
 
     # "auto" (or anything unrecognised): prefer the richest engine present.
     for eng in _ENGINE_PREFERENCE:
-        if shutil.which(eng):
+        if engine_is_usable(eng):
             return eng
     return "pdflatex"
 

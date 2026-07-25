@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates perl ghostscript poppler-utils xz-utils \
     lmodern texlive-latex-base texlive-latex-recommended texlive-latex-extra \
     texlive-fonts-recommended texlive-lang-european texlive-science \
+    texlive-luatex \
     && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
     case "${TARGETARCH}" in \
@@ -35,6 +36,10 @@ RUN python -c "from crewai.llms.providers.gemini.completion import GeminiComplet
 COPY . /app
 RUN mkdir -p /var/data/output /var/data/platform \
     && typst --version \
-    && pdflatex --version
+    && pdflatex --version \
+    && lualatex --version \
+    # LuaLaTeX is the preferred engine; without this loader every document
+    # fails with "metric data not found", so fail the build instead.
+    && kpsewhich luaotfload-main.lua
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn Skoleverksted.backend.main:app --host 0.0.0.0 --port ${PORT}"]
