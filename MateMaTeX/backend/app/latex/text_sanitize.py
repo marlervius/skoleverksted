@@ -60,8 +60,12 @@ def strip_markdown(text: str) -> str:
     protected = re.sub(r"^#{1,6}\s*", "", protected, flags=re.M)
     protected = protected.replace("`", "")
 
-    for idx, original in enumerate(placeholders):
-        protected = protected.replace(f"{_PLACEHOLDER_PREFIX}{idx}\x00", original)
+    # A command stashed in the second pass may itself contain math placeholders
+    # from the first pass (for example ``\caption{... $r$ ...}``). Restoring in
+    # descending order therefore unwraps the outer command before the inner
+    # math, so no placeholder can survive into the compiled document.
+    for idx in range(len(placeholders) - 1, -1, -1):
+        protected = protected.replace(f"{_PLACEHOLDER_PREFIX}{idx}\x00", placeholders[idx])
 
     return protected
 

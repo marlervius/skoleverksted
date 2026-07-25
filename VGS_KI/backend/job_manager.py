@@ -366,10 +366,25 @@ def run_job_in_thread(
                     f"Prøv igjen om {wait} sekunder."
                 )
                 req_logger.warning(f"Job {job_id[:8]} hit rate limit (429): retry in {wait}s")
-            else:
-                err_msg = f"{type(e).__name__}: {e}"
+            elif "API_KEY_INVALID" in err_str or "API key not valid" in err_str:
+                err_msg = (
+                    "Tjenesten mangler en gyldig API-nøkkel. Kontakt den som "
+                    "drifter Skoleverksted."
+                )
                 req_logger.error(
-                    f"Job {job_id[:8]} failed: {err_msg} (req_id={job_id[:8]})",
+                    f"Job {job_id[:8]} failed: invalid provider API key (req_id={job_id[:8]})",
+                    exc_info=True,
+                )
+            else:
+                # Log everything, show nothing internal: provider errors contain
+                # English stack text and service metadata that only confuses a
+                # teacher. The request id is enough to find the real cause.
+                err_msg = (
+                    "Noe gikk galt under generering. Prøv igjen litt senere, "
+                    "eller kontakt support med referansen under."
+                )
+                req_logger.error(
+                    f"Job {job_id[:8]} failed: {type(e).__name__}: {e} (req_id={job_id[:8]})",
                     exc_info=True,
                 )
             with _jobs_lock:

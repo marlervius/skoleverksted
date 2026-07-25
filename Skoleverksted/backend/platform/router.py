@@ -276,11 +276,22 @@ def create_theme_pack(request: ThemePackRequest):
         ),
     ]
     tasks = [ThemePackTask(id=uuid4().hex, module=module, title=title, brief=brief, href=href) for module, title, brief, href in task_specs]
+    # The passport describes the whole plan, so it must see the whole plan.
+    # Judging it on the three briefs alone made every theme pack fail the
+    # "content present" check and hid the source the teacher supplied.
+    plan_text = "\n".join([
+        request.title,
+        request.theme,
+        f"{request.subject} {request.level}",
+        request.description,
+        *(f"{task.title}: {task.brief}" for task in tasks),
+        *request.competency_goals,
+    ])
     passport = build_quality_passport(QualityPassportRequest(
         module="platform",
         title=request.title,
-        content=" ".join(task.brief for task in tasks),
-        sources=[],
+        content=plan_text,
+        sources=[request.source_name] if request.source_name.strip() else [],
         competency_goals=request.competency_goals,
         has_answer_key=request.include_assessment,
         prompt_version="theme-pack-planner-v1",

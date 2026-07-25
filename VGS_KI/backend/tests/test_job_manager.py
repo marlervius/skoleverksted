@@ -5,6 +5,7 @@ import threading
 import pytest
 
 from job_manager import (
+    run_job_in_thread,
     cleanup_stale_jobs,
     compute_cache_key,
     get_job,
@@ -123,3 +124,48 @@ def test_cache_key_differs_by_content():
             return {"topic": "Celleånding", "level": "VG1"}
 
     assert compute_cache_key("pdf_lesson", PayloadA()) != compute_cache_key("pdf_lesson", PayloadB())
+
+
+# ── Error masking ─────────────────────────────────────────────────────────────
+
+def _run_failing_job(exception: Exception) -> str:
+    """Run a worker that raises, and return the message the teacher sees."""
+    async def _run() -> str:
+        job_id, queue = register_job()
+
+        def failing_worker(_ctx):
+            raise exception
+
+        run_job_in_thread(job_id, queue, object(), failing_worker)
+        while True:
+            event = await asyncio.wait_for(queue.get(), timeout=30)
+            if event.get("type") == "error":
+                return event["message"]
+
+    return asyncio.run(_run())
+
+
+def test_provider_error_is_not_leaked_to_the_client():
+    message = _run_failing_job(
+        RuntimeError(
+            "ClientError: 400 INVALID_ARGUMENT {'error': {'message': "
+            "'API key not valid. Please pass a valid API key.', "
+            "'domain': 'googleapis.com'}}"
+        )
+    )
+    assert "googleapis.com" not in message
+    assert "INVALID_ARGUMENT" not in message
+    assert "API-nøkkel" in message
+
+
+def test_unknown_error_shows_norwegian_message_with_reference():
+    message = _run_failing_job(ValueError("Segmentation fault in libfoo.so at 0xdeadbeef"))
+    assert "libfoo" not in message
+    assert "0xdeadbeef" not in message
+    assert "Noe gikk galt" in message
+    assert "request_id" in message
+
+
+def test_quota_error_keeps_its_helpful_message():
+    message = _run_failing_job(RuntimeError("429 RESOURCE_EXHAUSTED, retry in 42 seconds"))
+    assert "42 sekunder" in message

@@ -21,6 +21,15 @@ _TOTAL_TIMEOUT = 90
 # Max time per individual claim (seconds) — avoids SymPy simplify hangs
 _CLAIM_TIMEOUT = 8
 
+# Macros ``_manual_parse`` knows how to rewrite into SymPy input. A claim that
+# only uses these is worth handing to the parser even when it contains braces;
+# anything else stays out of the extraction so we do not manufacture claims the
+# parser cannot represent.
+_VERIFIABLE_MACROS = frozenset({
+    "frac", "sqrt", "binom", "cdot", "times", "div", "left", "right",
+    "mathrm", "mathbf", "mathit", "mathsf", "mathtt", "operatorname", "pi",
+})
+
 
 class MathChecker:
     """
@@ -673,7 +682,15 @@ class MathChecker:
         for side in (lhs, rhs):
             if re.search(r"\\(text|textbf|section|begin|end)\b", side):
                 return False
-            if "{" in side or "}" in side:
+            # Braces are normal in real mathematics (\frac{1}{2}, x^{2}, a_{i}).
+            # Only skip the side when it uses a macro we have no reason to
+            # believe SymPy can read — an unverified claim must never be
+            # silently dropped when it is verifiable (grunnlov §1).
+            unknown_macros = [
+                macro for macro in re.findall(r"\\([a-zA-Z]+)", side)
+                if macro not in _VERIFIABLE_MACROS
+            ]
+            if unknown_macros:
                 return False
         combined = f"{lhs} {rhs}"
         if re.search(r"[+\-*/^]|\\frac|\\sqrt|\\cdot", combined):

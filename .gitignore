@@ -28,6 +28,7 @@ htmlcov/
 *.egg-info/
 
 # Runtime and generated documents
+.cache/
 output/
 outputs/
 data/

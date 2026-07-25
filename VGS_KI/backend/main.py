@@ -160,6 +160,20 @@ def sanitize_description(text: str) -> str:
     return text.strip()
 
 
+# ── User-visible errors ──────────────────────────────────────────────────────
+# Provider and compiler exceptions are English, noisy and sometimes carry
+# internal service metadata. The full error goes to the log; the teacher gets a
+# Norwegian message plus the request id that ties the two together.
+USER_FACING_GENERATION_ERROR = (
+    "Noe gikk galt under generering. Prøv igjen litt senere, eller kontakt "
+    "support med referansen under."
+)
+USER_FACING_DOCUMENT_ERROR = (
+    "Dokumentet kunne ikke bygges. Prøv igjen, eller kontakt support med "
+    "referansen under."
+)
+
+
 # ── Cache backend (Redis if available, diskcache otherwise) ──────────────────
 
 def _build_cache():
@@ -907,7 +921,7 @@ async def generate_lesson_sync(request: Request, lesson_request: LessonRequest):
         )
     except Exception as e:
         req_logger.error(f"Generation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e} (request_id={request_id})")
+        raise HTTPException(status_code=500, detail=f"{USER_FACING_GENERATION_ERROR} (request_id={request_id})")
 
     image_path, _image_asset, image_caption, image_credit = _materialize_pedagogical_image(
         image_mode=lesson_request.image_mode,
@@ -937,7 +951,7 @@ async def generate_lesson_sync(request: Request, lesson_request: LessonRequest):
         )
     except Exception as e:
         req_logger.error(f"PDF compile failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"PDF-feil: {e} (request_id={request_id})")
+        raise HTTPException(status_code=500, detail=f"{USER_FACING_DOCUMENT_ERROR} (request_id={request_id})")
     finally:
         if image_path:
             try:
@@ -981,7 +995,7 @@ async def generate_lesson_json(request: Request, lesson_request: LessonRequest):
         )
     except Exception as e:
         req_logger.error(f"JSON generation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e} (request_id={request_id})")
+        raise HTTPException(status_code=500, detail=f"{USER_FACING_GENERATION_ERROR} (request_id={request_id})")
 
     response_data = {
         "topic": content["topic"],
@@ -1045,7 +1059,7 @@ async def recompile_lesson(request: Request, req: RecompileRequest):
         pdf_bytes = await asyncio.to_thread(_compile)
     except Exception as e:
         req_logger.error(f"Recompile failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"PDF-feil: {e} (request_id={request_id})")
+        raise HTTPException(status_code=500, detail=f"{USER_FACING_DOCUMENT_ERROR} (request_id={request_id})")
 
     filename = safe_filename("rediger", req.topic, req.level)
     return Response(
@@ -1090,7 +1104,7 @@ async def generate_docx(request: Request, req: DocxRequest):
         )
     except Exception as e:
         req_logger.error(f"Docx generation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Docx-feil: {e} (request_id={request_id})")
+        raise HTTPException(status_code=500, detail=f"{USER_FACING_DOCUMENT_ERROR} (request_id={request_id})")
 
     filename = safe_filename("leksjon", req.topic, req.level).replace(".pdf", ".docx")
     return Response(

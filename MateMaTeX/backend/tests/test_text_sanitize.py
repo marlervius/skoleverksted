@@ -24,6 +24,17 @@ class TestStripMarkdown:
     def test_backticks(self):
         assert strip_markdown("`Tysk samling`") == "Tysk samling"
 
+    def test_math_inside_command_is_restored(self):
+        """A command wrapping inline math must come back intact, not as placeholders."""
+        raw = r"\caption{Kule med radius $r$ og høyde $h$.}"
+        assert strip_markdown(raw) == raw
+
+    def test_no_placeholder_bytes_survive(self):
+        raw = r"\section{Areal $A$}" + "\n" + r"\caption{Volum $V$ og masse $m$}"
+        out = strip_markdown(raw)
+        assert "\x00" not in out
+        assert "MMTX" not in out
+
 
 class TestSanitizeLatexBody:
     def test_combined(self):
@@ -31,3 +42,10 @@ class TestSanitizeLatexBody:
         out = sanitize_latex_body(raw)
         assert "Østerrike-Ungarn" in out
         assert "**" not in out
+
+    def test_full_document_stays_compilable(self):
+        """The preamble contains commands with inline math; none may be corrupted."""
+        from app.latex.preamble import wrap_with_preamble
+
+        out = sanitize_latex_body(wrap_with_preamble(r"\section*{Test} Hei $1+1=2$."))
+        assert "\x00" not in out
