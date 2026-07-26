@@ -1,7 +1,7 @@
 """
 Topic coverage specs — map grade + tema to required subtopics and off-topic guards.
 
-Used by pedagogue/author prompts and the content-quality gate so kapittel
+Used by pedagogue/author prompts and the content-quality gate so textbook
 material actually covers the curriculum (e.g. Funksjoner in VG1 1T).
 """
 
@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.curriculum.lk20 import COMPETENCY_GOALS, get_topics_for_grade
+from app.latex.preamble import TEXTBOOK_MATERIAL_TYPES
 
 # Keywords that indicate a subtopic is present in LaTeX (lowercase matching).
 SUBTOPIC_KEYWORDS: dict[str, list[str]] = {
@@ -164,7 +165,7 @@ def get_topic_coverage_spec(
         min_exercises=max(6, num_exercises),
     )
 
-    if material_type != "kapittel":
+    if material_type not in TEXTBOOK_MATERIAL_TYPES:
         spec.min_theory_sections = 0
         spec.min_examples = 2
         spec.min_graphs = 1 if material_type != "prøve" else 0
@@ -225,7 +226,7 @@ def format_coverage_for_prompt(
         competency_goals=competency_goals,
     )
 
-    if material_type != "kapittel":
+    if material_type not in TEXTBOOK_MATERIAL_TYPES:
         return ""
 
     lines = [

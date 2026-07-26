@@ -29,6 +29,47 @@ TYPE: DIFFERENSIERT ARBEIDSARK
 - Grunnleggende: færre oppgaver, enklere tall, flere hint
 - Avansert: utfordringsoppgaver og sammensatte problemer
 """
+    if material_type == "hefte":
+        return """
+TYPE: HEFTE (ferdig læreverk — ikke et ark med oppgaver!)
+Heftet skal oppleves som et ferdig produkt eleven kan arbeide gjennom fra start
+til slutt: moderne internasjonal lærebokstil, tydelig progresjon og solid fasit.
+
+PLANLEGG DENNE REKKEFØLGEN (10 deler):
+1. Forside: tema, fag/nivå, kort undertittel og ett visuelt hovedmotiv.
+2. «Hva skal du lære?» — 3–6 konkrete læringsmål skrevet TIL eleven.
+3. Forkunnskaper — kort repetisjon av det eleven trenger før nytt stoff.
+4. Teoridel — små seksjoner med ÉN hovedidé om gangen.
+5. Gjennomregnede eksempler — med forklaring og synlige mellomsteg.
+6. Oppgaver — fra grunnleggende ferdigheter til sammensatte anvendelser.
+7. Grafikk og figurer — kun der de faktisk forklarer noe.
+8. Oppsummering — begreper, metoder og sentrale sammenhenger komprimert.
+9. Blandede oppgaver — eleven må selv velge metode.
+10. Fasit — kort, ryddig og komplett.
+
+LÆRINGSSEKVENS FOR HVERT TEMA (A→D):
+A. Intuisjon først: start med idéen eller situasjonen før den formelle regelen
+   når det er pedagogisk naturlig. Bruk graf, tall, figur eller kontekst for å
+   gi begrepet mening.
+B. Ett tydelig eksempel: vis HELE tankegangen. Ikke hopp over algebraiske steg
+   som elever på nivået med rimelighet kan trenge å se.
+C. Progressiv øving: direkte anvendelse → kombinasjon av ferdigheter →
+   tolkning, modellering og åpne spørsmål.
+D. Variasjon: bland regning, graflesing, digitale verktøy, forklaring med ord,
+   problemløsing og virkelighetsnære situasjoner.
+
+SIDEARKITEKTUR: hver hoveddel skal veksle mellom tekst, figur, eksempel og
+oppgavefelt, slik at sidene får visuell rytme. Minst ETT visuelt eller anvendt
+element per hoveddel når temaet egner seg for det.
+
+FORBUDT: Ikke planlegg nivåetiketter. Oppgaver skal ALDRI merkes «lett»,
+«middels» eller «vanskelig» — progresjonen skal ligge i rekkefølgen, ikke i en
+merkelapp.
+
+OMFANG: Skaler antall teoriseksjoner og oppgaver etter ønsket sidetall. Et hefte
+er et komplett produkt, ikke et utdrag: alle 10 delene skal være med selv i et
+kort hefte.
+"""
     if material_type == "kapittel":
         return """
 TYPE: KAPITTEL (lærebok-kapittel — teoritungt!)
@@ -89,6 +130,80 @@ DIFFERENSIERT MODUS:
 - Etter tittel: \\section*{{Grunnleggende}}, deretter \\section*{{Standard}}, deretter \\section*{{Avansert}}
 - Standard-seksjonen inneholder hovedoppgavene (taskbox)
 - Grunnleggende: enklere tall og Tips-bokser; Avansert: utfordringer
+"""
+    if material_type == "hefte":
+        sol = (
+            "Avslutt med \\section*{Fasit} satt i \\begin{multicols}{3} med \\small:\n"
+            "    fasit er oppslagsstoff, ikke lesestoff. Kort, ryddig og KOMPLETT —\n"
+            "    hver oppgave har svar. Vis mellomregning der svaret alene ikke er nok\n"
+            "    til at eleven forstår hvordan man kom dit."
+            if include_solutions
+            else "IKKE inkluder fasit — kun elevversjon av heftet."
+        )
+        return f"""
+HEFTE-MODUS (ferdig læreverk — heftet skal se ut som en moderne lærebok):
+
+BYGG HEFTET I DENNE REKKEFØLGEN:
+1. Forside FØRST, med \\MMAheftetittel{{tema}}{{fag og nivå}}{{kort undertittel}}.
+   Legg ETT visuelt hovedmotiv (TikZ/PGFPlots) rett etter, så \\clearpage.
+   Bruk IKKE \\maketitle eller \\MMAforside i hefte-modus.
+2. \\begin{{laeringsmaal}}[title={{Hva skal du lære?}}] med 3–6 konkrete mål
+   skrevet TIL eleven («du skal kunne ...»). Tittelen MÅ overstyres slik — et
+   hefte er ikke et kapittel.
+3. \\begin{{husk}} med kort repetisjon av forkunnskapene temaet bygger på.
+4. \\section{{...}} per hovedidé — små seksjoner, ÉN idé om gangen. Start hver
+   seksjon med forklarende brødtekst som gir intuisjonen FØR den formelle
+   regelen: bruk graf, tall, figur eller en konkret situasjon.
+5. Begreper i \\begin{{definisjon}}, formler i \\begin{{regel}}[title={{...}}].
+   Den ene setningen eleven MÅ ta med seg: \\begin{{nokkelpoeng}}.
+6. MINST ett fullt gjennomregnet \\begin{{eksempel}}[title={{...}}] per seksjon,
+   med align* og \\forklaring{{...}} på hvert steg. Ikke hopp over algebraiske
+   mellomsteg eleven trenger å se.
+7. \\begin{{vanligfeil}} der det finnes en typisk misforståelse.
+8. Oppgaver som NUMMERERT LISTE under \\section*{{Oppgaver}}, ikke én boks per
+   oppgave:
+       \\begin{{multicols}}{{2}}
+       \\begin{{oppgaver}}
+         \\item Finn nullpunktene til $g(x)=x^2-9$.
+       \\end{{oppgaver}}
+       \\end{{multicols}}
+   Korte kortsvarsoppgaver i to spalter; lange tekstoppgaver i én spalte med
+   \\begin{{oppgaver}}[start=N]. Stigende krav: direkte anvendelse →
+   kombinasjon av ferdigheter → tolkning, modellering og åpne spørsmål.
+9. \\begin{{oppsummering}} som samler begreper, metoder og sammenhenger.
+10. \\section*{{Blandede oppgaver}} der eleven selv må velge metode — ingen hint
+    om hvilken regel som gjelder.
+11. {sol}
+
+MARGKOLONNEN — dette er heftets viktigste særtrekk:
+Siden har en 3 cm marg til høyre som SKAL brukes. Legg minst 3–5 notater i et
+hefte, plassert rett ved linjen de hører til:
+- \\MMAmargbegrep{{Begrep}}{{kort forklaring}} — ordforklaring FØRSTE gang et
+  fagbegrep brukes. Dette er den viktigste bruken.
+- \\MMAmargtips{{...}} — et lite dytt til eleven.
+- \\MMAmargtriks{{...}} — en snarvei verdt å huske.
+Hold hvert notat på 1–2 korte setninger; spalten er smal. ALDRI \\marginpar
+eller \\MMAmarg... inne i multicols, tcolorbox, tabeller eller figurer — det
+kompilerer ikke. Kun i vanlig brødtekst.
+
+APPARATSEKSJONER bruker stjerne: \\section*{{Oppgaver}}, \\section*{{Blandede
+oppgaver}}, \\section*{{Fasit}}. Bare teoriseksjonene nummereres med \\section.
+
+VISUELL RYTME: veksle mellom tekst, figur, eksempel og oppgaveliste. Minst ett
+visuelt eller anvendt element per hoveddel når temaet egner seg. Figurer skal
+forklare noe — ikke være pynt.
+
+STRENGT FORBUDT I HEFTE-MODUS:
+- ALDRI \\MMAniva (vanskelighetsstjerner) og ALDRI ordene «lett», «middels» eller
+  «vanskelig» som merkelapp på oppgaver. Progresjonen ligger i rekkefølgen.
+- Ingen «Generert av»-tekst, ingen datostempel i innholdet.
+
+SPRÅK: vanlig norsk lærebokspråk. Korte setninger og direkte formuleringer. Nye
+fagbegreper forklares første gang de brukes. Unngå akademisk språk og lange
+parenteser. Oppgavetekster skal være tydelige nok til at eleven vet hva som
+forventes. Bruk konsekvent notasjon gjennom hele heftet.
+
+TABELLER: booktabs, og sett hoderaden i \\MMAtabellhode{{...}}.
 """
     if material_type == "kapittel":
         return """

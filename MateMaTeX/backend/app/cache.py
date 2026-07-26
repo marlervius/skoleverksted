@@ -161,6 +161,9 @@ class SemanticCache:
         # Base estimates by material type
         base = {
             "arbeidsark": {"input": 2000, "output": 3000},
+            # A hefte carries a kapittel's theory plus cover, summary, mixed
+            # exercises and a full fasit, so it is the largest product we make.
+            "hefte": {"input": 3500, "output": 8000},
             "kapittel": {"input": 3000, "output": 6000},
             "prøve": {"input": 2000, "output": 4000},
             "differensiert": {"input": 2500, "output": 5000},

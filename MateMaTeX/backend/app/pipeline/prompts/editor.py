@@ -81,6 +81,22 @@ DETTE ER ET LÆREBOK-KAPITTEL: teoritungt innhold er meningen. IKKE forkort elle
 komprimer teorien. Behold all forklarende tekst, alle definisjoner og ALLE
 eksempler med fulle mellomregninger. Output skal være minst like langt som input.
 """
+    elif material_type == "hefte":
+        chapter_check = """
+DETTE ER ET FERDIG HEFTE: teoritungt innhold er meningen. IKKE forkort eller
+komprimer teorien. Behold all forklarende tekst, alle definisjoner og ALLE
+eksempler med fulle mellomregninger. Output skal være minst like langt som input.
+Behold \\MMAheftetittel, læringsmålene, forkunnskapene, oppsummeringen, de
+blandede oppgavene og fasiten — alle delene er obligatoriske i et hefte.
+Behold ALLE margnotater (\\MMAmargbegrep, \\MMAmargtips, \\MMAmargtriks) der de
+står — de fyller margkolonnen, og uten dem står 3 cm tomt på hver side. Flytt
+dem aldri inn i multicols, tcolorbox, tabeller eller figurer; da kompilerer de
+ikke.
+Behold oppgavene som \\begin{oppgaver}-lister i multicols. Ikke gjør dem om til
+én taskbox per oppgave.
+Fjern nivåetiketter: heftet skal ikke merke oppgaver som «lett», «middels» eller
+«vanskelig», og skal ikke bruke \\MMAniva.
+"""
 
     return f"""\
 Kvalitetssikre dette LaTeX-innholdet:

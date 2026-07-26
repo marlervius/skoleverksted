@@ -1,5 +1,6 @@
 """
-Rule-based content quality gate for kapittel (and light checks for other types).
+Rule-based content quality gate for textbook products (hefte, kapittel) with
+light checks for the other material types.
 
 Scores pedagogical completeness: curriculum coverage, examples, graphs,
 explore/analyze/draw (LK20), and off-topic guards.
@@ -13,6 +14,7 @@ from app.curriculum.topic_coverage import (
     get_topic_coverage_spec,
     keywords_for_subtopic,
 )
+from app.latex.preamble import TEXTBOOK_MATERIAL_TYPES
 from app.models.state import ContentQualityIssue, ContentQualityReport, GenerationRequest
 
 
@@ -26,6 +28,124 @@ def _has_any(text_lower: str, keywords: list[str]) -> bool:
 
 def _subtopic_covered(text_lower: str, subtopic: str) -> bool:
     return _has_any(text_lower, keywords_for_subtopic(subtopic))
+
+
+def _count_exercises(body: str) -> int:
+    """
+    Count exercises across both shapes we produce.
+
+    Worksheets put one exercise per ``taskbox``. Textbook products use a
+    numbered ``oppgaver`` list instead, so the items inside those lists have to
+    count too — otherwise a hefte with twenty exercises reads as having none and
+    fails its own coverage bar.
+    """
+    count = _count_pattern(body, r"\\begin\{taskbox\}")
+    for block in re.findall(
+        r"\\begin\{oppgaver\}.*?\\end\{oppgaver\}", body, flags=re.DOTALL
+    ):
+        count += len(re.findall(r"\\item\b", block))
+    if count == 0:
+        count = _count_pattern(body, r"\\textbf\{Oppgave\s+\d+")
+    return count
+
+
+# The production spec makes ten parts mandatory in a hefte, and forbids marking
+# exercises by difficulty ("nivådeling skjer uten etiketter"). A hefte that
+# silently drops the fasit or the mixed exercises is not the product that was
+# ordered, so these are gate failures rather than warnings.
+_HEFTE_REQUIRED = (
+    ("missing_cover", r"\\MMAheftetittel", "Heftet mangler forside (\\MMAheftetittel)."),
+    (
+        "missing_learning_goals",
+        r"\\begin\{laeringsmaal\}",
+        "Heftet mangler «Hva skal du lære?» (laeringsmaal-boks).",
+    ),
+    (
+        "missing_prior_knowledge",
+        r"\\begin\{husk\}",
+        "Heftet mangler forkunnskaper (husk-boks).",
+    ),
+    (
+        "missing_summary",
+        r"\\begin\{oppsummering\}",
+        "Heftet mangler oppsummering.",
+    ),
+)
+
+# "lett/middels/vanskelig" is only a problem as a *label* — in running prose it
+# is ordinary Norwegian. Match it inside headings and task titles only.
+_LEVEL_LABEL = re.compile(
+    r"\\(?:section\*?|subsection\*?)\{[^}]*\b(lett|middels|vanskelig)\w*\b"
+    r"|\\begin\{taskbox\}\{[^}]*\b(lett|middels|vanskelig)\w*\b",
+    re.IGNORECASE,
+)
+
+
+def _hefte_issues(body: str, request: GenerationRequest) -> list[ContentQualityIssue]:
+    """Check the parts the production spec makes mandatory in a hefte."""
+    issues: list[ContentQualityIssue] = []
+
+    for code, pattern, message in _HEFTE_REQUIRED:
+        if not re.search(pattern, body):
+            issues.append(ContentQualityIssue(code=code, message=message))
+
+    if not re.search(r"\\section\*?\{[^}]*blandede", body, re.IGNORECASE):
+        issues.append(
+            ContentQualityIssue(
+                code="missing_mixed_exercises",
+                message="Heftet mangler «Blandede oppgaver» der eleven selv velger metode.",
+            )
+        )
+
+    if request.include_solutions and not re.search(
+        r"\\section\*?\{[^}]*fasit", body, re.IGNORECASE
+    ):
+        issues.append(
+            ContentQualityIssue(
+                code="missing_fasit",
+                message="Heftet mangler fasit.",
+            )
+        )
+
+    # The layout reserves a 3 cm note column on every page. If the author never
+    # writes into it, the hefte is not just missing scaffolding — it looks
+    # lopsided, with dead space down the whole outer edge.
+    margin_notes = len(
+        re.findall(r"\\MMAmarg(?:begrep|tips|triks|note)\b", body)
+    )
+    if margin_notes < 2:
+        issues.append(
+            ContentQualityIssue(
+                code="unused_margin",
+                message=(
+                    f"Bare {margin_notes} margnotat(er). Margkolonnen skal brukes "
+                    "til ordforklaringer, tips og triks — ellers står den tom."
+                ),
+            )
+        )
+
+    if r"\MMAniva" in body:
+        issues.append(
+            ContentQualityIssue(
+                code="difficulty_label",
+                message=(
+                    "Heftet bruker \\MMAniva. Nivådeling skal skje uten "
+                    "vanskelighetsmerking."
+                ),
+            )
+        )
+    elif _LEVEL_LABEL.search(body):
+        issues.append(
+            ContentQualityIssue(
+                code="difficulty_label",
+                message=(
+                    "Oppgaver eller seksjoner er merket «lett/middels/vanskelig». "
+                    "Progresjonen skal ligge i rekkefølgen, ikke i en merkelapp."
+                ),
+            )
+        )
+
+    return issues
 
 
 def evaluate_content_quality(
@@ -54,9 +174,7 @@ def evaluate_content_quality(
     graph_count = _count_pattern(body, r"\\begin\{axis\}") + _count_pattern(
         body, r"\\begin\{tikzpicture\}"
     )
-    exercise_count = _count_pattern(body, r"\\begin\{taskbox\}")
-    if exercise_count == 0:
-        exercise_count = _count_pattern(body, r"\\textbf\{Oppgave\s+\d+")
+    exercise_count = _count_exercises(body)
     body_chars = len(re.sub(r"\s+", " ", semantic_body).strip())
 
     report = ContentQualityReport(
@@ -106,6 +224,8 @@ def evaluate_content_quality(
                     message="Prøven mangler poengangivelse eller poengskjema.",
                 )
             )
+    elif request.material_type == "hefte":
+        issues.extend(_hefte_issues(body, request))
     elif request.material_type == "differensiert":
         for level in ("grunnleggende", "standard", "avansert"):
             if not re.search(
@@ -118,7 +238,7 @@ def evaluate_content_quality(
                     )
                 )
 
-    if request.material_type != "kapittel":
+    if request.material_type not in TEXTBOOK_MATERIAL_TYPES:
         report.issues = issues
         report.score = max(0, 100 - 25 * len(issues))
         report.passed = not issues

@@ -9,7 +9,7 @@ import { categorizeError } from "@/lib/map-api-result";
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-export type PdfTheme = "default" | "calm" | "playful" | "highcontrast";
+export type PdfTheme = "default" | "calm" | "playful" | "highcontrast" | "laerebok";
 
 export interface PdfStyle {
   theme: PdfTheme;

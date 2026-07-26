@@ -66,6 +66,7 @@ const TOPICS: Record<string, string[]> = {
 
 const MATERIAL_TYPES = [
   { value: "arbeidsark", label: "Oppgaveark", desc: "Sett med oppgaver og løsninger", icon: "📝" },
+  { value: "hefte", label: "Hefte", desc: "Ferdig læreverk med forside, oppsummering og fasit", icon: "📕" },
   { value: "kapittel", label: "Fullt kapittel", desc: "Teori, eksempler og oppgaver", icon: "📖" },
   { value: "prøve", label: "Eksamen", desc: "Prøve med poengskjema", icon: "📋" },
   { value: "differensiert", label: "Differensiert", desc: "Grunnleggende, standard og avansert i ett dokument", icon: "🔀" },
@@ -79,6 +80,7 @@ const LANGUAGE_LEVELS = [
 
 const THEME_OPTIONS: { value: PdfTheme; label: string; icon: string }[] = [
   { value: "default", label: "Klassisk", icon: "🔵" },
+  { value: "laerebok", label: "Lærebok", icon: "📘" },
   { value: "calm", label: "Rolig", icon: "🌿" },
   { value: "playful", label: "Leken", icon: "🎨" },
   { value: "highcontrast", label: "Kontrast", icon: "⬛" },
@@ -98,7 +100,7 @@ const slideVariants = {
 
 function MaterialPreviewMock({ active }: { active: string }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-6" aria-hidden="true">
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-6" aria-hidden="true">
       {MATERIAL_TYPES.map((t) => (
         <div
           key={t.value}
@@ -119,6 +121,13 @@ function MaterialPreviewMock({ active }: { active: string }) {
               <>
                 <div className="h-8 bg-accent-blue/10 rounded mt-2" />
                 <div className="h-1.5 bg-border rounded w-full mt-1" />
+              </>
+            )}
+            {t.value === "hefte" && (
+              <>
+                <div className="h-2 bg-accent-blue/40 rounded w-1/2 mt-2" />
+                <div className="h-6 bg-accent-blue/10 rounded mt-1" />
+                <div className="h-4 bg-accent-green/10 rounded mt-1" />
               </>
             )}
             {(t.value === "arbeidsark" || t.value === "differensiert") && (
