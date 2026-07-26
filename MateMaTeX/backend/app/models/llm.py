@@ -18,6 +18,56 @@ from app.config import LLMProviderConfig, get_config
 logger = structlog.get_logger()
 
 
+class TruncatedResponseError(RuntimeError):
+    """
+    The model stopped because it ran out of output tokens, not because it was
+    finished.
+
+    Half a chapter is worse than no chapter: it compiles, it looks plausible,
+    and it ends mid-sentence somewhere a teacher may not notice before handing
+    it out. Every caller must treat this as a failure rather than content.
+    """
+
+
+# Each provider spells "I ran out of room" differently, and LangChain passes the
+# raw value through. Anything here means the text is incomplete.
+_TRUNCATION_MARKERS = frozenset({"max_tokens", "length", "model_length"})
+
+
+def _finish_reason(response: Any) -> str:
+    """Best-effort extraction of the provider's stop reason, lowercased."""
+    metadata = getattr(response, "response_metadata", None) or {}
+    if not isinstance(metadata, dict):
+        return ""
+    for key in ("finish_reason", "stop_reason", "finishReason"):
+        value = metadata.get(key)
+        if value:
+            return str(value).strip().lower()
+    # Gemini nests it when several candidates come back.
+    candidates = metadata.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        first = candidates[0]
+        if isinstance(first, dict):
+            value = first.get("finish_reason") or first.get("finishReason")
+            if value:
+                return str(value).strip().lower()
+    return ""
+
+
+def _reject_if_truncated(response: Any, *, provider: str, model: str) -> None:
+    reason = _finish_reason(response)
+    if reason not in _TRUNCATION_MARKERS:
+        return
+    logger.error(
+        "llm_response_truncated", provider=provider, model=model, finish_reason=reason
+    )
+    raise TruncatedResponseError(
+        f"Modellen ({provider}/{model}) nådde grensen for hvor mye den kan skrive "
+        f"({reason}), så svaret er ufullstendig. Øk MAX_OUTPUT_TOKENS eller be om "
+        "et kortere dokument."
+    )
+
+
 def _message_content_to_str(content: Any) -> str:
     """
     Normalize AIMessage.content to a single string.
@@ -50,7 +100,9 @@ def _message_content_to_str(content: Any) -> str:
 # ---------------------------------------------------------------------------
 # Provider registry
 # ---------------------------------------------------------------------------
-def _create_google(model: str, api_key: str, temperature: float) -> BaseChatModel:
+def _create_google(
+    model: str, api_key: str, temperature: float, max_tokens: int
+) -> BaseChatModel:
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     return ChatGoogleGenerativeAI(
@@ -59,32 +111,39 @@ def _create_google(model: str, api_key: str, temperature: float) -> BaseChatMode
         temperature=temperature,
         convert_system_message_to_human=True,
         # Allow long, theory-rich chapters without truncating the body.
-        max_output_tokens=8192,
+        max_output_tokens=max_tokens,
     )
 
 
-def _create_anthropic(model: str, api_key: str, temperature: float) -> BaseChatModel:
+def _create_anthropic(
+    model: str, api_key: str, temperature: float, max_tokens: int
+) -> BaseChatModel:
     from langchain_anthropic import ChatAnthropic
 
     return ChatAnthropic(
         model=model,
         anthropic_api_key=api_key,
         temperature=temperature,
-        max_tokens=8192,
+        max_tokens=max_tokens,
     )
 
 
-def _create_openai(model: str, api_key: str, temperature: float) -> BaseChatModel:
+def _create_openai(
+    model: str, api_key: str, temperature: float, max_tokens: int
+) -> BaseChatModel:
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(
         model=model,
         api_key=api_key,
         temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 
-def _create_ollama(model: str, base_url: str, temperature: float) -> BaseChatModel:
+def _create_ollama(
+    model: str, base_url: str, temperature: float, max_tokens: int
+) -> BaseChatModel:
     from langchain_openai import ChatOpenAI
 
     # Ollama exposes an OpenAI-compatible API
@@ -93,14 +152,15 @@ def _create_ollama(model: str, base_url: str, temperature: float) -> BaseChatMod
         base_url=f"{base_url}/v1",
         api_key="ollama",  # Ollama doesn't need a real key
         temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 
 _PROVIDER_FACTORIES = {
-    "google": lambda m, cfg, t: _create_google(m, cfg.google_api_key, t),
-    "anthropic": lambda m, cfg, t: _create_anthropic(m, cfg.anthropic_api_key, t),
-    "openai": lambda m, cfg, t: _create_openai(m, cfg.openai_api_key, t),
-    "ollama": lambda m, cfg, t: _create_ollama(m, cfg.ollama_base_url, t),
+    "google": lambda m, cfg, t, n: _create_google(m, cfg.google_api_key, t, n),
+    "anthropic": lambda m, cfg, t, n: _create_anthropic(m, cfg.anthropic_api_key, t, n),
+    "openai": lambda m, cfg, t, n: _create_openai(m, cfg.openai_api_key, t, n),
+    "ollama": lambda m, cfg, t, n: _create_ollama(m, cfg.ollama_base_url, t, n),
 }
 
 _PROVIDER_CREDENTIALS = {
@@ -133,6 +193,7 @@ class LLMInterface:
         cfg = config or get_config().llm
         self._config = cfg
         self._temperature = temperature if temperature is not None else cfg.temperature
+        self._max_output_tokens = int(getattr(cfg, "max_output_tokens", 32768))
 
         # Primary model
         primary_provider = provider or cfg.primary_provider
@@ -185,7 +246,7 @@ class LLMInterface:
                 raise ValueError(
                     f"{provider.title()}-leverandøren mangler {environment_variable}."
                 )
-        return factory(model, self._config, self._temperature)
+        return factory(model, self._config, self._temperature, self._max_output_tokens)
 
     @property
     def provider(self) -> str:
@@ -208,6 +269,9 @@ class LLMInterface:
         try:
             response = self._primary.invoke(messages)
             self._extract_usage(response)
+            _reject_if_truncated(
+                response, provider=self._provider_name, model=self._model_name
+            )
             return _message_content_to_str(response.content)
         except Exception as primary_err:
             logger.warning(
@@ -222,6 +286,11 @@ class LLMInterface:
                     logger.info("attempting_fallback_llm")
                     response = self._fallback.invoke(messages)
                     self._extract_usage(response)
+                    _reject_if_truncated(
+                        response,
+                        provider=self._config.fallback_provider,
+                        model=self._config.fallback_model,
+                    )
                     return _message_content_to_str(response.content)
                 except Exception as fallback_err:
                     logger.error(
@@ -246,6 +315,9 @@ class LLMInterface:
         try:
             response = await self._primary.ainvoke(messages)
             self._extract_usage(response)
+            _reject_if_truncated(
+                response, provider=self._provider_name, model=self._model_name
+            )
             return _message_content_to_str(response.content)
         except Exception as primary_err:
             logger.warning(
@@ -258,6 +330,11 @@ class LLMInterface:
                 try:
                     response = await self._fallback.ainvoke(messages)
                     self._extract_usage(response)
+                    _reject_if_truncated(
+                        response,
+                        provider=self._config.fallback_provider,
+                        model=self._config.fallback_model,
+                    )
                     return _message_content_to_str(response.content)
                 except Exception as fallback_err:
                     logger.error(

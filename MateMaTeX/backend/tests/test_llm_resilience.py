@@ -46,11 +46,11 @@ class LLMResilienceTests(unittest.TestCase):
     def test_unconfigured_fallback_provider_is_disabled(self):
         calls: list[tuple[str, str]] = []
 
-        def google_factory(model, _cfg, _temperature):
+        def google_factory(model, _cfg, _temperature, _max_tokens):
             calls.append(("google", model))
             return _FakeModel()
 
-        def anthropic_factory(model, _cfg, _temperature):
+        def anthropic_factory(model, _cfg, _temperature, _max_tokens):
             calls.append(("anthropic", model))
             return _FakeModel()
 
@@ -69,7 +69,7 @@ class LLMResilienceTests(unittest.TestCase):
         self.assertIsNone(interface._fallback)
 
     def test_fallback_failure_does_not_mask_primary_failure(self):
-        def google_factory(model, _cfg, _temperature):
+        def google_factory(model, _cfg, _temperature, _max_tokens):
             if model == "gemini-primary":
                 return _FakeModel("primary model unavailable")
             return _FakeModel("fallback quota exceeded")
