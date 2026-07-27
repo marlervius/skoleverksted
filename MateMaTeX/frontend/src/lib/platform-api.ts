@@ -99,6 +99,7 @@ export type MaterialKind =
   | "presentation"
   | "source_task"
   | "differentiated"
+  | "compendium"
   | "other";
 
 export interface YearPlanMaterial {
@@ -164,6 +165,102 @@ export interface YearPlanGenerateInput {
   number_of_periods: number;
   competency_goals: string[];
   constraints: string;
+  use_ai: boolean;
+}
+
+export type CompendiumKind =
+  | "thematic"
+  | "chronological"
+  | "reference"
+  | "comparative"
+  | "source_collection"
+  | "appendix";
+export type CompendiumStatus = "outline" | "writing" | "review" | "approved" | "archived";
+export type CompendiumChapterStatus = "planned" | "generated" | "approved" | "needs_revision";
+export type CompendiumImageMode = "none" | "commons" | "ai";
+
+export interface CompendiumSource {
+  title: string;
+  url: string;
+  publisher: string;
+}
+
+export interface ScopeContract {
+  reference_date: string;
+  geography: string;
+  inclusion_criteria: string[];
+  exclusions: string[];
+  completeness_label: "complete" | "documented" | "selected";
+  completeness_note: string;
+}
+
+export interface CompendiumChapter {
+  id: string;
+  order: number;
+  title: string;
+  purpose: string;
+  guiding_questions: string[];
+  content_markdown: string;
+  key_facts: string[];
+  glossary: string[];
+  sources: CompendiumSource[];
+  verification_notes: string[];
+  status: CompendiumChapterStatus;
+  updated_at: string;
+}
+
+export interface Compendium {
+  id: string;
+  title: string;
+  topic: string;
+  subject: string;
+  level: string;
+  kind: CompendiumKind;
+  purpose: string;
+  audience: string;
+  target_pages: number;
+  competency_goals: string[];
+  source_brief: string;
+  scope_contract: ScopeContract;
+  chapters: CompendiumChapter[];
+  include_timeline: boolean;
+  include_tables: boolean;
+  include_glossary: boolean;
+  include_reflection_tasks: boolean;
+  image_mode: CompendiumImageMode;
+  year_plan_id: string | null;
+  period_ids: string[];
+  planning_source: "ai" | "fallback" | "manual";
+  status: CompendiumStatus;
+  pdf_filename: string;
+  pdf_size_bytes: number;
+  docx_filename: string;
+  docx_size_bytes: number;
+  artifact_version: number;
+  approved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompendiumPlanInput {
+  title?: string;
+  topic: string;
+  subject: string;
+  level: string;
+  kind: CompendiumKind;
+  purpose: string;
+  audience: string;
+  target_pages: number;
+  chapter_count: number;
+  competency_goals: string[];
+  source_brief: string;
+  include_timeline: boolean;
+  include_tables: boolean;
+  include_glossary: boolean;
+  include_reflection_tasks: boolean;
+  image_mode: CompendiumImageMode;
+  year_plan_id?: string | null;
+  period_ids: string[];
   use_ai: boolean;
 }
 
@@ -267,6 +364,45 @@ export const updateYearPlanMaterial = (
 
 export const yearPlanMaterialDownloadUrl = (planId: string, materialId: string) =>
   `${baseUrl()}/year-plans/${encodeURIComponent(planId)}/materials/${encodeURIComponent(materialId)}/download`;
+
+export const listCompendia = (limit = 50) =>
+  requestJson<Compendium[]>(`/compendia?limit=${limit}`);
+export const getCompendium = (id: string) =>
+  requestJson<Compendium>(`/compendia/${encodeURIComponent(id)}`);
+export const createCompendiumOutline = (input: CompendiumPlanInput) =>
+  requestJson<Compendium>("/compendia/outline", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+export const updateCompendium = (id: string, input: Partial<Compendium>) =>
+  requestJson<Compendium>(`/compendia/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+export const updateCompendiumChapter = (
+  compendiumId: string,
+  chapterId: string,
+  input: Partial<CompendiumChapter>,
+) =>
+  requestJson<Compendium>(
+    `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+export const generateCompendiumChapter = (compendiumId: string, chapterId: string) =>
+  requestJson<Compendium>(
+    `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}/generate`,
+    { method: "POST" },
+  );
+export const compileCompendium = (compendiumId: string) =>
+  requestJson<Compendium>(`/compendia/${encodeURIComponent(compendiumId)}/compile`, {
+    method: "POST",
+  });
+export const approveCompendium = (compendiumId: string) =>
+  requestJson<Compendium>(`/compendia/${encodeURIComponent(compendiumId)}/approve`, {
+    method: "POST",
+  });
+export const compendiumDownloadUrl = (compendiumId: string, artifactType: "pdf" | "docx") =>
+  `${baseUrl()}/compendia/${encodeURIComponent(compendiumId)}/download/${artifactType}`;
 
 export async function downloadThemePackGuide(projectId: string): Promise<void> {
   const response = await fetch(`${baseUrl()}/theme-packs/${encodeURIComponent(projectId)}/teacher-guide`);

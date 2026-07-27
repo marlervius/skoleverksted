@@ -10,6 +10,7 @@ import {
   Search,
   LayoutTemplate,
   Share2,
+  BookCopy,
 } from "lucide-react";
 
 interface CommandItem {
@@ -21,6 +22,13 @@ interface CommandItem {
 }
 
 const COMMANDS: CommandItem[] = [
+  {
+    id: "compendia",
+    label: "Nytt kompendium",
+    category: "Handlinger",
+    icon: <BookCopy size={16} />,
+    action: () => (window.location.href = "/compendia/new"),
+  },
   {
     id: "new-gen",
     label: "Ny generering",

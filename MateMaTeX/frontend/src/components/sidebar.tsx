@@ -19,6 +19,7 @@ import {
   FolderKanban,
   PackagePlus,
   CalendarRange,
+  BookCopy,
 } from "lucide-react";
 
 interface NavItem {
@@ -33,6 +34,7 @@ const mainNav: NavItem[] = [
 
 const commonSecondaryNav: NavItem[] = [
   { href: "/year-plans", label: "Årsplaner", icon: <CalendarRange size={20} /> },
+  { href: "/compendia", label: "Kompendier", icon: <BookCopy size={20} /> },
   { href: "/theme-pack", label: "Temapakke", icon: <PackagePlus size={20} /> },
   { href: "/projects", label: "Prosjekter", icon: <FolderKanban size={20} /> },
   { href: "/templates", label: "Maler", icon: <LayoutTemplate size={20} /> },

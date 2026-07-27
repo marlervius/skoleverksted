@@ -6,6 +6,7 @@ import {
   AlertCircle,
   ArrowLeft,
   BookOpenCheck,
+  BookCopy,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
@@ -52,6 +53,7 @@ const materialLabels: Record<MaterialKind, string> = {
   presentation: "Presentasjon",
   source_task: "Kildeoppgave",
   differentiated: "Differensiert",
+  compendium: "Kompendium",
   other: "Annet",
 };
 
@@ -426,6 +428,18 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
                         <Link className="btn-secondary" href={generationHref(plan, period, "laeringsark", "worksheet")}><NotebookPen className="h-4 w-4" /> Oppgaveark</Link>
                         <Link className="btn-secondary" href={generationHref(plan, period, "prove", "assessment")}><ClipboardCheck className="h-4 w-4" /> Prøve</Link>
                         <Link className="btn-secondary" href={generationHref(plan, period, "sekvens", "lesson_sequence")}><Layers3 className="h-4 w-4" /> Sekvens</Link>
+                        <Link
+                          className="btn-secondary"
+                          href={`/compendia/new?${new URLSearchParams({
+                            topic: period.theme || period.title,
+                            subject: plan.subject,
+                            level: plan.level,
+                            yearPlan: plan.id,
+                            period: period.id,
+                          })}`}
+                        >
+                          <BookCopy className="h-4 w-4" /> Kompendium
+                        </Link>
                       </div>
                     </div>
 

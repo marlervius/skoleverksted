@@ -44,7 +44,7 @@ export default function PersonvernPage() {
             <strong className="text-text-primary">Generert innhold</strong> — LaTeX/PDF lagres midlertidig
             for nedlasting og kan caches for raskere gjentakelse av samme forespørsel.
           </li>
-          <li><strong className="text-text-primary">Prosjekter og jobbindeks</strong> — temapakker og teknisk jobbhistorikk lagres i plattformdatabasen til de slettes eller arkiveres.</li>
+          <li><strong className="text-text-primary">Prosjekter, årsplaner og kompendier</strong> — planer, kapitteltekster, kildelister og godkjente dokumentfiler lagres i plattformdatabasen og det vedvarende fillageret til de arkiveres eller slettes.</li>
           <li>
             <strong className="text-text-primary">Kontodata</strong> (når aktivert) — e-post og betaling
             for abonnement, behandles minimalt og hostes i EU/EØS der det er praktisk mulig.

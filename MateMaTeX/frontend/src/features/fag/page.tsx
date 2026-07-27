@@ -72,6 +72,7 @@ const MATERIAL_LABELS: Record<MaterialKind, string> = {
   presentation: "Presentasjon",
   source_task: "Kildeoppgave",
   differentiated: "Differensiert læremiddel",
+  compendium: "Kompendium",
   other: "Læremiddel",
 };
 

@@ -12,6 +12,10 @@ kvalitetspass, drift og offentlig API-adresse er felles.
 
 ## Ny felles produktflyt
 
+- **Kompendier** lager først en avgrensningskontrakt og redigerbar disposisjon.
+  Etter lærerens godkjenning produseres, kildekontrolleres og godkjennes ett
+  kapittel om gangen før en versjonert PDF- og Word-utgave bygges. Dokumentet
+  kan knyttes til én eller flere perioder i en årsplan.
 - **Årsplaner** lager et redigerbart årshjul for fag, nivå, timetall og
   kompetansemål. Hver periode kan sende en ferdig utfylt bestilling til
   fagverkstedet, og læreren godkjenner eksplisitt PDF-en før den lagres og
@@ -51,6 +55,10 @@ utførelsen flyttes til en felles Redis-kø uten å endre brukergrensesnittet.
 
 Felles plattform-API ligger under `/api/platform`:
 
+- `GET /compendia` og `POST /compendia/outline`
+- `GET/PATCH /compendia/{id}` og kapitteloperasjoner under `/chapters/{chapter_id}`
+- `POST /compendia/{id}/compile` og `POST /compendia/{id}/approve`
+- `GET /compendia/{id}/download/{pdf|docx}`
 - `GET/POST /year-plans`
 - `POST /year-plans/generate`
 - `GET/PATCH /year-plans/{id}` og perioder under `/periods/{period_id}`
@@ -136,6 +144,8 @@ oppskriften og frontendvariablene.
 Bildemodus er alltid et aktivt lærervalg. «Frie bilder» bruker et eget
 bildecrew, lisensfiltrering og Wikimedia Commons-attributt. «Lag AI-bilde»
 lager maksimalt én illustrasjon per PDF og merker den som KI-generert.
+I kompendier brukes KI-bildet bare som illustrasjon; historiske kart og
+dokumentariske bilder skal komme fra kontrollerte, krediterte kilder.
 
 ### Vercel frontend
 
