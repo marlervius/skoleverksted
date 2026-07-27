@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import tempfile
@@ -5,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from Skoleverksted.backend.platform.compendium import plan_compendium
+from Skoleverksted.backend.platform.compendium import (
+    _extract_json,
+    generate_compendium_chapter,
+    plan_compendium,
+)
 from Skoleverksted.backend.platform.compendium_renderer import (
     build_docx,
     build_typst_document,
@@ -14,6 +19,7 @@ from Skoleverksted.backend.platform.compendium_renderer import (
 from Skoleverksted.backend.platform.models import (
     CompendiumChapter,
     CompendiumPlanRequest,
+    CompendiumSource,
     YearPlanCreate,
     YearPlanPeriod,
 )
@@ -40,6 +46,78 @@ def test_fallback_outline_has_scope_contract_and_requested_chapters():
     assert proposal.scope_contract.completeness_label == "documented"
     assert "1450" in proposal.scope_contract.reference_date
     assert all(chapter.guiding_questions for chapter in proposal.chapters)
+
+
+def test_json_extractor_uses_the_first_complete_object():
+    payload = _extract_json(
+        '```json\n{"content_markdown":"## Kapittel","sources":[]}\n```\n'
+        "Grounding metadata: {ikke del av svaret}"
+    )
+    assert payload["content_markdown"] == "## Kapittel"
+
+
+def test_failed_regeneration_keeps_the_previous_chapter(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
+        chapter = compendium.chapters[0]
+        previous_content = (
+            "## Kontrollert utkast\n\n"
+            "Dette er lærerens eksisterende kapitteltekst, og den må ikke bli overskrevet "
+            "dersom en ny KI-generering feiler."
+        )
+        chapter.content_markdown = previous_content
+        chapter.sources = [CompendiumSource(title="Eksisterende kilde", url="https://example.org")]
+        chapter.status = "needs_revision"
+
+        def fail_json(*_args, **_kwargs):
+            raise json.JSONDecodeError("Expecting property name enclosed in double quotes", "{", 1)
+
+        monkeypatch.setattr(
+            "Skoleverksted.backend.platform.compendium._call_google_json",
+            fail_json,
+        )
+
+        regenerated = generate_compendium_chapter(compendium, chapter.id)
+        assert regenerated.status == "needs_revision"
+        assert regenerated.content_markdown == previous_content
+        assert regenerated.sources[0].title == "Eksisterende kilde"
+        assert "bevart" in regenerated.verification_notes[0]
+        assert "Expecting property" not in regenerated.verification_notes[0]
+
+
+def test_failed_fact_check_keeps_the_new_research(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
+        chapter = compendium.chapters[0]
+        new_content = "## Ny research\n\n" + ("Dokumentert faglig framstilling. " * 30)
+        calls = 0
+
+        def research_then_fail(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return ({
+                    "content_markdown": new_content,
+                    "key_facts": ["Et kontrollpunkt"],
+                    "glossary": ["Begrep – forklaring"],
+                    "sources": [{
+                        "title": "Dokumentert kilde",
+                        "url": "https://example.org/source",
+                        "publisher": "Eksempel",
+                    }],
+                }, [])
+            raise RuntimeError("midlertidig kontrollfeil")
+
+        monkeypatch.setattr(
+            "Skoleverksted.backend.platform.compendium._call_google_json",
+            research_then_fail,
+        )
+
+        regenerated = generate_compendium_chapter(compendium, chapter.id)
+        assert regenerated.status == "needs_revision"
+        assert regenerated.content_markdown == new_content.strip()
+        assert regenerated.sources[0].title == "Dokumentert kilde"
+        assert "produsert og lagret" in regenerated.verification_notes[0]
 
 
 def test_compendium_and_versioned_artifacts_are_durable():
