@@ -10,6 +10,7 @@ from Skoleverksted.backend.platform.compendium import (
     _extract_json,
     generate_compendium_chapter,
     plan_compendium,
+    repair_compendium_chapter,
 )
 from Skoleverksted.backend.platform.compendium_renderer import (
     build_docx,
@@ -118,6 +119,135 @@ def test_failed_fact_check_keeps_the_new_research(monkeypatch):
         assert regenerated.content_markdown == new_content.strip()
         assert regenerated.sources[0].title == "Dokumentert kilde"
         assert "produsert og lagret" in regenerated.verification_notes[0]
+
+
+def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        store = PlatformStore(Path(tmp) / "platform.sqlite3")
+        compendium = store.create_compendium(_proposal())
+        chapter = compendium.chapters[0]
+        before = "## Aktører\n\n" + (
+            "Store deler av middelklassen støttet fascismen uten forbehold. " * 20
+        )
+        chapter.content_markdown = before
+        chapter.status = "needs_revision"
+        chapter.verification_notes = [
+            "Påstanden om middelklassen er for generell og mangler en konkret kilde."
+        ]
+        chapter.sources = [
+            CompendiumSource(title="Generell kilde", url="https://example.org/general")
+        ]
+        saved = store.replace_compendium_chapter(compendium.id, chapter)
+        assert saved is not None
+        compendium = saved
+        after = "## Aktører\n\n" + (
+            "Deler av middelklassen støttet fascistiske partier, men mønsteret "
+            "varierte mellom land og grupper (Kilde: Konkret artikkel). " * 12
+        )
+        calls = 0
+
+        def repair_then_verify(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return ({
+                    "content_markdown": after,
+                    "changes": [
+                        "Påstanden om middelklassen ble avgrenset og nyansert."
+                    ],
+                    "key_facts": ["Støtten varierte mellom land og grupper."],
+                    "glossary": [],
+                    "sources": [{
+                        "title": "Konkret artikkel",
+                        "url": "https://example.org/specific",
+                        "publisher": "Faglig utgiver",
+                    }],
+                }, [])
+            return ({
+                "approved": True,
+                "notes": [],
+                "unsafe_claims": [],
+            }, [])
+
+        monkeypatch.setattr(
+            "Skoleverksted.backend.platform.compendium._call_google_json",
+            repair_then_verify,
+        )
+
+        repaired = repair_compendium_chapter(compendium, chapter.id)
+        assert repaired.status == "generated"
+        assert repaired.content_markdown == after.strip()
+        assert repaired.revision_summary == [
+            "Påstanden om middelklassen ble avgrenset og nyansert."
+        ]
+        assert "klart til lærerkontroll" in repaired.verification_notes[0]
+
+        stored = store.replace_compendium_chapter(compendium.id, repaired)
+        assert stored is not None
+        stored_chapter = stored.chapters[0]
+        assert stored_chapter.previous_content_markdown == before
+        assert stored_chapter.revision_count == 1
+
+
+def test_automatic_repair_keeps_unresolved_claims_for_teacher_control(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
+        chapter = compendium.chapters[0]
+        chapter.content_markdown = "## Kapittel\n\n" + ("En historisk framstilling. " * 30)
+        chapter.status = "needs_revision"
+        chapter.verification_notes = ["Et årstall mangler dokumentasjon."]
+        calls = 0
+
+        def repair_with_remaining_issue(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return ({
+                    "content_markdown": chapter.content_markdown,
+                    "changes": ["Årstallet ble undersøkt."],
+                    "key_facts": [],
+                    "glossary": [],
+                    "sources": [{
+                        "title": "Kontrollkilde",
+                        "url": "https://example.org/check",
+                        "publisher": "Utgiver",
+                    }],
+                }, [])
+            return ({
+                "approved": False,
+                "notes": ["Kilden avklarer ikke det nøyaktige årstallet."],
+                "unsafe_claims": ["Det nøyaktige årstallet."],
+            }, [])
+
+        monkeypatch.setattr(
+            "Skoleverksted.backend.platform.compendium._call_google_json",
+            repair_with_remaining_issue,
+        )
+
+        repaired = repair_compendium_chapter(compendium, chapter.id)
+        assert repaired.status == "needs_revision"
+        assert any("nøyaktige årstallet" in note for note in repaired.verification_notes)
+        assert repaired.content_markdown == chapter.content_markdown.strip()
+
+
+def test_automatic_repair_failure_never_overwrites_the_chapter(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
+        chapter = compendium.chapters[0]
+        original = "## Kapittel\n\n" + ("Lærerens kapitteltekst skal bevares. " * 20)
+        chapter.content_markdown = original
+        chapter.status = "needs_revision"
+        chapter.verification_notes = ["En påstand må dokumenteres."]
+
+        monkeypatch.setattr(
+            "Skoleverksted.backend.platform.compendium._call_google_json",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("midlertidig feil")),
+        )
+
+        repaired = repair_compendium_chapter(compendium, chapter.id)
+        assert repaired.status == "needs_revision"
+        assert repaired.content_markdown == original
+        assert "bevart uendret" in repaired.verification_notes[-1]
 
 
 def test_compendium_and_versioned_artifacts_are_durable():

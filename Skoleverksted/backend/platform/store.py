@@ -582,6 +582,15 @@ class PlatformStore:
         found = False
         for index, current in enumerate(compendium.chapters):
             if current.id == chapter.id:
+                if (
+                    current.content_markdown.strip()
+                    and current.content_markdown != chapter.content_markdown
+                ):
+                    chapter.previous_content_markdown = current.content_markdown
+                    chapter.revision_count = current.revision_count + 1
+                else:
+                    chapter.previous_content_markdown = current.previous_content_markdown
+                    chapter.revision_count = current.revision_count
                 compendium.chapters[index] = chapter
                 found = True
                 break

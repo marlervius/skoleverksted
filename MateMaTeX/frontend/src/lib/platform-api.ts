@@ -205,6 +205,9 @@ export interface CompendiumChapter {
   glossary: string[];
   sources: CompendiumSource[];
   verification_notes: string[];
+  revision_summary: string[];
+  previous_content_markdown: string;
+  revision_count: number;
   status: CompendiumChapterStatus;
   updated_at: string;
 }
@@ -391,6 +394,11 @@ export const updateCompendiumChapter = (
 export const generateCompendiumChapter = (compendiumId: string, chapterId: string) =>
   requestJson<Compendium>(
     `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}/generate`,
+    { method: "POST" },
+  );
+export const repairCompendiumChapter = (compendiumId: string, chapterId: string) =>
+  requestJson<Compendium>(
+    `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}/repair`,
     { method: "POST" },
   );
 export const compileCompendium = (compendiumId: string) =>

@@ -306,6 +306,9 @@ class CompendiumChapter(BaseModel):
     glossary: list[str] = Field(default_factory=list, max_length=30)
     sources: list[CompendiumSource] = Field(default_factory=list, max_length=50)
     verification_notes: list[str] = Field(default_factory=list, max_length=30)
+    revision_summary: list[str] = Field(default_factory=list, max_length=30)
+    previous_content_markdown: str = Field(default="", max_length=80_000)
+    revision_count: int = Field(default=0, ge=0, le=1000)
     status: CompendiumChapterStatus = "planned"
     updated_at: str = Field(default_factory=utc_now)
 

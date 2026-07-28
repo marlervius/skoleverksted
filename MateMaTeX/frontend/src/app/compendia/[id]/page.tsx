@@ -30,6 +30,7 @@ import {
   compendiumDownloadUrl,
   generateCompendiumChapter,
   getCompendium,
+  repairCompendiumChapter,
   updateCompendium,
   updateCompendiumChapter,
   type Compendium,
@@ -154,6 +155,17 @@ function ChapterCard({
               {localBusy === "generate" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {chapter.content_markdown ? "Lag ny versjon" : "Produser kapittel"}
             </button>
+            {chapter.status === "needs_revision" && chapter.content_markdown && chapter.verification_notes.length > 0 && (
+              <button
+                className="btn-primary !bg-accent-teal hover:!bg-accent-teal/90"
+                disabled={working || compendium.status === "outline"}
+                onClick={() => void run("repair", () => repairCompendiumChapter(compendium.id, chapter.id))}
+                title="Undersøk kontrollmerknadene, rett teksten og kontroller resultatet på nytt"
+              >
+                {localBusy === "repair" ? <Loader2 className="h-4 w-4 animate-spin" /> : <SearchCheck className="h-4 w-4" />}
+                {localBusy === "repair" ? "Sjekker og retter…" : "Sjekk og rett automatisk"}
+              </button>
+            )}
           </div>
 
           {editingOutline ? (
@@ -208,10 +220,45 @@ function ChapterCard({
             <div className={`mt-4 rounded-lg border p-3 text-sm ${chapter.status === "needs_revision" ? "border-accent-orange/30 bg-accent-orange/10" : "border-accent-blue/20 bg-accent-blue/5"}`}>
               <h4 className="flex items-center gap-2 font-semibold">
                 {chapter.status === "needs_revision" ? <ShieldAlert className="h-4 w-4 text-accent-orange" /> : <ShieldCheck className="h-4 w-4 text-accent-blue" />}
-                Kontrollmerknader
+                {chapter.status === "needs_revision" ? "Kontrollmerknader" : "Ny kontroll"}
               </h4>
               <ul className="mt-2 space-y-1 text-text-secondary">{chapter.verification_notes.map((note) => <li key={note}>• {note}</li>)}</ul>
             </div>
+          )}
+
+          {chapter.revision_summary.length > 0 && (
+            <div className="mt-4 rounded-lg border border-accent-green/25 bg-accent-green/5 p-3 text-sm">
+              <h4 className="flex items-center gap-2 font-semibold">
+                <CheckCircle2 className="h-4 w-4 text-accent-green" />
+                Automatisk rettet
+              </h4>
+              <ul className="mt-2 space-y-1 text-text-secondary">
+                {chapter.revision_summary.map((change) => <li key={change}>• {change}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {chapter.previous_content_markdown && (
+            <details className="mt-4 rounded-lg border border-border bg-surface">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+                Sammenlign med forrige versjon
+                <span className="ml-2 font-normal text-text-muted">Versjon {chapter.revision_count + 1}</span>
+              </summary>
+              <div className="grid gap-3 border-t border-border p-3 lg:grid-cols-2">
+                <div>
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Før</h4>
+                  <div className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-bg p-3 text-xs leading-6 text-text-secondary">
+                    {chapter.previous_content_markdown}
+                  </div>
+                </div>
+                <div>
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Etter</h4>
+                  <div className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-bg p-3 text-xs leading-6 text-text-secondary">
+                    {chapter.content_markdown}
+                  </div>
+                </div>
+              </div>
+            </details>
           )}
 
           {chapter.sources.length > 0 && (

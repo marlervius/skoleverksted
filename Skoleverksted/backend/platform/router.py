@@ -32,7 +32,11 @@ from .models import (
     YearPlanUpdate,
     utc_now,
 )
-from .compendium import generate_compendium_chapter, plan_compendium
+from .compendium import (
+    generate_compendium_chapter,
+    plan_compendium,
+    repair_compendium_chapter,
+)
 from .compendium_renderer import render_compendium
 from .images import resolve_image
 from .quality import build_quality_passport
@@ -92,6 +96,11 @@ def update_compendium_chapter(
     payload.update(changes)
     if "content_markdown" in changes and "status" not in changes:
         payload["status"] = "generated"
+    if (
+        "content_markdown" in changes
+        and changes["content_markdown"] != chapter.content_markdown
+    ):
+        payload["revision_summary"] = []
     payload["updated_at"] = utc_now()
     updated = store.replace_compendium_chapter(
         compendium_id,
@@ -112,6 +121,24 @@ def produce_compendium_chapter(compendium_id: str, chapter_id: str):
         chapter = generate_compendium_chapter(compendium, chapter_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    updated = store.replace_compendium_chapter(compendium_id, chapter)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Kapitlet finnes ikke.")
+    return updated
+
+
+@router.post("/compendia/{compendium_id}/chapters/{chapter_id}/repair", response_model=Compendium)
+def repair_compendium_chapter_endpoint(compendium_id: str, chapter_id: str):
+    store = get_platform_store()
+    compendium = store.get_compendium(compendium_id)
+    if compendium is None:
+        raise HTTPException(status_code=404, detail="Kompendiet finnes ikke.")
+    try:
+        chapter = repair_compendium_chapter(compendium, chapter_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     updated = store.replace_compendium_chapter(compendium_id, chapter)
     if updated is None:
         raise HTTPException(status_code=404, detail="Kapitlet finnes ikke.")
