@@ -1,8 +1,10 @@
 import json
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -403,7 +405,9 @@ def test_renderer_retries_without_an_invalid_optional_image(tmp_path, monkeypatc
         docx_calls.append(image_path)
         return b"PK\x03\x04docx"
 
-    monkeypatch.setattr("VGS_KI.backend.pdf_service.compile_typst", fake_compile)
+    fake_pdf_service = ModuleType("VGS_KI.backend.pdf_service")
+    fake_pdf_service.compile_typst = fake_compile
+    monkeypatch.setitem(sys.modules, "VGS_KI.backend.pdf_service", fake_pdf_service)
     monkeypatch.setattr(compendium_renderer, "build_docx", fake_docx)
 
     pdf, docx, _, _ = compendium_renderer.render_compendium(
