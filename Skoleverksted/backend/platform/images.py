@@ -12,6 +12,7 @@ Modes:
 from __future__ import annotations
 
 import base64
+import io
 from importlib.metadata import PackageNotFoundError, version
 import json
 import logging
@@ -496,9 +497,13 @@ def _verified_remote_candidate_path(plan: dict, candidate: dict) -> Optional[str
     image_bytes, content_type = downloaded
     if not _verify_image_bytes(plan, image_bytes, content_type, "Wikimedia Commons"):
         return None
+    try:
+        image_bytes, content_type = _normalize_image_for_documents(image_bytes)
+    except Exception as exc:
+        logger.warning("Commons-bildet kunne ikke normaliseres for PDF/Word: %s", exc)
+        return None
 
-    suffix = ".jpg" if content_type in {"image/jpeg", "image/jpg"} else ".png"
-    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_commons_", suffix=suffix, delete=False)
+    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_commons_", suffix=".png", delete=False)
     try:
         handle.write(image_bytes)
         return handle.name
@@ -620,6 +625,28 @@ def _extract_generated_image(response: object) -> tuple[Optional[bytes], str]:
     return None, "image/png"
 
 
+def _normalize_image_for_documents(image_bytes: bytes) -> tuple[bytes, str]:
+    """Decode any supported source image and emit a real, document-safe PNG."""
+    from PIL import Image, ImageOps
+
+    if not image_bytes or len(image_bytes) > MAX_GENERATED_IMAGE_BYTES:
+        raise ValueError("Bildedata mangler eller er for stor")
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        opened.load()
+        image = ImageOps.exif_transpose(opened)
+        image.thumbnail((2400, 2400), Image.Resampling.LANCZOS)
+        has_alpha = "A" in image.getbands()
+        image = image.convert("RGBA" if has_alpha else "RGB")
+        output = io.BytesIO()
+        image.save(output, format="PNG", optimize=True)
+    normalized = output.getvalue()
+    if not normalized.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("Bildekonverteringen ga ikke en gyldig PNG")
+    if len(normalized) > MAX_GENERATED_IMAGE_BYTES:
+        raise ValueError("Det normaliserte bildet er større enn 15 MB")
+    return normalized, "image/png"
+
+
 def _supports_current_interactions_schema() -> bool:
     """Interactions requires google-genai 2.x after Google's June 2026 sunset."""
     try:
@@ -687,9 +714,13 @@ def generate_ai_image(prompt: str) -> Optional[str]:
     if not image_bytes or len(image_bytes) > MAX_GENERATED_IMAGE_BYTES:
         logger.warning("Google returnerte ingen gyldig bildedata")
         return None
+    try:
+        image_bytes, mime_type = _normalize_image_for_documents(image_bytes)
+    except Exception as exc:
+        logger.warning("Google-bildet kunne ikke normaliseres for PDF/Word: %s", exc)
+        return None
 
-    suffix = ".jpg" if mime_type in {"image/jpeg", "image/jpg"} else ".png"
-    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_ai_", suffix=suffix, delete=False)
+    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_ai_", suffix=".png", delete=False)
     try:
         handle.write(image_bytes)
         return handle.name

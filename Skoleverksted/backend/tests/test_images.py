@@ -3,8 +3,11 @@ from __future__ import annotations
 import os
 import sys
 import weakref
+import io
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+
+import pytest
 
 from Skoleverksted.backend.platform import images
 
@@ -118,6 +121,11 @@ def test_image_generation_falls_back_when_interactions_fails(monkeypatch) -> Non
     monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
     monkeypatch.setattr(images, "_api_key", lambda: "test-key")
     monkeypatch.setattr(images, "_supports_current_interactions_schema", lambda: True)
+    monkeypatch.setattr(
+        images,
+        "_normalize_image_for_documents",
+        lambda value: (value, "image/png"),
+    )
 
     path = images.generate_ai_image("Pedagogisk illustrasjon")
     try:
@@ -126,6 +134,20 @@ def test_image_generation_falls_back_when_interactions_fails(monkeypatch) -> Non
     finally:
         if path:
             Path(path).unlink(missing_ok=True)
+
+
+def test_webp_image_is_normalized_to_a_real_png() -> None:
+    image_module = pytest.importorskip("PIL.Image")
+    source = io.BytesIO()
+    image_module.new("RGB", (320, 240), "#6B8FA3").save(source, format="WEBP")
+
+    normalized, mime_type = images._normalize_image_for_documents(source.getvalue())
+
+    assert mime_type == "image/png"
+    assert normalized.startswith(b"\x89PNG\r\n\x1a\n")
+    with image_module.open(io.BytesIO(normalized)) as decoded:
+        assert decoded.format == "PNG"
+        assert decoded.size == (320, 240)
 
 
 def test_visual_verifier_keeps_google_client_open_during_request(monkeypatch) -> None:

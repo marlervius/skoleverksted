@@ -154,6 +154,15 @@ def _strings(value: Any, limit: int = 20) -> list[str]:
     return result
 
 
+def _markdown_text(value: Any, limit: int = 80_000) -> str:
+    return (
+        _text(value, limit)
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "\n")
+    )
+
+
 def _extract_json(value: object) -> dict[str, Any]:
     text = _text(value, 500_000)
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
@@ -582,7 +591,7 @@ JSON:
             grounded=True,
             response_schema=CHAPTER_OUTPUT_SCHEMA,
         )
-        content = _text(payload.get("content_markdown"), 80_000)
+        content = _markdown_text(payload.get("content_markdown"))
         if len(content) < 400:
             raise ValueError("Kapittelteksten var for kort")
         sources = _source_payload(payload.get("sources"))
@@ -715,7 +724,7 @@ JSON:
             grounded=True,
             response_schema=REPAIR_OUTPUT_SCHEMA,
         )
-        repaired_content = _text(payload.get("content_markdown"), 80_000)
+        repaired_content = _markdown_text(payload.get("content_markdown"))
         minimum_length = max(400, int(len(content_before) * 0.45))
         if len(repaired_content) < minimum_length:
             raise ValueError("Den reviderte teksten var uventet kort.")

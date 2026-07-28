@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from Skoleverksted.backend.platform import compendium_renderer
 from Skoleverksted.backend.platform.compendium import (
     _extract_json,
     generate_compendium_chapter,
@@ -15,6 +16,7 @@ from Skoleverksted.backend.platform.compendium import (
 from Skoleverksted.backend.platform.compendium_renderer import (
     build_docx,
     build_typst_document,
+    markdown_to_typst,
     render_compendium,
 )
 from Skoleverksted.backend.platform.models import (
@@ -341,12 +343,24 @@ def test_renderer_builds_structured_source_and_word_document():
         chapter.glossary = ["Len – en politisk og økonomisk forbindelse"]
         chapter.status = "approved"
     typst = build_typst_document(compendium)
-    assert "#outline" in typst
+    assert "#outline(title: [Innhold], depth: 1" in typst
     assert "Avgrensningskontrakt" in typst
     assert "#table(columns: 2" in typst
     docx = build_docx(compendium)
     assert docx.startswith(b"PK")
     assert len(docx) > 10_000
+
+
+def test_renderer_normalizes_escaped_markdown_line_breaks_and_heading_depth():
+    rendered = markdown_to_typst(
+        r"## Kapitteltittel\n\n### Første del\n\nEt vanlig avsnitt.",
+        "Kapitteltittel",
+    )
+
+    assert "\\n" not in rendered
+    assert "== Første del" in rendered
+    assert "=== Første del" not in rendered
+    assert "Et vanlig avsnitt." in rendered
 
 
 def test_compendium_typst_compiles_when_typst_is_available():
@@ -365,3 +379,40 @@ def test_compendium_typst_compiles_when_typst_is_available():
         assert docx.startswith(b"PK")
         assert pdf_name.endswith(".pdf")
         assert docx_name.endswith(".docx")
+
+
+def test_renderer_retries_without_an_invalid_optional_image(tmp_path, monkeypatch):
+    bad_image = tmp_path / "generated.png"
+    bad_image.write_bytes(b"RIFF\x10\x00\x00\x00WEBP-invalid")
+    proposal = _proposal()
+    compendium = PlatformStore(tmp_path / "platform.sqlite3").create_compendium(proposal)
+    for chapter in compendium.chapters:
+        chapter.content_markdown = f"## {chapter.title}\n\nKontrollert kapitteltekst."
+        chapter.status = "approved"
+
+    compile_calls: list[str | None] = []
+    docx_calls: list[str] = []
+
+    def fake_compile(_source: str, image_path: str | None = None) -> bytes:
+        compile_calls.append(image_path)
+        if image_path:
+            raise RuntimeError("failed to decode image")
+        return b"%PDF-1.4\nuten bilde\n%%EOF"
+
+    def fake_docx(_compendium, *, image_path: str = "", image_credit: str = "") -> bytes:
+        docx_calls.append(image_path)
+        return b"PK\x03\x04docx"
+
+    monkeypatch.setattr("VGS_KI.backend.pdf_service.compile_typst", fake_compile)
+    monkeypatch.setattr(compendium_renderer, "build_docx", fake_docx)
+
+    pdf, docx, _, _ = compendium_renderer.render_compendium(
+        compendium,
+        image_path=str(bad_image),
+        image_credit="KI-generert illustrasjon",
+    )
+
+    assert pdf.startswith(b"%PDF")
+    assert docx.startswith(b"PK")
+    assert compile_calls == [str(bad_image), None]
+    assert docx_calls == [""]

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Iterable
 
 from .models import Compendium, CompendiumSource
+
+
+logger = logging.getLogger(__name__)
 
 
 def safe_filename(value: str, suffix: str) -> str:
@@ -23,8 +27,19 @@ def _typst_escape(value: str) -> str:
 def _clean_markdown(value: str) -> str:
     value = re.sub(r"\*\*(.*?)\*\*", r"\1", value)
     value = re.sub(r"__(.*?)__", r"\1", value)
+    value = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", value)
+    value = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", r"\1", value)
     value = re.sub(r"\[(.*?)\]\((https?://[^)]+)\)", r"\1 (\2)", value)
     return value.strip()
+
+
+def _normalize_markdown_newlines(value: str) -> str:
+    """Turn model-produced escaped line breaks into real Markdown lines."""
+    return (
+        value.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "\n")
+    )
 
 
 def _table_to_typst(rows: list[list[str]]) -> str:
@@ -48,7 +63,7 @@ def _table_to_typst(rows: list[list[str]]) -> str:
 
 
 def markdown_to_typst(markdown: str, chapter_title: str = "") -> str:
-    lines = markdown.replace("\r\n", "\n").splitlines()
+    lines = _normalize_markdown_newlines(markdown).replace("\r\n", "\n").splitlines()
     output: list[str] = []
     index = 0
     first_heading_skipped = False
@@ -76,7 +91,8 @@ def markdown_to_typst(markdown: str, chapter_title: str = "") -> str:
             if not first_heading_skipped and chapter_title and title.casefold() == chapter_title.casefold():
                 first_heading_skipped = True
             else:
-                level = min(3, max(2, len(heading.group(1))))
+                source_level = len(heading.group(1)) - (1 if chapter_title else 0)
+                level = min(3, max(2, source_level))
                 output.append(f"{'=' * level} {_typst_escape(title)}")
             index += 1
             continue
@@ -131,7 +147,7 @@ def build_typst_document(compendium: Compendium, *, image_path: str = "", image_
     chapters = sorted(compendium.chapters, key=lambda item: item.order)
     source_items = _unique_sources(compendium)
     image_block = ""
-    if image_path:
+    if image_path and Path(image_path).is_file():
         image_name = _typst_escape(Path(image_path).name)
         image_block = f"""
 #v(14pt)
@@ -245,7 +261,7 @@ Det må vurderes av lærer før bruk og oppdateres når faggrunnlaget endrer seg
 {exclusions}
 
 #pagebreak()
-#outline(title: [Innhold], depth: 3, indent: auto)
+#outline(title: [Innhold], depth: 1, indent: auto)
 #pagebreak()
 
 {"\n#pagebreak()\n".join(chapter_blocks)}
@@ -265,7 +281,7 @@ Det må vurderes av lærer før bruk og oppdateres når faggrunnlaget endrer seg
 
 
 def _add_markdown_to_docx(document, markdown: str, chapter_title: str) -> None:
-    lines = markdown.replace("\r\n", "\n").splitlines()
+    lines = _normalize_markdown_newlines(markdown).replace("\r\n", "\n").splitlines()
     first_heading_skipped = False
     index = 0
     while index < len(lines):
@@ -305,7 +321,8 @@ def _add_markdown_to_docx(document, markdown: str, chapter_title: str) -> None:
             if not first_heading_skipped and title.casefold() == chapter_title.casefold():
                 first_heading_skipped = True
                 continue
-            document.add_heading(title, level=min(3, max(2, len(heading.group(1)))))
+            source_level = len(heading.group(1)) - (1 if chapter_title else 0)
+            document.add_heading(title, level=min(3, max(2, source_level)))
         elif re.match(r"^[-*]\s+", stripped):
             document.add_paragraph(re.sub(r"^[-*]\s+", "", stripped), style="List Bullet")
         elif re.match(r"^\d+[.)]\s+", stripped):
@@ -400,9 +417,20 @@ def render_compendium(
 ) -> tuple[bytes, bytes, str, str]:
     from VGS_KI.backend.pdf_service import compile_typst
 
-    typst = build_typst_document(compendium, image_path=image_path, image_credit=image_credit)
-    pdf = compile_typst(typst, image_path=image_path or None)
-    docx = build_docx(compendium, image_path=image_path, image_credit=image_credit)
+    try:
+        typst = build_typst_document(compendium, image_path=image_path, image_credit=image_credit)
+        pdf = compile_typst(typst, image_path=image_path or None)
+        docx = build_docx(compendium, image_path=image_path, image_credit=image_credit)
+    except Exception as exc:
+        if not image_path:
+            raise
+        logger.warning(
+            "Kompendiumbildet kunne ikke bygges inn; lager dokumentene uten bilde: %s",
+            exc,
+        )
+        typst = build_typst_document(compendium)
+        pdf = compile_typst(typst)
+        docx = build_docx(compendium)
     return (
         pdf,
         docx,
