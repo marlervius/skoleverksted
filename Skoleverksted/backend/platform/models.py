@@ -328,7 +328,7 @@ class CompendiumPlanRequest(BaseModel):
     include_timeline: bool = True
     include_tables: bool = True
     include_glossary: bool = True
-    include_reflection_tasks: bool = False
+    include_reflection_tasks: bool = True
     image_mode: CompendiumImageMode = "none"
     year_plan_id: str | None = Field(default=None, max_length=64)
     period_ids: list[str] = Field(default_factory=list, max_length=10)
@@ -351,7 +351,7 @@ class CompendiumCreate(BaseModel):
     include_timeline: bool = True
     include_tables: bool = True
     include_glossary: bool = True
-    include_reflection_tasks: bool = False
+    include_reflection_tasks: bool = True
     image_mode: CompendiumImageMode = "none"
     year_plan_id: str | None = Field(default=None, max_length=64)
     period_ids: list[str] = Field(default_factory=list, max_length=10)

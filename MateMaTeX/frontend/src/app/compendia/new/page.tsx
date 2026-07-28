@@ -54,7 +54,7 @@ export default function NewCompendiumPage() {
   const [includeTimeline, setIncludeTimeline] = useState(true);
   const [includeTables, setIncludeTables] = useState(true);
   const [includeGlossary, setIncludeGlossary] = useState(true);
-  const [includeTasks, setIncludeTasks] = useState(false);
+  const [includeTasks, setIncludeTasks] = useState(true);
   const [imageMode, setImageMode] = useState<CompendiumImageMode>("none");
   const [yearPlans, setYearPlans] = useState<YearPlan[]>([]);
   const [yearPlanId, setYearPlanId] = useState("");

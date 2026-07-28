@@ -1,16 +1,38 @@
 from __future__ import annotations
 
+import html
 import io
 import logging
 import os
 import re
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .models import Compendium, CompendiumSource
 
 
 logger = logging.getLogger(__name__)
+
+DOCUMENT_TYPE_LABELS = {
+    "thematic": "Tematisk fordypning",
+    "chronological": "Kronologisk oversikt",
+    "reference": "Oppslagsverk",
+    "comparative": "Sammenlignende kompendium",
+    "source_collection": "Kildesamling",
+    "appendix": "Appendiks",
+}
+_TRANSIENT_SOURCE_HOSTS = {"vertexaisearch.cloud.google.com"}
+_TRACKING_QUERY_KEYS = {"gclid", "fbclid", "mc_cid", "mc_eid"}
+_COMMON_LANGUAGE_FIXES = {
+    "produjonsmidlene": "produksjonsmidlene",
+    "produjonsmiddel": "produksjonsmiddel",
+}
+_UNRESOLVED_SCOPE_MARKERS = (
+    "ikke spesifisert",
+    "avgrenses av læreren",
+    "før produksjon",
+)
 
 
 def safe_filename(value: str, suffix: str) -> str:
@@ -24,12 +46,23 @@ def _typst_escape(value: str) -> str:
     return value
 
 
+def _typst_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _clean_markdown(value: str) -> str:
+    value = html.unescape(value)
+    value = re.sub(r"<br\s*/?>", "; ", value, flags=re.IGNORECASE)
+    value = re.sub(r"</?[a-z][^>]*>", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\*\*(.*?)\*\*", r"\1", value)
     value = re.sub(r"__(.*?)__", r"\1", value)
     value = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", value)
     value = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", r"\1", value)
     value = re.sub(r"\[(.*?)\]\((https?://[^)]+)\)", r"\1 (\2)", value)
+    for typo, correction in _COMMON_LANGUAGE_FIXES.items():
+        value = re.sub(rf"\b{re.escape(typo)}\b", correction, value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+([,.;:!?])", r"\1", value)
+    value = re.sub(r"[ \t]{2,}", " ", value)
     return value.strip()
 
 
@@ -122,15 +155,96 @@ def markdown_to_typst(markdown: str, chapter_title: str = "") -> str:
     return "\n".join(output)
 
 
+def _canonical_source_url(value: str) -> str:
+    url = value.strip()
+    if not url.startswith(("https://", "http://")):
+        return ""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return ""
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    if not host or host in _TRANSIENT_SOURCE_HOSTS:
+        return ""
+    query = urlencode([
+        (key, item)
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in _TRACKING_QUERY_KEYS
+        and not key.lower().startswith("utm_")
+    ])
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/")
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, query, ""))
+
+
+def _source_identity(source: CompendiumSource) -> str:
+    url = _canonical_source_url(source.url)
+    if url:
+        parsed = urlsplit(url)
+        return f"{parsed.hostname or ''}{parsed.path}".casefold().rstrip("/")
+    return re.sub(
+        r"\W+",
+        "",
+        f"{source.title}|{source.publisher}".casefold(),
+        flags=re.UNICODE,
+    )
+
+
+def _clean_source(source: CompendiumSource) -> CompendiumSource | None:
+    title = re.sub(r"\s+", " ", html.unescape(source.title)).strip(" –—-|")
+    publisher = re.sub(r"\s+", " ", html.unescape(source.publisher)).strip(" –—-|")
+    raw_url = source.url.strip()
+    url = _canonical_source_url(raw_url)
+    if raw_url and not url:
+        return None
+    if not title:
+        return None
+    return CompendiumSource(title=title, publisher=publisher, url=url)
+
+
 def _unique_sources(compendium: Compendium) -> list[CompendiumSource]:
     result: list[CompendiumSource] = []
     seen: set[str] = set()
     for chapter in compendium.chapters:
         for source in chapter.sources:
-            key = (source.url or source.title).casefold()
+            cleaned = _clean_source(source)
+            if cleaned is None:
+                continue
+            key = _source_identity(cleaned)
             if key and key not in seen:
                 seen.add(key)
-                result.append(source)
+                result.append(cleaned)
+    return result
+
+
+def _is_meaningful_scope_value(value: str) -> bool:
+    normalized = re.sub(r"\s+", " ", value).strip().casefold()
+    return bool(normalized) and not any(marker in normalized for marker in _UNRESOLVED_SCOPE_MARKERS)
+
+
+def _student_facing_scope_note(value: str) -> str:
+    sentences = re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", value).strip())
+    kept = [
+        sentence
+        for sentence in sentences
+        if sentence
+        and "læreren" not in sentence.casefold()
+        and "før bruk" not in sentence.casefold()
+        and "før produksjon" not in sentence.casefold()
+    ]
+    return " ".join(kept)
+
+
+def _student_facing_scope_items(values: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        normalized = value.casefold()
+        if any(marker in normalized for marker in ("ta bare med", "presenteres ikke", "læreren", "før produksjon")):
+            continue
+        cleaned = _clean_markdown(value)
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
     return result
 
 
@@ -146,47 +260,130 @@ def build_typst_document(compendium: Compendium, *, image_path: str = "", image_
     scope = compendium.scope_contract
     chapters = sorted(compendium.chapters, key=lambda item: item.order)
     source_items = _unique_sources(compendium)
+    document_type = DOCUMENT_TYPE_LABELS.get(compendium.kind, "Faglig kompendium")
     image_block = ""
     if image_path and Path(image_path).is_file():
         image_name = _typst_escape(Path(image_path).name)
         image_block = f"""
-#v(14pt)
+#v(10mm)
 #figure(
-  image("{image_name}", width: 82%),
+  image("{image_name}", width: 78%),
   caption: [{_typst_escape(image_credit or "Pedagogisk illustrasjon")}],
 )
 """
     chapter_blocks: list[str] = []
     for chapter in chapters:
         content = markdown_to_typst(chapter.content_markdown, chapter.title)
+        guiding_questions = ""
+        if chapter.guiding_questions:
+            question_items = "\n".join(
+                f"+ {_typst_escape(_clean_markdown(question))}"
+                for question in chapter.guiding_questions[:4]
+            )
+            guiding_questions = f"""
+#block(fill: rgb("#EDF7F7"), inset: 10pt, radius: 5pt, stroke: 0.5pt + rgb("#B8D7D8"))[
+  #strong[Spørsmål å ha med seg]
+  #v(3pt)
+  {question_items}
+]
+#v(8pt)
+"""
+        key_facts = ""
+        if chapter.key_facts:
+            fact_items = "\n".join(
+                f"- {_typst_escape(_clean_markdown(item))}"
+                for item in chapter.key_facts[:6]
+            )
+            key_facts = f"""
+== Kort oppsummert
+#block(fill: rgb("#F4F6F8"), inset: 10pt, radius: 5pt)[
+{fact_items}
+]
+"""
         glossary = ""
         if compendium.include_glossary and chapter.glossary:
-            terms = "\n".join(f"- {_typst_escape(item)}" for item in chapter.glossary)
+            terms = "\n".join(
+                f"- {_typst_escape(_clean_markdown(item))}"
+                for item in chapter.glossary
+            )
             glossary = f"\n== Begreper\n{terms}\n"
         chapter_blocks.append(
             f"= {_typst_escape(chapter.title)}\n"
             f"#text(fill: rgb(\"#5A6572\"), style: \"italic\")[{_typst_escape(chapter.purpose)}]\n"
-            f"#v(8pt)\n{content}\n{glossary}"
+            f"#v(8pt)\n{guiding_questions}\n{content}\n{key_facts}\n{glossary}"
         )
 
-    inclusion = "\n".join(f"- {_typst_escape(item)}" for item in scope.inclusion_criteria) or "- Ikke spesifisert"
-    exclusions = "\n".join(f"- {_typst_escape(item)}" for item in scope.exclusions) or "- Ikke spesifisert"
-    bibliography = "\n".join(
-        f"+ {_typst_escape(source.title)}"
-        + (f" — {_typst_escape(source.publisher)}" if source.publisher else "")
-        + (f" — {_typst_escape(source.url)}" if source.url else "")
-        for source in source_items
-    ) or "Ingen eksterne kilder er registrert. Dokumentet må kildekontrolleres før bruk."
+    scope_rows: list[str] = []
+    if _is_meaningful_scope_value(scope.reference_date):
+        scope_rows.extend(("[#strong[Tidsrom]],", f"[{_typst_escape(scope.reference_date)}],"))
+    if _is_meaningful_scope_value(scope.geography):
+        scope_rows.extend(("[#strong[Geografisk ramme]],", f"[{_typst_escape(scope.geography)}],"))
+    scope_rows.extend(("[#strong[Dekning]],", f"[{_typst_escape(_scope_label(scope.completeness_label))}],"))
+    scope_table = (
+        "#table(\n"
+        "  columns: (38mm, 1fr),\n"
+        "  inset: 6pt,\n"
+        "  stroke: 0.35pt + rgb(\"#D8DDE5\"),\n"
+        + "\n".join(scope_rows)
+        + "\n)"
+    )
+    scope_note = _student_facing_scope_note(scope.completeness_note)
+    inclusion_items = _student_facing_scope_items(scope.inclusion_criteria)
+    exclusion_items = _student_facing_scope_items(scope.exclusions)
+    scope_details = ""
+    if inclusion_items or exclusion_items:
+        sections: list[str] = []
+        if inclusion_items:
+            sections.append(
+                "=== Dette behandles\n"
+                + "\n".join(f"- {_typst_escape(item)}" for item in inclusion_items)
+            )
+        if exclusion_items:
+            sections.append(
+                "=== Avgrensninger\n"
+                + "\n".join(f"- {_typst_escape(item)}" for item in exclusion_items)
+            )
+        scope_details = "\n\n".join(sections)
+
+    bibliography_lines: list[str] = []
+    for source in source_items:
+        label = _typst_escape(source.title)
+        if source.publisher and source.publisher.casefold() not in source.title.casefold():
+            label += f" — {_typst_escape(source.publisher)}"
+        if source.url:
+            bibliography_lines.append(
+                f'+ #link("{_typst_string(source.url)}")[{label}]'
+            )
+        else:
+            bibliography_lines.append(f"+ {label}")
+    bibliography = "\n".join(bibliography_lines) or (
+        "Det er ikke registrert eksterne kilder i denne versjonen."
+    )
+
+    learning_goals = ""
+    if compendium.competency_goals:
+        goals = "\n".join(
+            f"- {_typst_escape(_clean_markdown(goal))}"
+            for goal in compendium.competency_goals
+        )
+        learning_goals = f"""
+== Mål for arbeidet
+{goals}
+"""
+
+    chapter_preview = " · ".join(chapter.title for chapter in chapters[:5])
+    if len(chapters) > 5:
+        chapter_preview += " · …"
     tasks = ""
     if compendium.include_reflection_tasks:
         tasks = f"""
 = Videre arbeid
 
-#block(fill: rgb("#F3F0FA"), inset: 12pt, radius: 4pt)[
+#block(fill: rgb("#F3F0FA"), inset: 12pt, radius: 5pt, stroke: 0.5pt + rgb("#D5C9EB"))[
 + Hvilke deler av framstillingen er best dokumentert, og hvor er usikkerheten størst?
 + Sammenlign to aktører, områder eller perioder fra kompendiet.
 + Velg én kilde fra litteraturlisten og vurder hva den kan og ikke kan fortelle.
-+ Formuler et nytt fordypningsspørsmål som avgrensningskontrakten ikke dekker.
++ Formuler et nytt fordypningsspørsmål som kompendiet ikke besvarer.
 ]
 """
 
@@ -197,11 +394,11 @@ def build_typst_document(compendium: Compendium, *, image_path: str = "", image_
   margin: (top: 22mm, bottom: 20mm, left: 22mm, right: 18mm),
   header: context if counter(page).get().first() > 2 [
     #set text(size: 8pt, fill: rgb("#687583"))
-    {_typst_escape(compendium.subject)} · {_typst_escape(compendium.title)}
+    {_typst_escape(compendium.subject)} · {_typst_escape(document_type)}
     #h(1fr) {_typst_escape(compendium.level)}
     #line(length: 100%, stroke: 0.35pt + rgb("#D8DDE5"))
   ],
-  footer: context [
+  footer: context if counter(page).get().first() > 1 [
     #line(length: 100%, stroke: 0.35pt + rgb("#D8DDE5"))
     #set text(size: 8pt, fill: rgb("#87919B"))
     Skoleverksted #h(1fr) Side #counter(page).display()
@@ -222,43 +419,54 @@ def build_typst_document(compendium: Compendium, *, image_path: str = "", image_
 ]
 
 #align(center)[
-  #v(20mm)
-  #text(size: 10pt, weight: 600, fill: rgb("#3E8E9B"))[SKOLEVERKSTED · {_typst_escape(compendium.subject.upper())}]
-  #v(7mm)
-  #text(size: 28pt, weight: 650, fill: rgb("#173F55"))[{_typst_escape(compendium.title)}]
-  #v(5mm)
-  #text(size: 13pt, fill: rgb("#596875"))[{_typst_escape(compendium.level)} · {_typst_escape(compendium.audience)}]
+  #v(10mm)
+  #block(width: 100%, fill: rgb("#173F55"), inset: (x: 16mm, y: 15mm), radius: 8pt)[
+    #set text(fill: rgb("#FFFFFF"))
+    #set par(justify: false)
+    #text(size: 9pt, weight: 600, fill: rgb("#8ED4D8"))[SKOLEVERKSTED · {_typst_escape(compendium.subject.upper())}]
+    #v(7mm)
+    #text(size: 29pt, weight: 650, hyphenate: false)[{_typst_escape(compendium.title)}]
+    #v(5mm)
+    #text(size: 12pt, fill: rgb("#D7E6EA"))[{_typst_escape(compendium.level)} · {_typst_escape(compendium.audience)}]
+  ]
   #v(8mm)
-  #block(width: 80%, fill: rgb("#EFF5F6"), inset: 12pt, radius: 5pt)[
+  #block(width: 86%, fill: rgb("#EFF5F6"), inset: 13pt, radius: 6pt)[
+    #set par(justify: false)
+    #text(size: 9pt, weight: 600, fill: rgb("#3E8E9B"))[{_typst_escape(document_type.upper())}]
+    #v(3pt)
     #text(size: 10.5pt)[{_typst_escape(compendium.purpose or compendium.topic)}]
+    #v(6pt)
+    #text(size: 9pt, fill: rgb("#596875"))[{_typst_escape(chapter_preview)}]
   ]
   {image_block}
 ]
 #pagebreak()
 
-= Om kompendiet
+= Om ressursen
 
-Dette dokumentet er laget som {_typst_escape(_scope_label(scope.completeness_label).lower())}.
-Det må vurderes av lærer før bruk og oppdateres når faggrunnlaget endrer seg.
+Dette kompendiet gir en {_typst_escape(_scope_label(scope.completeness_label).lower())}
+av {_typst_escape(compendium.topic)}. Bruk overskriftene, spørsmålene og
+oppsummeringene til å få oversikt før du går inn i detaljene.
 
-== Avgrensningskontrakt
+== Ramme for framstillingen
 
-#table(
-  columns: (35mm, 1fr),
-  inset: 6pt,
-  stroke: 0.35pt + rgb("#D8DDE5"),
-  [#strong[Referansetid]], [{_typst_escape(scope.reference_date or "Ikke spesifisert")}],
-  [#strong[Geografi]], [{_typst_escape(scope.geography or "Ikke spesifisert")}],
-  [#strong[Dekningsnivå]], [{_typst_escape(_scope_label(scope.completeness_label))}],
+{scope_table}
+
+{_typst_escape(scope_note)}
+
+{scope_details}
+
+{learning_goals}
+
+== Slik kan du arbeide
+
+#grid(
+  columns: (1fr, 1fr, 1fr),
+  gutter: 8pt,
+  [#block(fill: rgb("#EDF7F7"), inset: 9pt, radius: 4pt)[#strong[1. Orienter deg]\nLes spørsmålene før hvert kapittel.]],
+  [#block(fill: rgb("#F4F6F8"), inset: 9pt, radius: 4pt)[#strong[2. Finn sammenhenger]\nBruk tabeller og begreper aktivt.]],
+  [#block(fill: rgb("#F3F0FA"), inset: 9pt, radius: 4pt)[#strong[3. Kontroller]\nUndersøk kildene og vurder påstandene.]],
 )
-
-{_typst_escape(scope.completeness_note)}
-
-=== Tas med
-{inclusion}
-
-=== Tas ikke med
-{exclusions}
 
 #pagebreak()
 #outline(title: [Innhold], depth: 1, indent: auto)
@@ -271,12 +479,6 @@ Det må vurderes av lærer før bruk og oppdateres når faggrunnlaget endrer seg
 = Kilder og videre lesning
 
 {bibliography}
-
-#v(12pt)
-#block(fill: rgb("#FFF4DD"), inset: 10pt, radius: 4pt)[
-  #strong[Lærerens sluttkontroll:] Kontroller særlig absolutte formuleringer,
-  historiske grenser, tall, sitater og om kildene faktisk støtter framstillingen.
-]
 """
 
 
@@ -334,6 +536,34 @@ def _add_markdown_to_docx(document, markdown: str, chapter_title: str) -> None:
         index += 1
 
 
+def _add_docx_hyperlink(paragraph, text: str, url: str) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.opc.constants import RELATIONSHIP_TYPE
+
+    relationship_id = paragraph.part.relate_to(
+        url,
+        RELATIONSHIP_TYPE.HYPERLINK,
+        is_external=True,
+    )
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), relationship_id)
+    run = OxmlElement("w:r")
+    properties = OxmlElement("w:rPr")
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "235F72")
+    properties.append(color)
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    properties.append(underline)
+    run.append(properties)
+    text_element = OxmlElement("w:t")
+    text_element.text = text
+    run.append(text_element)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
+
+
 def build_docx(compendium: Compendium, *, image_path: str = "", image_credit: str = "") -> bytes:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -356,30 +586,56 @@ def build_docx(compendium: Compendium, *, image_path: str = "", image_credit: st
         caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
     document.add_page_break()
 
-    document.add_heading("Om kompendiet", level=1)
+    document.add_heading("Om ressursen", level=1)
     scope = compendium.scope_contract
-    document.add_paragraph(scope.completeness_note)
-    table = document.add_table(rows=4, cols=2)
+    document.add_paragraph(
+        f"Dette kompendiet gir en {_scope_label(scope.completeness_label).lower()} "
+        f"av {compendium.topic}."
+    )
+    scope_rows: list[tuple[str, str]] = []
+    if _is_meaningful_scope_value(scope.reference_date):
+        scope_rows.append(("Tidsrom", scope.reference_date))
+    if _is_meaningful_scope_value(scope.geography):
+        scope_rows.append(("Geografisk ramme", scope.geography))
+    scope_rows.append(("Dekning", _scope_label(scope.completeness_label)))
+    table = document.add_table(rows=len(scope_rows), cols=2)
     table.style = "Table Grid"
-    rows = [
-        ("Referansetid", scope.reference_date or "Ikke spesifisert"),
-        ("Geografi", scope.geography or "Ikke spesifisert"),
-        ("Dekningsnivå", _scope_label(scope.completeness_label)),
-        ("Utelatelser", "; ".join(scope.exclusions) or "Ikke spesifisert"),
-    ]
-    for row, values in zip(table.rows, rows):
+    for row, values in zip(table.rows, scope_rows):
         row.cells[0].text, row.cells[1].text = values
+    scope_note = _student_facing_scope_note(scope.completeness_note)
+    if scope_note:
+        document.add_paragraph(scope_note)
+    if compendium.competency_goals:
+        document.add_heading("Mål for arbeidet", level=2)
+        for goal in compendium.competency_goals:
+            document.add_paragraph(_clean_markdown(goal), style="List Bullet")
+    document.add_heading("Slik kan du arbeide", level=2)
+    for item in (
+        "Les spørsmålene før hvert kapittel.",
+        "Bruk tabeller, oppsummeringer og begreper til å finne sammenhenger.",
+        "Undersøk kildene og vurder hvilke påstander de støtter.",
+    ):
+        document.add_paragraph(item, style="List Number")
+    document.add_page_break()
 
     for chapter in sorted(compendium.chapters, key=lambda item: item.order):
         document.add_heading(chapter.title, level=1)
         if chapter.purpose:
             paragraph = document.add_paragraph(chapter.purpose)
             paragraph.style = document.styles["Quote"]
+        if chapter.guiding_questions:
+            document.add_heading("Spørsmål å ha med seg", level=2)
+            for question in chapter.guiding_questions[:4]:
+                document.add_paragraph(_clean_markdown(question), style="List Number")
         _add_markdown_to_docx(document, chapter.content_markdown, chapter.title)
+        if chapter.key_facts:
+            document.add_heading("Kort oppsummert", level=2)
+            for item in chapter.key_facts[:6]:
+                document.add_paragraph(_clean_markdown(item), style="List Bullet")
         if compendium.include_glossary and chapter.glossary:
             document.add_heading("Begreper", level=2)
             for item in chapter.glossary:
-                document.add_paragraph(item, style="List Bullet")
+                document.add_paragraph(_clean_markdown(item), style="List Bullet")
 
     if compendium.include_reflection_tasks:
         document.add_heading("Videre arbeid", level=1)
@@ -399,10 +655,12 @@ def build_docx(compendium: Compendium, *, image_path: str = "", image_credit: st
             if source.publisher:
                 value += f" — {source.publisher}"
             if source.url:
-                value += f" — {source.url}"
-            document.add_paragraph(value, style="List Number")
+                paragraph = document.add_paragraph(style="List Number")
+                _add_docx_hyperlink(paragraph, value, source.url)
+            else:
+                document.add_paragraph(value, style="List Number")
     else:
-        document.add_paragraph("Ingen eksterne kilder er registrert. Dokumentet må kildekontrolleres før bruk.")
+        document.add_paragraph("Det er ikke registrert eksterne kilder i denne versjonen.")
 
     stream = io.BytesIO()
     document.save(stream)

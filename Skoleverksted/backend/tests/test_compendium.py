@@ -11,6 +11,7 @@ import pytest
 from Skoleverksted.backend.platform import compendium_renderer
 from Skoleverksted.backend.platform.compendium import (
     _extract_json,
+    _source_payload,
     generate_compendium_chapter,
     plan_compendium,
     repair_compendium_chapter,
@@ -53,12 +54,42 @@ def test_fallback_outline_has_scope_contract_and_requested_chapters():
     assert all(chapter.guiding_questions for chapter in proposal.chapters)
 
 
+def test_fallback_outline_understands_century_and_avoids_internal_placeholders():
+    proposal = plan_compendium(CompendiumPlanRequest(
+        topic="Politiske ideologier i det 20. århundre",
+        subject="Historie",
+        level="VG2",
+        use_ai=False,
+    ))
+
+    assert proposal.scope_contract.reference_date == "1901–2000"
+    assert proposal.scope_contract.geography == ""
+    assert "læreren" not in proposal.scope_contract.completeness_note.casefold()
+
+
 def test_json_extractor_uses_the_first_complete_object():
     payload = _extract_json(
         '```json\n{"content_markdown":"## Kapittel","sources":[]}\n```\n'
         "Grounding metadata: {ikke del av svaret}"
     )
     assert payload["content_markdown"] == "## Kapittel"
+
+
+def test_source_payload_keeps_canonical_pages_and_drops_search_redirects():
+    sources = _source_payload([
+        {
+            "title": "Ideologi",
+            "url": "https://snl.no/ideologi?utm_source=search",
+            "publisher": "Store norske leksikon",
+        },
+        {
+            "title": "Midlertidig søketreff",
+            "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/temporary",
+            "publisher": "",
+        },
+    ])
+
+    assert [source.url for source in sources] == ["https://snl.no/ideologi"]
 
 
 def test_failed_regeneration_keeps_the_previous_chapter(monkeypatch):
@@ -340,14 +371,37 @@ def test_renderer_builds_structured_source_and_word_document():
     for chapter in compendium.chapters:
         chapter.content_markdown = (
             f"## {chapter.title}\n\n### Bakgrunn\n\nEt faglig avsnitt om temaet.\n\n"
-            "| Område | Kjennetegn |\n|---|---|\n| Eksempel | Forklaring |\n"
+            "| Område | Kjennetegn |\n|---|---|\n"
+            "| Eksempel | Første poeng<br>Andre poeng om produjonsmidlene |\n"
         )
+        chapter.key_facts = ["Et kort, kontrollert hovedpoeng."]
         chapter.glossary = ["Len – en politisk og økonomisk forbindelse"]
         chapter.status = "approved"
+    compendium.chapters[0].sources = [
+        CompendiumSource(
+            title="Ideologi",
+            url="https://snl.no/ideologi?utm_source=test",
+            publisher="Store norske leksikon",
+        ),
+        CompendiumSource(
+            title="snl.no",
+            url="https://vertexaisearch.cloud.google.com/grounding-api-redirect/temporary",
+        ),
+    ]
     typst = build_typst_document(compendium)
     assert "#outline(title: [Innhold], depth: 1" in typst
-    assert "Avgrensningskontrakt" in typst
+    assert "Ramme for framstillingen" in typst
+    assert "Avgrensningskontrakt" not in typst
+    assert "Avgrenses av læreren før produksjon" not in typst
+    assert "Lærerens sluttkontroll" not in typst
     assert "#table(columns: 2" in typst
+    assert "<br>" not in typst
+    assert "produksjonsmidlene" in typst
+    assert "produjonsmidlene" not in typst
+    assert "vertexaisearch.cloud.google.com" not in typst
+    assert '#link("https://snl.no/ideologi")' in typst
+    assert "Spørsmål å ha med seg" in typst
+    assert "Kort oppsummert" in typst
     docx = build_docx(compendium)
     assert docx.startswith(b"PK")
     assert len(docx) > 10_000

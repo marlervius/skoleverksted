@@ -54,6 +54,23 @@ const statusLabels = {
   archived: "Arkivert",
 };
 
+function isTransientSource(url: string) {
+  if (!url) return false;
+  try {
+    return new URL(url).hostname === "vertexaisearch.cloud.google.com";
+  } catch {
+    return true;
+  }
+}
+
+function isMeaningfulScopeValue(value: string) {
+  const normalized = value.trim().toLocaleLowerCase("nb");
+  return Boolean(normalized)
+    && !normalized.includes("ikke spesifisert")
+    && !normalized.includes("avgrenses av læreren")
+    && !normalized.includes("før produksjon");
+}
+
 function ChapterCard({
   compendium,
   chapter,
@@ -78,6 +95,7 @@ function ChapterCard({
   const [questions, setQuestions] = useState(chapter.guiding_questions.join("\n"));
   const [content, setContent] = useState(chapter.content_markdown);
   const [localBusy, setLocalBusy] = useState("");
+  const visibleSources = chapter.sources.filter((source) => !isTransientSource(source.url));
 
   useEffect(() => {
     setTitle(chapter.title);
@@ -261,11 +279,11 @@ function ChapterCard({
             </details>
           )}
 
-          {chapter.sources.length > 0 && (
+          {visibleSources.length > 0 && (
             <div className="mt-4">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-text-muted">Registrerte kilder</h4>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {chapter.sources.map((source, index) => (
+                {visibleSources.map((source, index) => (
                   source.url
                     ? <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer" className="rounded-lg border border-border bg-surface px-3 py-2 text-xs text-text-secondary hover:border-accent-blue/40"><span className="font-medium text-text-primary">{source.title}</span>{source.publisher && <span className="mt-0.5 block text-text-muted">{source.publisher}</span>}</a>
                     : <div key={`${source.title}-${index}`} className="rounded-lg border border-border bg-surface px-3 py-2 text-xs">{source.title}</div>
@@ -314,7 +332,9 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
 
   const stats = useMemo(() => {
     if (!compendium) return { approved: 0, produced: 0, sources: 0 };
-    const sourceKeys = new Set(compendium.chapters.flatMap((chapter) => chapter.sources.map((source) => source.url || source.title)));
+    const sourceKeys = new Set(compendium.chapters.flatMap((chapter) => chapter.sources
+      .filter((source) => !isTransientSource(source.url))
+      .map((source) => source.url || source.title)));
     return {
       approved: compendium.chapters.filter((chapter) => chapter.status === "approved").length,
       produced: compendium.chapters.filter((chapter) => chapter.content_markdown.trim()).length,
@@ -373,6 +393,8 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
   const allApproved = stats.approved === compendium.chapters.length && compendium.chapters.length > 0;
   const canCompile = allApproved && !action;
   const scope = compendium.scope_contract;
+  const scopeReady = isMeaningfulScopeValue(scope.reference_date)
+    && isMeaningfulScopeValue(scope.geography);
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -412,7 +434,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
         <div className="space-y-4">
           <section className="rounded-xl border border-accent-teal/20 bg-accent-teal/5 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div><h2 className="flex items-center gap-2 font-semibold"><SearchCheck className="h-5 w-5 text-accent-teal" /> Avgrensningskontrakt</h2><p className="mt-1 text-xs text-text-muted">Denne bestemmer hva dokumentet kan hevde å dekke.</p></div>
+              <div><h2 className="flex items-center gap-2 font-semibold"><SearchCheck className="h-5 w-5 text-accent-teal" /> Rammer for innholdet</h2><p className="mt-1 text-xs text-text-muted">Tidsrom og geografi gjør sluttproduktet tydeligere og mer presist.</p></div>
               {!scopeEditing && <button className="btn-secondary" onClick={() => setScopeEditing(true)}><Pencil className="h-4 w-4" /> Rediger</button>}
             </div>
             {scopeEditing && scopeDraft ? (
@@ -473,9 +495,22 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
               </div>
             )}
 
+            <div className="mt-4 rounded-lg border border-border bg-bg p-3 text-xs leading-relaxed">
+              <div className="font-semibold text-text-primary">Automatisk eksportkontroll</div>
+              <ul className="mt-2 space-y-1.5 text-text-secondary">
+                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-green" /> Tekniske koder og rå søkelenker fjernes.</li>
+                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-green" /> Lærerens kontrollmerknader holdes utenfor elevutgaven.</li>
+                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-green" /> Kilder vises med ryddige, klikkbare titler.</li>
+                <li className="flex gap-2">
+                  {scopeReady ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-green" /> : <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-orange" />}
+                  {scopeReady ? "Tidsrom og geografi er presisert." : "Uavklarte rammefelt skjules i elevutgaven. Fyll dem ut for best resultat."}
+                </li>
+              </ul>
+            </div>
+
             <button className="btn-primary mt-5 w-full" disabled={!canCompile} onClick={() => void run("compile", () => compileCompendium(compendium.id))}>
               {action === "compile" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-              {compendium.artifact_version ? "Bygg ny dokumentversjon" : "Bygg PDF og Word"}
+              {compendium.artifact_version ? "Bygg ny elevversjon" : "Bygg PDF og Word"}
             </button>
 
             {compendium.artifact_version > 0 && (
