@@ -11,6 +11,7 @@ import pytest
 from Skoleverksted.backend.platform import compendium_renderer
 from Skoleverksted.backend.platform.compendium import (
     _extract_json,
+    _source_quality_notes,
     _source_payload,
     generate_compendium_chapter,
     plan_compendium,
@@ -90,6 +91,30 @@ def test_source_payload_keeps_canonical_pages_and_drops_search_redirects():
     ])
 
     assert [source.url for source in sources] == ["https://snl.no/ideologi"]
+
+
+def test_source_quality_notes_reject_weak_sources_and_generic_homepages():
+    notes = _source_quality_notes([
+        CompendiumSource(
+            title="Political ideology",
+            url="https://en.wikipedia.org/wiki/Political_ideology",
+        ),
+        CompendiumSource(
+            title="NDLA",
+            url="https://ndla.no/",
+        ),
+        CompendiumSource(
+            title="Ideologi",
+            url="https://snl.no/ideologi",
+            publisher="Store norske leksikon",
+        ),
+    ])
+
+    assert len(notes) == 2
+    assert any("primærkilde" in note for note in notes)
+    assert any("forside" in note for note in notes)
+    assert not any("Ideologi" in note for note in notes)
+    assert "mangler et konkret kildegrunnlag" in _source_quality_notes([])[0]
 
 
 def test_failed_regeneration_keeps_the_previous_chapter(monkeypatch):
@@ -222,6 +247,57 @@ def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch)
         stored_chapter = stored.chapters[0]
         assert stored_chapter.previous_content_markdown == before
         assert stored_chapter.revision_count == 1
+
+
+def test_automatic_repair_can_upgrade_weak_sources_without_existing_notes(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
+        chapter = compendium.chapters[0]
+        chapter.content_markdown = "## Kapittel\n\n" + (
+            "Ideologier påvirket politiske konflikter og samfunnsendringer. " * 20
+        )
+        chapter.status = "approved"
+        chapter.sources = [
+            CompendiumSource(
+                title="Political ideology – Wikipedia",
+                url="https://en.wikipedia.org/wiki/Political_ideology",
+            )
+        ]
+        calls = 0
+
+        def upgrade_then_verify(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return ({
+                    "content_markdown": chapter.content_markdown,
+                    "changes": ["Wikipedia ble erstattet med en konkret fagartikkel."],
+                    "key_facts": ["Ideologier gir ulike svar på politiske spørsmål."],
+                    "glossary": ["Ideologi – et sammenhengende sett av politiske ideer"],
+                    "sources": [{
+                        "title": "Ideologi",
+                        "url": "https://snl.no/ideologi",
+                        "publisher": "Store norske leksikon",
+                    }],
+                }, [])
+            return ({
+                "approved": True,
+                "notes": [],
+                "unsafe_claims": [],
+            }, [])
+
+        monkeypatch.setattr(
+            "Skoleverksted.backend.platform.compendium._call_google_json",
+            upgrade_then_verify,
+        )
+
+        repaired = repair_compendium_chapter(compendium, chapter.id)
+        assert repaired.status == "generated"
+        assert repaired.sources[0].url == "https://snl.no/ideologi"
+        assert repaired.revision_summary == [
+            "Wikipedia ble erstattet med en konkret fagartikkel."
+        ]
+        assert not _source_quality_notes(repaired.sources)
 
 
 def test_automatic_repair_keeps_unresolved_claims_for_teacher_control(monkeypatch):
@@ -402,6 +478,8 @@ def test_renderer_builds_structured_source_and_word_document():
     assert '#link("https://snl.no/ideologi")' in typst
     assert "Spørsmål å ha med seg" in typst
     assert "Kort oppsummert" in typst
+    assert typst.count("#pagebreak()") == 3
+    assert "#block(breakable: false" in typst
     docx = build_docx(compendium)
     assert docx.startswith(b"PK")
     assert len(docx) > 10_000

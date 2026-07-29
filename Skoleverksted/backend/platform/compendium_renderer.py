@@ -295,18 +295,31 @@ def build_typst_document(compendium: Compendium, *, image_path: str = "", image_
                 for item in chapter.key_facts[:6]
             )
             key_facts = f"""
-== Kort oppsummert
-#block(fill: rgb("#F4F6F8"), inset: 10pt, radius: 5pt)[
-{fact_items}
+#block(breakable: false, fill: rgb("#F4F6F8"), inset: 9pt, radius: 5pt)[
+  #set text(size: 9.2pt)
+  #set par(justify: false, leading: 0.62em)
+  #text(size: 12pt, weight: 600, fill: rgb("#235F72"))[Kort oppsummert]
+  #v(4pt)
+  {fact_items}
 ]
 """
         glossary = ""
         if compendium.include_glossary and chapter.glossary:
+            visible_glossary = chapter.glossary[:12]
             terms = "\n".join(
                 f"- {_typst_escape(_clean_markdown(item))}"
-                for item in chapter.glossary
+                for item in visible_glossary
             )
-            glossary = f"\n== Begreper\n{terms}\n"
+            breakable = "false" if len(visible_glossary) <= 8 else "true"
+            glossary = f"""
+#block(breakable: {breakable}, inset: (top: 4pt, bottom: 2pt))[
+  #set text(size: 9.2pt)
+  #set par(justify: false, leading: 0.62em)
+  #text(size: 12pt, weight: 600, fill: rgb("#235F72"))[Begreper]
+  #v(4pt)
+  {terms}
+]
+"""
         chapter_blocks.append(
             f"= {_typst_escape(chapter.title)}\n"
             f"#text(fill: rgb(\"#5A6572\"), style: \"italic\")[{_typst_escape(chapter.purpose)}]\n"
@@ -472,7 +485,7 @@ oppsummeringene til å få oversikt før du går inn i detaljene.
 #outline(title: [Innhold], depth: 1, indent: auto)
 #pagebreak()
 
-{"\n#pagebreak()\n".join(chapter_blocks)}
+{"\n#v(10pt)\n".join(chapter_blocks)}
 
 {tasks}
 

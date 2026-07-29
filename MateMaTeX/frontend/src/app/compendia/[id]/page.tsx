@@ -71,6 +71,23 @@ function isMeaningfulScopeValue(value: string) {
     && !normalized.includes("før produksjon");
 }
 
+function sourceNeedsUpgrade(source: { title: string; url: string }) {
+  const title = source.title.toLocaleLowerCase("nb");
+  if (["wikipedia", "scribd", "karakterløftet", "britannica kids"].some((marker) => title.includes(marker))) {
+    return true;
+  }
+  if (!source.url) return true;
+  try {
+    const parsed = new URL(source.url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    const weakHosts = ["wikipedia.org", "scribd.com", "karakterloftet.no", "kids.britannica.com"];
+    if (weakHosts.some((value) => host === value || host.endsWith(`.${value}`))) return true;
+    return parsed.pathname.replace(/\/+$/, "") === "";
+  } catch {
+    return true;
+  }
+}
+
 function ChapterCard({
   compendium,
   chapter,
@@ -96,6 +113,8 @@ function ChapterCard({
   const [content, setContent] = useState(chapter.content_markdown);
   const [localBusy, setLocalBusy] = useState("");
   const visibleSources = chapter.sources.filter((source) => !isTransientSource(source.url));
+  const weakSourceCount = visibleSources.filter(sourceNeedsUpgrade).length
+    + (chapter.content_markdown.trim() && visibleSources.length === 0 ? 1 : 0);
 
   useEffect(() => {
     setTitle(chapter.title);
@@ -173,15 +192,21 @@ function ChapterCard({
               {localBusy === "generate" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {chapter.content_markdown ? "Lag ny versjon" : "Produser kapittel"}
             </button>
-            {chapter.status === "needs_revision" && chapter.content_markdown && chapter.verification_notes.length > 0 && (
+            {chapter.content_markdown && (chapter.verification_notes.length > 0 || weakSourceCount > 0) && (
               <button
                 className="btn-primary !bg-accent-teal hover:!bg-accent-teal/90"
                 disabled={working || compendium.status === "outline"}
                 onClick={() => void run("repair", () => repairCompendiumChapter(compendium.id, chapter.id))}
-                title="Undersøk kontrollmerknadene, rett teksten og kontroller resultatet på nytt"
+                title={weakSourceCount > 0
+                  ? "Erstatt svake og generelle kilder med konkrete, autoritative kilder"
+                  : "Undersøk kontrollmerknadene, rett teksten og kontroller resultatet på nytt"}
               >
                 {localBusy === "repair" ? <Loader2 className="h-4 w-4 animate-spin" /> : <SearchCheck className="h-4 w-4" />}
-                {localBusy === "repair" ? "Sjekker og retter…" : "Sjekk og rett automatisk"}
+                {localBusy === "repair"
+                  ? "Sjekker og retter…"
+                  : weakSourceCount > 0
+                    ? `Oppgrader kilder (${weakSourceCount})`
+                    : "Sjekk og rett automatisk"}
               </button>
             )}
           </div>
@@ -281,7 +306,10 @@ function ChapterCard({
 
           {visibleSources.length > 0 && (
             <div className="mt-4">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-text-muted">Registrerte kilder</h4>
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-text-muted">Registrerte kilder</h4>
+                {weakSourceCount > 0 && <span className="badge bg-accent-orange/10 text-accent-orange">{weakSourceCount} bør oppgraderes</span>}
+              </div>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 {visibleSources.map((source, index) => (
                   source.url
@@ -331,14 +359,21 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
   }, [params.id]);
 
   const stats = useMemo(() => {
-    if (!compendium) return { approved: 0, produced: 0, sources: 0 };
-    const sourceKeys = new Set(compendium.chapters.flatMap((chapter) => chapter.sources
-      .filter((source) => !isTransientSource(source.url))
-      .map((source) => source.url || source.title)));
+    if (!compendium) return { approved: 0, produced: 0, sources: 0, weakSources: 0 };
+    const visibleSources = compendium.chapters.flatMap((chapter) => chapter.sources
+      .filter((source) => !isTransientSource(source.url)));
+    const sourceKeys = new Set(visibleSources.map((source) => source.url || source.title));
+    const weakSources = compendium.chapters.reduce((count, chapter) => {
+      const chapterSources = chapter.sources.filter((source) => !isTransientSource(source.url));
+      return count
+        + chapterSources.filter(sourceNeedsUpgrade).length
+        + (chapter.content_markdown.trim() && chapterSources.length === 0 ? 1 : 0);
+    }, 0);
     return {
       approved: compendium.chapters.filter((chapter) => chapter.status === "approved").length,
       produced: compendium.chapters.filter((chapter) => chapter.content_markdown.trim()).length,
       sources: sourceKeys.size,
+      weakSources,
     };
   }, [compendium]);
 
@@ -387,11 +422,36 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
     }
   }
 
+  async function upgradeAllSources() {
+    if (!compendium) return;
+    const chapters = compendium.chapters.filter((chapter) =>
+      chapter.content_markdown.trim()
+      && (
+        !chapter.sources.some((source) => !isTransientSource(source.url))
+        || chapter.sources.some((source) => !isTransientSource(source.url) && sourceNeedsUpgrade(source))
+      ));
+    if (!chapters.length) return;
+    setAction("sources");
+    setError("");
+    try {
+      for (let index = 0; index < chapters.length; index += 1) {
+        setBatchProgress(`Oppgraderer kilder i kapittel ${index + 1} av ${chapters.length}: ${chapters[index].title}`);
+        const updated = await repairCompendiumChapter(compendium.id, chapters[index].id);
+        setCompendium(updated);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Kildeløftet stoppet.");
+    } finally {
+      setAction("");
+      setBatchProgress("");
+    }
+  }
+
   if (loading) return <div className="flex items-center gap-2 py-12 text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Laster kompendiet …</div>;
   if (!compendium) return <div role="alert" className="card text-accent-red">{error || "Kompendiet finnes ikke."}</div>;
 
   const allApproved = stats.approved === compendium.chapters.length && compendium.chapters.length > 0;
-  const canCompile = allApproved && !action;
+  const canCompile = allApproved && stats.weakSources === 0 && !action;
   const scope = compendium.scope_contract;
   const scopeReady = isMeaningfulScopeValue(scope.reference_date)
     && isMeaningfulScopeValue(scope.geography);
@@ -460,9 +520,16 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
 
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div><h2 className="text-xl font-semibold">Kapitler</h2><p className="mt-1 text-sm text-text-muted">Research, kontroller og godkjenn ett kapittel om gangen.</p></div>
-            <button className="btn-primary" disabled={compendium.status === "outline" || action === "batch" || !compendium.chapters.some((chapter) => chapter.status === "planned" || chapter.status === "needs_revision")} onClick={() => void generateAll()}>
-              {action === "batch" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Produser gjenstående
-            </button>
+            <div className="flex flex-wrap gap-2">
+              {stats.weakSources > 0 && (
+                <button className="btn-secondary" disabled={compendium.status === "outline" || Boolean(action)} onClick={() => void upgradeAllSources()}>
+                  {action === "sources" ? <Loader2 className="h-4 w-4 animate-spin" /> : <SearchCheck className="h-4 w-4" />} Forbedre kildegrunnlag ({stats.weakSources})
+                </button>
+              )}
+              <button className="btn-primary" disabled={compendium.status === "outline" || Boolean(action) || !compendium.chapters.some((chapter) => chapter.status === "planned" || chapter.status === "needs_revision")} onClick={() => void generateAll()}>
+                {action === "batch" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Produser gjenstående
+              </button>
+            </div>
           </div>
           {batchProgress && <div className="rounded-lg border border-accent-blue/20 bg-accent-blue/5 px-4 py-3 text-sm text-text-secondary">{batchProgress}</div>}
           {compendium.chapters.map((chapter) => (
@@ -471,7 +538,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
               compendium={compendium}
               chapter={chapter}
               expanded={expanded === chapter.id}
-              busy={action === "batch"}
+              busy={action === "batch" || action === "sources"}
               onToggle={() => setExpanded(expanded === chapter.id ? "" : chapter.id)}
               onUpdated={setCompendium}
               onError={setError}
@@ -485,6 +552,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
             <div className="mt-4 space-y-3 text-sm">
               <div className="flex justify-between"><span className="text-text-secondary">Godkjente kapitler</span><strong>{stats.approved}/{compendium.chapters.length}</strong></div>
               <div className="flex justify-between"><span className="text-text-secondary">Kilder</span><strong>{stats.sources}</strong></div>
+              {stats.weakSources > 0 && <div className="flex justify-between text-accent-orange"><span>Kildesvakheter</span><strong>{stats.weakSources}</strong></div>}
               <div className="flex justify-between"><span className="text-text-secondary">Bilde</span><strong>{compendium.image_mode === "commons" ? "Commons" : compendium.image_mode === "ai" ? "KI-merket" : "Nei"}</strong></div>
               <div className="flex justify-between"><span className="text-text-secondary">Årsplankobling</span><strong>{compendium.period_ids.length || "Nei"}</strong></div>
             </div>
@@ -500,7 +568,10 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
               <ul className="mt-2 space-y-1.5 text-text-secondary">
                 <li className="flex gap-2"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-green" /> Tekniske koder og rå søkelenker fjernes.</li>
                 <li className="flex gap-2"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-green" /> Lærerens kontrollmerknader holdes utenfor elevutgaven.</li>
-                <li className="flex gap-2"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-green" /> Kilder vises med ryddige, klikkbare titler.</li>
+                <li className="flex gap-2">
+                  {stats.weakSources > 0 ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-orange" /> : <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-green" />}
+                  {stats.weakSources > 0 ? `Kildegrunnlaget har ${stats.weakSources} svakheter som bør rettes før godkjenning.` : "Kildene er konkrete og egnet for elevutgaven."}
+                </li>
                 <li className="flex gap-2">
                   {scopeReady ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-green" /> : <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-orange" />}
                   {scopeReady ? "Tidsrom og geografi er presisert." : "Uavklarte rammefelt skjules i elevutgaven. Fyll dem ut for best resultat."}

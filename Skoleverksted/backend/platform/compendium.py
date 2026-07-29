@@ -23,6 +23,18 @@ logger = logging.getLogger(__name__)
 _TRANSIENT_SOURCE_HOSTS = {
     "vertexaisearch.cloud.google.com",
 }
+_WEAK_SOURCE_HOST_SUFFIXES = (
+    "wikipedia.org",
+    "scribd.com",
+    "karakterloftet.no",
+    "kids.britannica.com",
+)
+_WEAK_SOURCE_TITLE_MARKERS = (
+    "wikipedia",
+    "scribd",
+    "karakterløftet",
+    "britannica kids",
+)
 _TRACKING_QUERY_PREFIXES = ("utm_",)
 _TRACKING_QUERY_KEYS = {
     "gclid",
@@ -197,6 +209,47 @@ def _canonical_source_url(value: Any) -> str:
     if path != "/":
         path = path.rstrip("/")
     return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, query, ""))
+
+
+def _source_quality_notes(sources: list[CompendiumSource]) -> list[str]:
+    """Return actionable notes for sources that should not carry core claims."""
+    if not sources:
+        return [
+            "Kapitlet mangler et konkret kildegrunnlag. Finn autoritative kilder "
+            "som dokumenterer de sentrale påstandene."
+        ]
+    notes: list[str] = []
+    for source in sources:
+        title = _text(source.title, 300) or "Kilde uten tittel"
+        canonical = _canonical_source_url(source.url)
+        title_key = title.casefold()
+        if not canonical:
+            note = f'Kilden «{title}» mangler en stabil, konkret nettadresse.'
+        else:
+            parsed = urlsplit(canonical)
+            host = (parsed.hostname or "").lower().removeprefix("www.")
+            weak_host = any(
+                host == suffix or host.endswith(f".{suffix}")
+                for suffix in _WEAK_SOURCE_HOST_SUFFIXES
+            )
+            weak_title = any(marker in title_key for marker in _WEAK_SOURCE_TITLE_MARKERS)
+            if weak_host or weak_title:
+                note = (
+                    f'Kilden «{title}» bør erstattes med en primærkilde, et '
+                    "offentlig fagmiljø eller et redaktørstyrt oppslagsverk."
+                )
+            elif (parsed.path or "/").rstrip("/") == "":
+                note = (
+                    f'Kilden «{title}» peker bare til en forside. Finn den '
+                    "konkrete siden som dokumenterer påstanden."
+                )
+            else:
+                continue
+        if note not in notes:
+            notes.append(note)
+        if len(notes) >= 20:
+            break
+    return notes
 
 
 def _extract_json(value: object) -> dict[str, Any]:
@@ -654,6 +707,7 @@ JSON:
         for source in grounded_sources:
             if source.url and not any(item.url == source.url for item in sources):
                 sources.append(source)
+        source_quality_notes = _source_quality_notes(sources)
         verification_prompt = f"""
 Du er en streng faktakontrollør og redaktør. Kontroller kapittelteksten nedenfor
 mot avgrensningskontrakten og den oppgitte kildelisten. Ikke omskriv teksten.
@@ -687,7 +741,12 @@ eller svake kilder for sentrale påstander.
         unsafe = _strings(verdict.get("unsafe_claims"), 20)
         if unsafe:
             notes.extend(f"Må kontrolleres: {claim}" for claim in unsafe)
-        approved = verdict.get("approved") is True and not unsafe
+        notes.extend(note for note in source_quality_notes if note not in notes)
+        approved = (
+            verdict.get("approved") is True
+            and not unsafe
+            and not source_quality_notes
+        )
         updated = chapter.model_dump()
         updated.update(
             content_markdown=content,
@@ -727,8 +786,13 @@ def repair_compendium_chapter(compendium: Compendium, chapter_id: str) -> Compen
     content_before = chapter.content_markdown.strip()
     if len(content_before) < 100:
         raise ValueError("Kapitlet må ha en tekst før kontrollmerknadene kan rettes.")
-    if not chapter.verification_notes:
-        raise ValueError("Kapitlet har ingen kontrollmerknader å rette.")
+    source_quality_notes = _source_quality_notes(chapter.sources)
+    repair_notes = _strings(
+        [*chapter.verification_notes, *source_quality_notes],
+        30,
+    )
+    if not repair_notes:
+        raise ValueError("Kapitlet har ingen kontrollmerknader eller svake kilder å rette.")
 
     scope = compendium.scope_contract.model_dump()
     repair_prompt = f"""
@@ -742,7 +806,7 @@ Målgruppe: {compendium.audience}
 Avgrensningskontrakt: {json.dumps(scope, ensure_ascii=False)}
 
 <KONTROLLMERKNADER>
-{json.dumps(chapter.verification_notes, ensure_ascii=False)}
+{json.dumps(repair_notes, ensure_ascii=False)}
 </KONTROLLMERKNADER>
 
 <REGISTRERTE_KILDER>
@@ -802,12 +866,17 @@ JSON:
                 sources.append(source)
         if not sources:
             raise ValueError("KI-redaktøren fant ingen etterprøvbare kilder.")
+        remaining_source_issues = _source_quality_notes(sources)
+        if remaining_source_issues:
+            raise ValueError(
+                "KI-redaktøren beholdt svake eller uspesifikke kilder; prøv kildeløftet på nytt."
+            )
     except Exception as exc:
         logger.warning("Automatisk kapittelretting feilet for %s: %s", chapter.title, exc)
         updated = chapter.model_dump()
         updated.update(
             verification_notes=[
-                *chapter.verification_notes[:25],
+                *repair_notes[:25],
                 "Automatisk retting kunne ikke fullføres. Kapittelteksten er "
                 "bevart uendret; prøv igjen om litt.",
             ][:30],
@@ -821,14 +890,15 @@ Du er en uavhengig faktakontrollør. Bruk Google-søk og kontroller den revidert
 kapittelteksten mot de opprinnelige kontrollmerknadene, avgrensningen og de
 konkrete kildene. Ikke omskriv teksten. Returner bare JSON.
 
-Opprinnelige merknader: {json.dumps(chapter.verification_notes, ensure_ascii=False)}
+Opprinnelige merknader: {json.dumps(repair_notes, ensure_ascii=False)}
 Avgrensning: {json.dumps(scope, ensure_ascii=False)}
 Kilder: {json.dumps([source.model_dump() for source in sources], ensure_ascii=False)}
 <REVIDERT_KAPITTEL>{repaired_content}</REVIDERT_KAPITTEL>
 
 Godkjenn bare dersom alle opprinnelige merknader er løst, sentrale påstander
 har dekkende kilder, og teksten ikke inneholder nye udokumenterte
-generaliseringer.
+generaliseringer. Godkjenn ikke dersom Wikipedia, Scribd, elevsammendrag,
+generelle forsider eller kilder uten konkret nettadresse fortsatt brukes.
 
 JSON:
 {{
