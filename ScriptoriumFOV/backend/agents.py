@@ -11,10 +11,10 @@ from crewai import Agent, Task, Crew, Process, LLM
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt
 
 if __package__:
-    from .config import CACHE_TTL_SECONDS, GOOGLE_MODEL
+    from .config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
     from .errors import GeminiQuotaExceededError
 else:
-    from config import CACHE_TTL_SECONDS, GOOGLE_MODEL
+    from config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
     from errors import GeminiQuotaExceededError
 
 logger = logging.getLogger(__name__)
@@ -527,9 +527,8 @@ def _init_agents() -> None:
     if _initialized:
         return
 
-    from config import GOOGLE_API_KEY, GOOGLE_MODEL as _model_default
     google_api_key = GOOGLE_API_KEY
-    model_name = _model_default
+    model_name = GOOGLE_MODEL
 
     if not google_api_key:
         raise RuntimeError(
