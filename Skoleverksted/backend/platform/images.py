@@ -47,6 +47,7 @@ _FREE_LICENSE_MARKERS = (
     "gfdl",
 )
 _RESTRICTIVE_LICENSE_MARKERS = ("noncommercial", "no derivatives", "cc by-nc", "cc by-nd")
+_RASTER_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 
 @dataclass
@@ -134,6 +135,16 @@ def _fallback_plan(topic: str, subject: str, level: str) -> dict:
             topic,
         ],
         "fallback_search_queries": [topic, f"{topic} {subject}"],
+        "fallback_motif": (
+            f"One simple, authentic and clearly identifiable subject directly connected to {topic}, "
+            "without explanatory text"
+        ),
+        "fallback_rationale": (
+            f"Reservebildet gir eleven et konkret observasjonspunkt knyttet til {topic}, "
+            "uten å påstå at bildet viser en usynlig prosess eller hele fagforklaringen."
+        ),
+        "fallback_caption": f"Et konkret eksempel knyttet til {topic}"[:80],
+        "fallback_alt_text": f"Et tydelig motiv knyttet til {topic}",
         "generation_prompt": (
             f"A clear educational illustration of {topic} for a {subject} lesson at level {level}. "
             "Show the core concept concretely with one obvious focal point."
@@ -185,6 +196,11 @@ Utdrag fra ferdig læringstekst:
 Bildet må vise hovedideen konkret, være faglig trygt, fungere på papir og gi
 eleven noe relevant å observere eller snakke om. Unngå pynt, kollasjer og tett
 tekst. For historiske eller vitenskapelige tema må usikre detaljer utelates.
+Planlegg også ett enklere reservebilde som er direkte knyttet til temaet dersom
+det ideelle motivet ikke finnes. Reservebildet kan vise et observerbart objekt
+eller fenomen som støtter samtalen, men bildeteksten må være ærlig og må ikke
+påstå at bildet viser en usynlig prosess eller hele forklaringen. Eksempel:
+Ved fotosyntese kan reservebildet vise tydelige grønne blader i sollys.
 
 Svar KUN med ett JSON-objekt:
 {{
@@ -192,6 +208,10 @@ Svar KUN med ett JSON-objekt:
   "rationale": "<hvordan bildet støtter læringen>",
   "search_queries": ["<engelsk Commons-søk 1>", "<søk 2>", "<søk 3>"],
   "fallback_search_queries": ["<kort, bredt engelsk søk 1>", "<bredt søk 2>"],
+  "fallback_motif": "<enklere, observerbart reservemotiv>",
+  "fallback_rationale": "<hva eleven kan observere uten at bildet overforklares>",
+  "fallback_caption": "<ærlig bildetekst for reservemotivet, maks 12 ord>",
+  "fallback_alt_text": "<konkret alternativ tekst for reservemotivet>",
   "generation_prompt": "<detaljert engelsk bildeprompt>",
   "caption": "<kort bildetekst på samme språk som læringsarket, maks 12 ord>",
   "alt_text": "<kort, konkret alternativ tekst>"
@@ -269,7 +289,14 @@ def _search_wikimedia(query: str, plan: dict, limit: int = 6) -> list[dict]:
         if not info_list:
             continue
         info = info_list[0]
-        if info.get("mime") not in {"image/jpeg", "image/png", "image/webp"}:
+        source_mime = str(info.get("mime") or "").lower()
+        thumbnail_url = str(info.get("thumburl") or "").strip()
+        raster_source = source_mime in _RASTER_MIME_TYPES
+        # Commons stores many of its best scientific diagrams as SVG. The API
+        # provides a rasterised thumbnail through iiurlwidth; use that exact
+        # PNG/WebP preview while keeping the original Commons file page as the
+        # attribution target.
+        if not raster_source and not (source_mime == "image/svg+xml" and thumbnail_url):
             continue
         width, height = int(info.get("width", 0)), int(info.get("height", 0))
         if width < 500 or height < 300:
@@ -290,8 +317,8 @@ def _search_wikimedia(query: str, plan: dict, limit: int = 6) -> list[dict]:
         page_url = "https://commons.wikimedia.org/wiki/File:" + quote(title.replace(" ", "_"))
         candidates.append(
             {
-                "url": info.get("thumburl") or info.get("url"),
-                "original_url": info.get("url"),
+                "url": thumbnail_url or info.get("url"),
+                "original_url": info.get("url") if raster_source else None,
                 "title": title,
                 "description": description,
                 "creator": creator,
@@ -558,6 +585,31 @@ def _try_commons_candidates(plan: dict, candidates: list[dict]) -> Optional[Imag
     return None
 
 
+def _topic_commons_reserve(plan: dict) -> dict:
+    """Return a deterministic, honest reserve brief for selected core topics."""
+    topic = str(plan.get("context_topic") or "").casefold()
+    if "fotosyntese" in topic or "photosynthesis" in topic:
+        english = str(plan.get("context_subject") or "").strip().casefold() == "engelsk"
+        return {
+            "queries": [
+                "green leaf sunlight close up",
+                "green leaves sunlight photograph",
+            ],
+            "motif": "A clear close-up photograph of healthy green leaves in natural sunlight",
+            "rationale": (
+                "Eleven kan observere grønne blader og sollys som to konkrete "
+                "forutsetninger for fotosyntesen, uten at fotoet påstås å vise selve prosessen."
+            ),
+            "caption": "Green leaves in sunlight" if english else "Grønne blader i sollys",
+            "alt_text": (
+                "Close-up of green leaves in sunlight"
+                if english
+                else "Nærbilde av grønne blader i sollys"
+            ),
+        }
+    return {}
+
+
 def _commons_image(plan: dict) -> Optional[ImageResult]:
     primary_queries = [
         q.strip() for q in plan.get("search_queries", []) if isinstance(q, str) and q.strip()
@@ -571,16 +623,46 @@ def _commons_image(plan: dict) -> Optional[ImageResult]:
     if result:
         return result
 
-    fallback_queries = [
+    planned_fallback_queries = [
         q.strip()
         for q in plan.get("fallback_search_queries", [])
         if isinstance(q, str) and q.strip() and q.strip() not in primary_queries
     ]
+    topic_reserve = _topic_commons_reserve(plan)
+    fallback_queries = list(dict.fromkeys([
+        *topic_reserve.get("queries", []),
+        *planned_fallback_queries,
+    ]))
     if not fallback_queries:
         fallback_queries = [str(plan.get("context_topic") or plan.get("motif", ""))]
     logger.info("Første Commons-runde ga ikke et godkjent bilde; prøver bredere søk")
-    fallback = _collect_commons_candidates(plan, fallback_queries, seen)
-    return _try_commons_candidates(plan, fallback)
+    fallback_plan = {
+        **plan,
+        "motif": str(
+            topic_reserve.get("motif")
+            or plan.get("fallback_motif")
+            or f"A simple, authentic subject directly connected to {plan.get('context_topic') or plan.get('motif', '')}"
+        ),
+        "rationale": str(
+            topic_reserve.get("rationale")
+            or plan.get("fallback_rationale")
+            or plan.get("rationale", "")
+        ),
+        "caption": str(
+            topic_reserve.get("caption")
+            or plan.get("fallback_caption")
+            or plan.get("caption", "")
+        ),
+        "alt_text": str(
+            topic_reserve.get("alt_text")
+            or plan.get("fallback_alt_text")
+            or plan.get("alt_text", "")
+        ),
+        "search_queries": fallback_queries,
+        "fallback_search_queries": [],
+    }
+    fallback = _collect_commons_candidates(fallback_plan, fallback_queries, seen)
+    return _try_commons_candidates(fallback_plan, fallback)
 
 
 _AI_STYLE_RULES = """

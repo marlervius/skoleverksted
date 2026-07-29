@@ -253,6 +253,55 @@ def test_commons_download_retries_429_and_reuses_successful_bytes(monkeypatch) -
     assert delays == [1.5]
 
 
+def test_commons_search_accepts_svg_through_raster_thumbnail(monkeypatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "query": {
+                    "pages": {
+                        "1": {
+                            "title": "File:Photosynthesis diagram.svg",
+                            "imageinfo": [{
+                                "mime": "image/svg+xml",
+                                "width": 1200,
+                                "height": 800,
+                                "url": "https://upload.wikimedia.org/photosynthesis.svg",
+                                "thumburl": "https://upload.wikimedia.org/1000px-photosynthesis.svg.png",
+                                "extmetadata": {
+                                    "LicenseShortName": {"value": "CC BY-SA 4.0"},
+                                    "ImageDescription": {
+                                        "value": "A clear diagram of photosynthesis in a green plant"
+                                    },
+                                    "Artist": {"value": "Example author"},
+                                },
+                            }],
+                        },
+                    },
+                },
+            }
+
+    fake_requests = ModuleType("requests")
+    fake_requests.get = lambda *_args, **_kwargs: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    candidates = images._search_wikimedia(
+        "photosynthesis diagram",
+        {
+            "motif": "photosynthesis in a green plant",
+            "search_queries": ["photosynthesis diagram"],
+            "fallback_search_queries": [],
+        },
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["url"].endswith(".svg.png")
+    assert candidates[0]["original_url"] is None
+    assert candidates[0]["page_url"].endswith("Photosynthesis_diagram.svg")
+
+
 def test_commons_uses_verified_reserve_and_returns_local_copy(tmp_path, monkeypatch) -> None:
     first = {
         "url": "https://upload.wikimedia.org/first.jpg",
@@ -311,6 +360,7 @@ def test_commons_runs_broader_search_after_empty_primary_round(tmp_path, monkeyp
     local_copy = tmp_path / "broad.jpg"
     local_copy.write_bytes(b"verified")
     searches: list[str] = []
+    selected_motifs: list[str] = []
 
     def fake_search(query: str, plan: dict):
         searches.append(query)
@@ -320,7 +370,11 @@ def test_commons_runs_broader_search_after_empty_primary_round(tmp_path, monkeyp
     monkeypatch.setattr(
         images,
         "_select_candidate",
-        lambda plan, candidates: candidates[0] if candidates else None,
+        lambda plan, candidates: (
+            selected_motifs.append(str(plan.get("motif"))) or candidates[0]
+            if candidates
+            else None
+        ),
     )
     monkeypatch.setattr(
         images,
@@ -333,10 +387,66 @@ def test_commons_runs_broader_search_after_empty_primary_round(tmp_path, monkeyp
             "motif": "Late Roman villa floor mosaic with daily life scene",
             "search_queries": ["Dominus Julius detailed educational photograph"],
             "fallback_search_queries": ["Roman mosaic"],
+            "fallback_motif": "A clearly visible Roman floor mosaic",
+            "fallback_caption": "En romersk gulvmosaikk",
             "caption": "Romersk mosaikk",
         }
     )
 
     assert result is not None
     assert searches == ["Dominus Julius detailed educational photograph", "Roman mosaic"]
+    assert selected_motifs == ["A clearly visible Roman floor mosaic"]
+    assert result.caption == "En romersk gulvmosaikk"
     assert result.local_path == str(local_copy)
+
+
+def test_photosynthesis_uses_language_free_leaf_reserve(tmp_path, monkeypatch) -> None:
+    leaf = {
+        "url": "https://upload.wikimedia.org/green-leaf.jpg",
+        "title": "Green leaf with sunlight.jpg",
+        "description": "Green leaf with sunlight",
+        "creator": "Example creator",
+        "license": "CC0",
+        "page_url": "https://commons.wikimedia.org/wiki/File:Green_leaf_with_sunlight.jpg",
+    }
+    local_copy = tmp_path / "leaf.png"
+    local_copy.write_bytes(b"verified-leaf")
+    searches: list[str] = []
+    selected_motifs: list[str] = []
+
+    def fake_search(query: str, plan: dict):
+        searches.append(query)
+        return [leaf] if query == "green leaf sunlight close up" else []
+
+    def fake_select(plan: dict, candidates: list[dict]):
+        if not candidates:
+            return None
+        selected_motifs.append(str(plan.get("motif")))
+        return candidates[0]
+
+    monkeypatch.setattr(images, "_search_wikimedia", fake_search)
+    monkeypatch.setattr(images, "_select_candidate", fake_select)
+    monkeypatch.setattr(
+        images,
+        "_verified_remote_candidate_path",
+        lambda plan, candidate: str(local_copy),
+    )
+
+    result = images._commons_image({
+        "context_topic": "Fotosyntesen",
+        "context_subject": "Naturfag",
+        "motif": "En enkel tegning av hele fotosyntesen",
+        "search_queries": ["photosynthesis diagram Norwegian"],
+        "fallback_search_queries": ["photosynthesis plant"],
+        "caption": "Fotosyntesen",
+    })
+
+    assert result is not None
+    assert searches[:2] == [
+        "photosynthesis diagram Norwegian",
+        "green leaf sunlight close up",
+    ]
+    assert selected_motifs == [
+        "A clear close-up photograph of healthy green leaves in natural sunlight"
+    ]
+    assert result.caption == "Grønne blader i sollys"
