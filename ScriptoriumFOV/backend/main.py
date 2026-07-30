@@ -640,7 +640,7 @@ def generate_lesson_json_background(
 ):
     """Background task to generate JSON preview."""
     try:
-        update_progress(generation_id, 1, 2, "Skriver pedagogisk tekst...")
+        update_progress(generation_id, 1, 3, "Skriver pedagogisk tekst...")
         
         content = generate_lesson_content(
             topic=lesson_request.topic,
@@ -678,7 +678,6 @@ def generate_lesson_json_background(
                 None,
             )
 
-        update_progress(generation_id, 2, 2, "Forhåndsvisning er klar!")
         merge_progress(
             generation_id,
             json_data={
@@ -709,9 +708,13 @@ def generate_lesson_json_background(
                 "prompt_version": content.get("prompt_version"),
             },
         )
+        # Publish the completed step only after json_data is persisted. This
+        # prevents clients from observing "ready" in the tiny interval before
+        # the preview payload exists.
+        update_progress(generation_id, 3, 3, "Forhåndsvisning er klar!")
 
     except Exception as e:
-        update_progress(generation_id, -1, 2, _public_progress_error(e))
+        update_progress(generation_id, -1, 3, _public_progress_error(e))
 
 @app.post("/generate-lesson-json")
 @limiter.limit("5/minute")
@@ -728,7 +731,7 @@ async def generate_lesson_json(
         JSON with generation_id for tracking progress via /generation-status/{id}
     """
     generation_id = str(uuid.uuid4())
-    update_progress(generation_id, 0, 2, "Starter forhåndsvisning...")
+    update_progress(generation_id, 0, 3, "Starter forhåndsvisning...")
     background_tasks.add_task(
         _run_durable_fov_job,
         generation_id, "preview", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_json_background,

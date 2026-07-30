@@ -49,7 +49,7 @@ import type {
   SeriesState,
   Status,
 } from "../lib/fovTypes";
-import { nextPollDelayMs } from "../lib/polling";
+import { isProgressComplete, nextPollDelayMs } from "../lib/polling";
 import { serviceBackendUrl } from "@/lib/backend-url";
 
 // ---------------------------------------------------------------------------
@@ -528,7 +528,7 @@ export default function HomeContent() {
 
     setStatus("loading");
     setErrorMessage("");
-    setProgress({ step: 0, totalSteps: 2, message: "Starter forhåndsvisning..." });
+    setProgress({ step: 0, totalSteps: 3, message: "Starter forhåndsvisning..." });
     setGenerationId(null);
     pollingRef.current = true;
 
@@ -710,9 +710,13 @@ export default function HomeContent() {
         message: progressData.message,
       });
 
-      if (progressData.step === 2) {
-        pollingRef.current = false;
-        await downloadPreviewJson(gId);
+      const previewIsReady = isProgressComplete(
+        progressData.step,
+        progressData.total_steps
+      );
+
+      if (previewIsReady) {
+        await downloadPreviewJson(gId, attempt);
       } else if (progressData.step === -1) {
         pollingRef.current = false;
         throw new Error(progressData.message);
@@ -819,12 +823,29 @@ export default function HomeContent() {
   // Download helpers
   // ---------------------------------------------------------------------------
 
-  async function downloadPreviewJson(gId: string) {
+  async function downloadPreviewJson(gId: string, attempt = 0) {
     try {
       const res = await authFetch(`${apiUrl}/download-json/${gId}`);
+      if (res.status === 202) {
+        setTimeout(
+          () => pollPreviewProgress(gId, attempt + 1),
+          nextPollDelayMs(attempt)
+        );
+        return;
+      }
       if (!res.ok) throw new Error("Kunne ikke hente forhåndsvisning");
 
       const data = await res.json();
+      if (
+        typeof data.topic !== "string" ||
+        typeof data.subject !== "string" ||
+        typeof data.level !== "string" ||
+        typeof data.text !== "string" ||
+        typeof data.worksheet !== "string"
+      ) {
+        throw new Error("Serveren returnerte en ufullstendig forhåndsvisning");
+      }
+      pollingRef.current = false;
       setPreviewData(data);
       setIsPreviewing(true);
       setStatus("idle");
