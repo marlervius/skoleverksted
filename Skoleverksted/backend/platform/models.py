@@ -110,6 +110,52 @@ class QualityPassportRequest(BaseModel):
     prompt_version: str = Field(default="unknown", max_length=80)
 
 
+TruthClaimStatus = Literal[
+    "verified",
+    "interpretation",
+    "disputed",
+    "time_sensitive",
+    "unsupported",
+]
+TruthAction = Literal["keep", "qualify", "remove"]
+
+
+class TruthSource(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    url: str = Field(min_length=8, max_length=1000)
+    publisher: str = Field(default="", max_length=180)
+    source_tier: Literal["primary", "authoritative", "editorial", "other"] = "other"
+    retrieved_at: str = Field(default_factory=utc_now)
+
+
+class TruthClaim(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex[:12])
+    claim: str = Field(min_length=1, max_length=1200)
+    exact_text: str = Field(default="", max_length=1200)
+    status: TruthClaimStatus
+    action: TruthAction = "keep"
+    replacement: str = Field(default="", max_length=1600)
+    source_urls: list[str] = Field(default_factory=list, max_length=8)
+    evidence: str = Field(default="", max_length=1200)
+    confidence: float = Field(default=0, ge=0, le=1)
+
+
+class TruthPassport(BaseModel):
+    version: str = "1.0"
+    generated_at: str = Field(default_factory=utc_now)
+    status: Literal["verified", "needs_review", "blocked"]
+    topic: str = Field(default="", max_length=300)
+    subject: str = Field(default="", max_length=120)
+    coverage_percent: int = Field(default=0, ge=0, le=100)
+    verified_claims: int = Field(default=0, ge=0)
+    total_claims: int = Field(default=0, ge=0)
+    claims: list[TruthClaim] = Field(default_factory=list, max_length=120)
+    sources: list[TruthSource] = Field(default_factory=list, max_length=50)
+    removed_claims: list[str] = Field(default_factory=list, max_length=50)
+    limitations: list[str] = Field(default_factory=list, max_length=30)
+    summary: str = Field(default="", max_length=1200)
+
+
 class ThemePackRequest(BaseModel):
     title: str = Field(min_length=2, max_length=160)
     theme: str = Field(min_length=2, max_length=240)
@@ -306,6 +352,7 @@ class CompendiumChapter(BaseModel):
     glossary: list[str] = Field(default_factory=list, max_length=30)
     sources: list[CompendiumSource] = Field(default_factory=list, max_length=50)
     verification_notes: list[str] = Field(default_factory=list, max_length=30)
+    truth_passport: TruthPassport | None = None
     revision_summary: list[str] = Field(default_factory=list, max_length=30)
     previous_content_markdown: str = Field(default="", max_length=80_000)
     revision_count: int = Field(default=0, ge=0, le=1000)

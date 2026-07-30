@@ -1,3 +1,5 @@
+import type { TruthPassport } from "@/lib/platform-api";
+
 export type Status = "idle" | "loading" | "success" | "error";
 
 export interface OptionsState {
@@ -78,4 +80,5 @@ export interface LessonResponse {
   image_source_page?: string | null;
   image_candidates?: CommonsImageCandidate[];
   language_exercises?: LanguageExercisesPayload | null;
+  truth_passport?: TruthPassport | null;
 }

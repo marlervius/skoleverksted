@@ -51,6 +51,7 @@ import { ImageModePicker, type ImageMode } from "@/components/image-mode-picker"
 import { AdvancedOptions, GenerationJourney, GenerationSummary } from "@/components/generation-flow";
 import { GenerationFeedback } from "@/components/generation-feedback";
 import { RevisionActions } from "@/components/revision-actions";
+import { TruthPassport } from "@/components/truth-passport";
 import {
   getProject,
   saveYearPlanMaterial,
@@ -92,7 +93,7 @@ export default function Home() {
     selectedGoal, includeFasit, antallUker, timerPerUke,
     status, errorMessage, elapsedSeconds, progressMessage,
     previewUrl, previewBlob, previewFilename, rapportBlob, rapportFilename, showPreview,
-    basisText, generatedImageUrl, worksheetText, faktarapportText, languageExercises, warnings, sourceGrounded, sourceName, showEditPanel,
+    basisText, generatedImageUrl, worksheetText, faktarapportText, languageExercises, warnings, sourceGrounded, sourceName, truthPassport, showEditPanel,
     imageCandidates, imageCandidatesLoading,
   } = state;
 
@@ -441,6 +442,7 @@ export default function Home() {
         ],
         sourceGrounded: result.sourceGrounded,
         sourceName: result.sourceName,
+        truthPassport: result.truthPassport,
         rapportBlob: result.rapportBlob,
         rapportFilename: result.rapportFilename,
       });
@@ -489,6 +491,7 @@ export default function Home() {
         options: options as Record<string, boolean>,
         imageUrl: generatedImageUrl || undefined,
         languageExercises: languageExercises || undefined,
+        truthVerified: false,
         signal: controller.signal,
       });
       stopTimer();
@@ -539,6 +542,7 @@ export default function Home() {
         options: options as Record<string, boolean>,
         imageUrl,
         languageExercises: languageExercises || undefined,
+        truthVerified: truthPassport?.status === "verified",
         signal: controller.signal,
       });
       stopTimer();
@@ -554,6 +558,7 @@ export default function Home() {
         languageExercises: languageExercises || undefined,
         sourceGrounded: sourceGrounded ?? undefined,
         sourceName: sourceName ?? undefined,
+        truthPassport: truthPassport ?? undefined,
       });
     } catch (error) {
       stopTimer();
@@ -569,7 +574,7 @@ export default function Home() {
       abortControllerRef.current = null;
       dispatch({ type: "GENERATION_PROGRESS", message: "" });
     }
-  }, [basisText, worksheetText, faktarapportText, languageExercises, sourceGrounded, sourceName, topic, subject, level, languageLevel, options, previewUrl, startTimer, stopTimer]);
+  }, [basisText, worksheetText, faktarapportText, languageExercises, sourceGrounded, sourceName, truthPassport, topic, subject, level, languageLevel, options, previewUrl, startTimer, stopTimer]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -656,6 +661,7 @@ export default function Home() {
           ],
           sourceGrounded: result.sourceGrounded,
           sourceName: result.sourceName,
+          truthPassport: result.truthPassport,
           rapportBlob: result.rapportBlob,
           rapportFilename: result.rapportFilename,
         });
@@ -1551,6 +1557,16 @@ export default function Home() {
                           <li key={i}>{w}</li>
                         ))}
                       </ul>
+                    </div>
+                  )}
+                  {truthPassport && <TruthPassport passport={truthPassport} />}
+                  {!truthPassport && mode === "laeringsark" && basisText && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                      <div className="font-semibold">Faktapass mangler</div>
+                      <p className="mt-1">
+                        Innholdet er endret eller produsert uten fullført kildekontroll.
+                        Lag en ny versjon før materialet deles med elever.
+                      </p>
                     </div>
                   )}
                   {imageFallbackNeeded && basisText && mode === "laeringsark" && (

@@ -101,6 +101,24 @@ def update_compendium_chapter(
         and changes["content_markdown"] != chapter.content_markdown
     ):
         payload["revision_summary"] = []
+        payload["truth_passport"] = None
+    requested_status = changes.get("status")
+    passport = payload.get("truth_passport")
+    passport_status = (
+        passport.status
+        if hasattr(passport, "status")
+        else passport.get("status")
+        if isinstance(passport, dict)
+        else None
+    )
+    if requested_status == "approved" and passport_status != "verified":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Kapitlet kan ikke godkjennes før faktapasset er grønt. "
+                "Kjør «Sjekk og rett automatisk» først."
+            ),
+        )
     payload["updated_at"] = utc_now()
     updated = store.replace_compendium_chapter(
         compendium_id,
@@ -153,7 +171,12 @@ def compile_compendium(compendium_id: str):
         raise HTTPException(status_code=404, detail="Kompendiet finnes ikke.")
     incomplete = [
         chapter.title for chapter in compendium.chapters
-        if not chapter.content_markdown.strip() or chapter.status in {"planned", "needs_revision"}
+        if (
+            not chapter.content_markdown.strip()
+            or chapter.status in {"planned", "needs_revision"}
+            or not chapter.truth_passport
+            or chapter.truth_passport.status != "verified"
+        )
     ]
     if incomplete:
         raise HTTPException(

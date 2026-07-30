@@ -38,6 +38,49 @@ export interface QualityPassport {
   prompt_version: string;
 }
 
+export type TruthClaimStatus =
+  | "verified"
+  | "interpretation"
+  | "disputed"
+  | "time_sensitive"
+  | "unsupported";
+
+export interface TruthSource {
+  title: string;
+  url: string;
+  publisher: string;
+  source_tier: "primary" | "authoritative" | "editorial" | "other";
+  retrieved_at: string;
+}
+
+export interface TruthClaim {
+  id: string;
+  claim: string;
+  exact_text: string;
+  status: TruthClaimStatus;
+  action: "keep" | "qualify" | "remove";
+  replacement: string;
+  source_urls: string[];
+  evidence: string;
+  confidence: number;
+}
+
+export interface TruthPassport {
+  version: string;
+  generated_at: string;
+  status: "verified" | "needs_review" | "blocked";
+  topic: string;
+  subject: string;
+  coverage_percent: number;
+  verified_claims: number;
+  total_claims: number;
+  claims: TruthClaim[];
+  sources: TruthSource[];
+  removed_claims: string[];
+  limitations: string[];
+  summary: string;
+}
+
 export interface ThemePackTask {
   id: string;
   module: "fag" | "norsk" | "matematikk";
@@ -205,6 +248,7 @@ export interface CompendiumChapter {
   glossary: string[];
   sources: CompendiumSource[];
   verification_notes: string[];
+  truth_passport: TruthPassport | null;
   revision_summary: string[];
   previous_content_markdown: string;
   revision_count: number;

@@ -458,6 +458,7 @@ class LessonResponse(BaseModel):
     language_exercises: Optional[dict] = None
     source_grounded: bool = False
     source_name: Optional[str] = None
+    truth_passport: Optional[dict] = None
     prompt_version: Optional[str] = None
 
 
@@ -705,6 +706,7 @@ def generate_lesson_json_background(
                 "language_exercises": content.get("language_exercises"),
                 "source_grounded": content.get("source_grounded", False),
                 "source_name": content.get("source_name"),
+                "truth_passport": content.get("truth_passport"),
                 "prompt_version": content.get("prompt_version"),
             },
         )

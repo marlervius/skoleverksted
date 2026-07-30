@@ -1,6 +1,7 @@
 import type { LessonOptions } from "./constants";
 import type { ImageMode } from "@/components/image-mode-picker";
 import { serviceBackendUrl } from "@/lib/backend-url";
+import type { TruthPassport } from "@/lib/platform-api";
 
 const API_URL = serviceBackendUrl(process.env.NEXT_PUBLIC_VGS_API_URL, "api/fag");
 
@@ -39,6 +40,7 @@ interface GenerateLessonResult {
   warnings?: string[];
   sourceGrounded?: boolean;
   sourceName?: string;
+  truthPassport?: TruthPassport;
   /** Separate teacher fact-report PDF (spec 2.8), when generated. */
   rapportBlob?: Blob;
   rapportFilename?: string;
@@ -128,6 +130,7 @@ async function runSseJob(
   let capturedWarnings: string[] | undefined;
   let capturedSourceGrounded: boolean | undefined;
   let capturedSourceName: string | undefined;
+  let capturedTruthPassport: TruthPassport | undefined;
   let capturedHasFaktarapport = false;
   let capturedLintIssues: string[] | undefined;
 
@@ -153,6 +156,7 @@ async function runSseJob(
           capturedWarnings = data.warnings ?? undefined;
           capturedSourceGrounded = data.source_grounded ?? undefined;
           capturedSourceName = data.source_name ?? undefined;
+          capturedTruthPassport = data.truth_passport ?? undefined;
           capturedHasFaktarapport = Boolean(data.has_faktarapport);
           capturedLintIssues = data.lint_issues ?? undefined;
           signal?.removeEventListener("abort", abortHandler);
@@ -221,6 +225,7 @@ async function runSseJob(
     warnings: capturedWarnings,
     sourceGrounded: capturedSourceGrounded,
     sourceName: capturedSourceName,
+    truthPassport: capturedTruthPassport,
   };
 }
 
@@ -238,6 +243,7 @@ interface RecompileLessonParams {
   options: Record<string, boolean>;
   imageUrl?: string;
   languageExercises?: Record<string, unknown>;
+  truthVerified?: boolean;
   signal?: AbortSignal;
 }
 
@@ -258,6 +264,7 @@ export async function recompileLesson(
       options: params.options,
       image_url: params.imageUrl || null,
       language_exercises: params.languageExercises || null,
+      truth_verified: params.truthVerified ?? false,
     }),
     signal: params.signal,
   });

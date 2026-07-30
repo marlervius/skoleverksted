@@ -372,6 +372,25 @@ def build_typst_document(compendium: Compendium, *, image_path: str = "", image_
     bibliography = "\n".join(bibliography_lines) or (
         "Det er ikke registrert eksterne kilder i denne versjonen."
     )
+    truth_lines: list[str] = []
+    for chapter in chapters:
+        passport = chapter.truth_passport
+        if not passport:
+            continue
+        removed = len(passport.removed_claims)
+        handling = (
+            f" {removed} udokumentert(e) påstand(er) ble fjernet før ferdigstilling."
+            if removed
+            else ""
+        )
+        truth_lines.append(
+            f"+ #strong[{_typst_escape(chapter.title)}]: "
+            f"{passport.verified_claims} av {passport.total_claims} registrerte "
+            f"faktapåstander ble dokumentert med konkrete kilder.{handling}"
+        )
+    truth_summary = "\n".join(truth_lines) or (
+        "Det følger ikke et maskinlesbart faktapass med denne versjonen."
+    )
 
     learning_goals = ""
     if compendium.competency_goals:
@@ -492,6 +511,14 @@ oppsummeringene til å få oversikt før du går inn i detaljene.
 = Kilder og videre lesning
 
 {bibliography}
+
+== Faktagrunnlag
+
+Faktapasset registrerer etterprøvbare påstander og kilder. Grønn status betyr
+at udokumenterte påstander er fjernet eller tydelig nyansert før ferdigstilling;
+det er ikke en garanti for at enhver formulering er uangripelig.
+
+{truth_summary}
 """
 
 
@@ -674,6 +701,35 @@ def build_docx(compendium: Compendium, *, image_path: str = "", image_credit: st
                 document.add_paragraph(value, style="List Number")
     else:
         document.add_paragraph("Det er ikke registrert eksterne kilder i denne versjonen.")
+
+    document.add_heading("Faktagrunnlag", level=2)
+    document.add_paragraph(
+        "Faktapasset registrerer etterprøvbare påstander og kilder. Grønn status "
+        "betyr at udokumenterte påstander er fjernet eller tydelig nyansert før "
+        "ferdigstilling; det er ikke en garanti for at enhver formulering er uangripelig."
+    )
+    passports = [
+        (chapter.title, chapter.truth_passport)
+        for chapter in sorted(compendium.chapters, key=lambda item: item.order)
+        if chapter.truth_passport
+    ]
+    if passports:
+        for chapter_title, passport in passports:
+            value = (
+                f"{chapter_title}: {passport.verified_claims} av "
+                f"{passport.total_claims} registrerte faktapåstander ble "
+                "dokumentert med konkrete kilder."
+            )
+            if passport.removed_claims:
+                value += (
+                    f" {len(passport.removed_claims)} udokumentert(e) "
+                    "påstand(er) ble fjernet før ferdigstilling."
+                )
+            document.add_paragraph(value, style="List Bullet")
+    else:
+        document.add_paragraph(
+            "Det følger ikke et maskinlesbart faktapass med denne versjonen."
+        )
 
     stream = io.BytesIO()
     document.save(stream)

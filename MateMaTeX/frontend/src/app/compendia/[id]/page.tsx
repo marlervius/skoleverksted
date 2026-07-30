@@ -38,6 +38,7 @@ import {
   type CompendiumChapterStatus,
   type ScopeContract,
 } from "@/lib/platform-api";
+import { TruthPassport } from "@/components/truth-passport";
 
 const chapterStatusLabels: Record<CompendiumChapterStatus, string> = {
   planned: "Planlagt",
@@ -153,6 +154,7 @@ function ChapterCard({
   }
 
   const working = busy || Boolean(localBusy);
+  const truthVerified = chapter.truth_passport?.status === "verified";
   const statusClass = chapter.status === "approved"
     ? "bg-accent-green/10 text-accent-green"
     : chapter.status === "needs_revision"
@@ -269,6 +271,12 @@ function ChapterCard({
             </div>
           )}
 
+          {chapter.truth_passport && (
+            <div className="mt-4">
+              <TruthPassport passport={chapter.truth_passport} />
+            </div>
+          )}
+
           {chapter.revision_summary.length > 0 && (
             <div className="mt-4 rounded-lg border border-accent-green/25 bg-accent-green/5 p-3 text-sm">
               <h4 className="flex items-center gap-2 font-semibold">
@@ -325,9 +333,14 @@ function ChapterCard({
               <button className="btn-secondary" disabled={working} onClick={() => void run("revision", () => updateCompendiumChapter(compendium.id, chapter.id, { status: "needs_revision" }))}>
                 <RefreshCw className="h-4 w-4" /> Må revideres
               </button>
-              <button className="btn-primary" disabled={working || chapter.status === "approved"} onClick={() => void run("approve", () => updateCompendiumChapter(compendium.id, chapter.id, { status: "approved" }))}>
+              <button
+                className="btn-primary"
+                disabled={working || chapter.status === "approved" || !truthVerified}
+                title={!truthVerified ? "Kapittelet må ha grønt faktapass før det kan godkjennes" : ""}
+                onClick={() => void run("approve", () => updateCompendiumChapter(compendium.id, chapter.id, { status: "approved" }))}
+              >
                 {localBusy === "approve" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                {chapter.status === "approved" ? "Kapittel godkjent" : "Godkjenn kapittel"}
+                {chapter.status === "approved" ? "Kapittel godkjent" : truthVerified ? "Godkjenn kapittel" : "Venter på grønt faktapass"}
               </button>
             </div>
           )}

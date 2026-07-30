@@ -351,6 +351,7 @@ class LessonResponse(BaseModel):
     worksheet: str
     image_url: Optional[str] = None
     language_exercises: Optional[dict] = None
+    truth_passport: Optional[dict] = None
 
 
 # ── Health ───────────────────────────────────────────────────────────────────
@@ -481,6 +482,7 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("warnings", content.get("warnings"))
         ctx.set_meta("source_grounded", content.get("source_grounded"))
         ctx.set_meta("source_name", source_name)
+        ctx.set_meta("truth_passport", content.get("truth_passport"))
         ctx.set_meta("prompt_version", content.get("prompt_version"))
 
     if normalize_image_mode(req.image_mode) != "none" and not req.image_data and not req.image_url_override:
@@ -1005,6 +1007,7 @@ async def generate_lesson_json(request: Request, lesson_request: LessonRequest):
         "worksheet": content.get("worksheet", ""),
         "image_url": content.get("image_url"),
         "language_exercises": content.get("language_exercises"),
+        "truth_passport": content.get("truth_passport"),
     }
     cache.set(cache_key, response_data, expire=config.CACHE_TTL_SECONDS)
     return LessonResponse(**response_data)
@@ -1023,6 +1026,7 @@ class RecompileRequest(BaseModel):
     options: dict[str, bool] = Field(default_factory=dict)
     image_url: Optional[str] = Field(None, max_length=500)
     language_exercises: Optional[dict] = Field(None)
+    truth_verified: bool = False
 
 
 @app.post("/recompile-lesson")
@@ -1035,9 +1039,16 @@ async def recompile_lesson(request: Request, req: RecompileRequest):
 
     def _compile() -> bytes:
         img_path = fetch_image_with_retry(req.image_url, None, req_logger)
+        content_text = req.text
+        if not req.truth_verified:
+            content_text = (
+                "FAKTASTATUS: Innholdet er redigert etter siste faktakontroll. "
+                "Kontroller opplysningene før materialet deles med elever.\n\n"
+                f"{content_text}"
+            )
         try:
             return create_lesson_pdf(
-                content_text=req.text,
+                content_text=content_text,
                 worksheet_text=req.worksheet,
                 topic=req.topic,
                 level=req.level,

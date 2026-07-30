@@ -6,6 +6,7 @@ import os
 import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.request import Request, urlopen
 
 from .models import (
     Compendium,
@@ -14,8 +15,10 @@ from .models import (
     CompendiumPlanRequest,
     CompendiumSource,
     ScopeContract,
+    TruthPassport,
     utc_now,
 )
+from .truth import audit_truth
 
 
 logger = logging.getLogger(__name__)
@@ -187,6 +190,63 @@ def _markdown_text(value: Any, limit: int = 80_000) -> str:
     )
 
 
+_TRUTH_FACTS_MARKER = "<<<SKOLEVERKSTED_KORT_OPPSUMMERT>>>"
+_TRUTH_GLOSSARY_MARKER = "<<<SKOLEVERKSTED_BEGREPER>>>"
+
+
+def _audit_chapter_material(
+    *,
+    content: str,
+    key_facts: list[str],
+    glossary: list[str],
+    topic: str,
+    subject: str,
+    level: str,
+) -> tuple[str, list[str], list[str], TruthPassport]:
+    audit_input = (
+        f"{content.rstrip()}\n\n{_TRUTH_FACTS_MARKER}\n"
+        + "\n".join(f"- {item}" for item in key_facts)
+        + f"\n\n{_TRUTH_GLOSSARY_MARKER}\n"
+        + "\n".join(f"- {item}" for item in glossary)
+    )
+    truth_audit = audit_truth(
+        content=audit_input,
+        topic=topic,
+        subject=subject,
+        level=level,
+    )
+    revised = truth_audit.content
+    if (
+        _TRUTH_FACTS_MARKER not in revised
+        or _TRUTH_GLOSSARY_MARKER not in revised
+    ):
+        truth_audit.passport.status = "needs_review"
+        truth_audit.passport.limitations.append(
+            "Kontrollert kapittel kunne ikke deles trygt tilbake i dokumentfeltene."
+        )
+        return content, key_facts, glossary, truth_audit.passport
+
+    revised_content, remainder = revised.split(_TRUTH_FACTS_MARKER, 1)
+    revised_facts, revised_glossary = remainder.split(_TRUTH_GLOSSARY_MARKER, 1)
+
+    def list_items(value: str, limit: int) -> list[str]:
+        return _strings(
+            [
+                re.sub(r"^\s*[-+*]\s*", "", line).strip()
+                for line in value.splitlines()
+                if re.sub(r"^\s*[-+*]\s*", "", line).strip()
+            ],
+            limit,
+        )
+
+    return (
+        revised_content.strip(),
+        list_items(revised_facts, 30),
+        list_items(revised_glossary, 30),
+        truth_audit.passport,
+    )
+
+
 def _canonical_source_url(value: Any) -> str:
     """Keep stable source pages and discard temporary search redirect URLs."""
     url = _text(value, 1000)
@@ -280,13 +340,40 @@ def _grounding_sources(response: object) -> list[CompendiumSource]:
         chunks = getattr(metadata, "grounding_chunks", None) or []
         for chunk in chunks:
             web = getattr(chunk, "web", None)
-            url = _canonical_source_url(getattr(web, "uri", ""))
+            raw_url = _text(getattr(web, "uri", ""), 1000)
+            url = _canonical_source_url(raw_url)
+            if not url and _is_transient_source_url(raw_url):
+                url = _resolve_grounding_redirect(raw_url)
             title = _text(getattr(web, "title", ""), 300)
             if url and not any(item.url == url for item in sources):
                 sources.append(CompendiumSource(title=title or url, url=url))
     except Exception:
         logger.debug("Kunne ikke lese grounding-metadata", exc_info=True)
     return sources[:40]
+
+
+def _is_transient_source_url(value: str) -> bool:
+    try:
+        return (urlsplit(value).hostname or "").casefold().removeprefix("www.") in _TRANSIENT_SOURCE_HOSTS
+    except ValueError:
+        return False
+
+
+def _resolve_grounding_redirect(value: str) -> str:
+    """Resolve Google's temporary citation URL without downloading the page."""
+    try:
+        request = Request(
+            value,
+            headers={
+                "User-Agent": "Skoleverksted/1.0 (+https://skoleverksted.vercel.app)",
+                "Range": "bytes=0-0",
+            },
+        )
+        with urlopen(request, timeout=5) as response:
+            return _canonical_source_url(response.geturl())
+    except Exception:
+        logger.info("Kunne ikke løse midlertidig grounding-adresse", exc_info=True)
+        return ""
 
 
 def _structured_tools_unsupported(exc: Exception) -> bool:
@@ -747,13 +834,39 @@ eller svake kilder for sentrale påstander.
             and not unsafe
             and not source_quality_notes
         )
+        key_facts = _strings(payload.get("key_facts"), 30)
+        glossary = _strings(payload.get("glossary"), 30)
+        content, key_facts, glossary, truth_passport = _audit_chapter_material(
+            content=content,
+            key_facts=key_facts,
+            glossary=glossary,
+            topic=compendium.topic,
+            subject=compendium.subject,
+            level=compendium.level,
+        )
+        for truth_source in truth_passport.sources:
+            if not any(item.url == truth_source.url for item in sources):
+                sources.append(
+                    CompendiumSource(
+                        title=truth_source.title,
+                        url=truth_source.url,
+                        publisher=truth_source.publisher,
+                    )
+                )
+        approved = approved and truth_passport.status == "verified"
+        notes.extend(
+            note
+            for note in truth_passport.limitations
+            if note not in notes
+        )
         updated = chapter.model_dump()
         updated.update(
             content_markdown=content,
-            key_facts=_strings(payload.get("key_facts"), 30),
-            glossary=_strings(payload.get("glossary"), 30),
+            key_facts=key_facts,
+            glossary=glossary,
             sources=sources[:50],
             verification_notes=notes[:30],
+            truth_passport=truth_passport,
             revision_summary=[],
             status="generated" if approved else "needs_revision",
             updated_at=utc_now(),
@@ -931,13 +1044,39 @@ JSON:
             "kunne ikke fullføres. Kontroller endringene manuelt eller prøv igjen."
         ]
 
+    key_facts = _strings(payload.get("key_facts"), 30)
+    glossary = _strings(payload.get("glossary"), 30)
+    repaired_content, key_facts, glossary, truth_passport = _audit_chapter_material(
+        content=repaired_content,
+        key_facts=key_facts,
+        glossary=glossary,
+        topic=compendium.topic,
+        subject=compendium.subject,
+        level=compendium.level,
+    )
+    for truth_source in truth_passport.sources:
+        if not any(item.url == truth_source.url for item in sources):
+            sources.append(
+                CompendiumSource(
+                    title=truth_source.title,
+                    url=truth_source.url,
+                    publisher=truth_source.publisher,
+                )
+            )
+    verified = verified and truth_passport.status == "verified"
+    notes.extend(
+        note
+        for note in truth_passport.limitations
+        if note not in notes
+    )
     updated = chapter.model_dump()
     updated.update(
         content_markdown=repaired_content,
-        key_facts=_strings(payload.get("key_facts"), 30),
-        glossary=_strings(payload.get("glossary"), 30),
+        key_facts=key_facts,
+        glossary=glossary,
         sources=sources[:50],
         verification_notes=notes[:30],
+        truth_passport=truth_passport,
         revision_summary=changes[:30],
         status="generated" if verified else "needs_revision",
         updated_at=utc_now(),

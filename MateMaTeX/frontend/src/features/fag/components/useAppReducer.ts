@@ -2,6 +2,7 @@ import type { Status, LessonOptions, AppMode, StudentProfile } from "./constants
 import { DEFAULT_OPTIONS } from "./constants";
 import type { CompetencyGoal, ImageCandidate } from "./api";
 import type { ImageMode } from "@/components/image-mode-picker";
+import type { TruthPassport } from "@/lib/platform-api";
 
 /** Result of one profile's generation in a batch run. */
 export interface ProfileResult {
@@ -57,6 +58,7 @@ export interface AppState {
   warnings: string[];
   sourceGrounded: boolean | null;
   sourceName: string | null;
+  truthPassport: TruthPassport | null;
   showEditPanel: boolean;
   imageCandidates: ImageCandidate[];
   imageCandidatesLoading: boolean;
@@ -102,6 +104,7 @@ export const initialState: AppState = {
   warnings: [],
   sourceGrounded: null,
   sourceName: null,
+  truthPassport: null,
   showEditPanel: false,
   imageCandidates: [],
   imageCandidatesLoading: false,
@@ -135,7 +138,7 @@ export type AppAction =
   | { type: "SET_TIMER_PER_UKE"; n: number }
   | { type: "GENERATION_START" }
   | { type: "GENERATION_PROGRESS"; message: string }
-  | { type: "GENERATION_SUCCESS"; blob: Blob; url: string; filename: string; basisText?: string; imageUrl?: string; worksheetText?: string; faktarapportText?: string; languageExercises?: Record<string, unknown>; warnings?: string[]; sourceGrounded?: boolean; sourceName?: string; rapportBlob?: Blob; rapportFilename?: string }
+  | { type: "GENERATION_SUCCESS"; blob: Blob; url: string; filename: string; basisText?: string; imageUrl?: string; worksheetText?: string; faktarapportText?: string; languageExercises?: Record<string, unknown>; warnings?: string[]; sourceGrounded?: boolean; sourceName?: string; truthPassport?: TruthPassport; rapportBlob?: Blob; rapportFilename?: string }
   | { type: "SET_BASIS_TEXT"; text: string }
   | { type: "SET_WORKSHEET_TEXT"; text: string }
   | { type: "TOGGLE_EDIT_PANEL" }
@@ -238,6 +241,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         previewUrl: null,
         previewBlob: null,
         rapportBlob: null,
+        truthPassport: null,
       };
     case "GENERATION_PROGRESS":
       return { ...state, progressMessage: action.message };
@@ -260,12 +264,29 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         warnings: action.warnings ?? [],
         sourceGrounded: action.sourceGrounded ?? null,
         sourceName: action.sourceName ?? null,
+        truthPassport: action.truthPassport ?? state.truthPassport,
         showEditPanel: false,
       };
     case "SET_BASIS_TEXT":
-      return { ...state, basisText: action.text };
+      return {
+        ...state,
+        basisText: action.text,
+        truthPassport: null,
+        warnings: Array.from(new Set([
+          ...state.warnings,
+          "Faktapasset ble nullstilt fordi teksten ble redigert.",
+        ])),
+      };
     case "SET_WORKSHEET_TEXT":
-      return { ...state, worksheetText: action.text };
+      return {
+        ...state,
+        worksheetText: action.text,
+        truthPassport: null,
+        warnings: Array.from(new Set([
+          ...state.warnings,
+          "Faktapasset ble nullstilt fordi oppgavene ble redigert.",
+        ])),
+      };
     case "TOGGLE_EDIT_PANEL":
       return { ...state, showEditPanel: !state.showEditPanel };
     case "IMAGE_CANDIDATES_LOADING":

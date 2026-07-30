@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from fastapi import HTTPException
 
 from Skoleverksted.backend.platform import compendium_renderer
 from Skoleverksted.backend.platform.compendium import (
@@ -25,13 +26,17 @@ from Skoleverksted.backend.platform.compendium_renderer import (
 )
 from Skoleverksted.backend.platform.models import (
     CompendiumChapter,
+    CompendiumChapterUpdate,
     CompendiumPlanRequest,
     CompendiumSource,
+    TruthPassport,
     YearPlanCreate,
     YearPlanPeriod,
 )
 from Skoleverksted.backend.platform.router import approve_compendium as approve_compendium_endpoint
+from Skoleverksted.backend.platform.router import update_compendium_chapter as update_chapter_endpoint
 from Skoleverksted.backend.platform.store import PlatformStore
+from Skoleverksted.backend.platform.truth import TruthAudit
 
 
 def _proposal():
@@ -44,6 +49,21 @@ def _proposal():
         chapter_count=6,
         use_ai=False,
     ))
+
+
+def _verified_truth(content: str) -> TruthAudit:
+    return TruthAudit(
+        content=content,
+        passport=TruthPassport(
+            status="verified",
+            topic="Testtema",
+            subject="Historie",
+            coverage_percent=100,
+            verified_claims=1,
+            total_claims=1,
+            summary="Testkontrollen er grønn.",
+        ),
+    )
 
 
 def test_fallback_outline_has_scope_contract_and_requested_chapters():
@@ -233,6 +253,10 @@ def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch)
             "Skoleverksted.backend.platform.compendium._call_google_json",
             repair_then_verify,
         )
+        monkeypatch.setattr(
+            "Skoleverksted.backend.platform.compendium.audit_truth",
+            lambda **kwargs: _verified_truth(kwargs["content"]),
+        )
 
         repaired = repair_compendium_chapter(compendium, chapter.id)
         assert repaired.status == "generated"
@@ -289,6 +313,10 @@ def test_automatic_repair_can_upgrade_weak_sources_without_existing_notes(monkey
         monkeypatch.setattr(
             "Skoleverksted.backend.platform.compendium._call_google_json",
             upgrade_then_verify,
+        )
+        monkeypatch.setattr(
+            "Skoleverksted.backend.platform.compendium.audit_truth",
+            lambda **kwargs: _verified_truth(kwargs["content"]),
         )
 
         repaired = repair_compendium_chapter(compendium, chapter.id)
@@ -399,6 +427,47 @@ def test_compendium_and_versioned_artifacts_are_durable():
         loaded = reopened.get_compendium(compendium.id)
         assert loaded is not None
         assert loaded.artifact_version == 1
+
+
+def test_manual_edit_invalidates_truth_passport_and_blocks_approval(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        store = PlatformStore(Path(tmp) / "platform.sqlite3")
+        compendium = store.create_compendium(_proposal())
+        chapter = compendium.chapters[0]
+        chapter.content_markdown = "## Kontrollert tekst\n\n" + ("Dokumentert innhold. " * 20)
+        chapter.status = "generated"
+        chapter.truth_passport = TruthPassport(
+            status="verified",
+            topic=compendium.topic,
+            subject=compendium.subject,
+            coverage_percent=100,
+            verified_claims=1,
+            total_claims=1,
+        )
+        saved = store.replace_compendium_chapter(compendium.id, chapter)
+        assert saved is not None
+        monkeypatch.setattr(
+            "Skoleverksted.backend.platform.router.get_platform_store",
+            lambda: store,
+        )
+
+        edited = update_chapter_endpoint(
+            compendium.id,
+            chapter.id,
+            CompendiumChapterUpdate(
+                content_markdown=chapter.content_markdown + "\n\nEn ny opplysning.",
+                status="generated",
+            ),
+        )
+        assert edited.chapters[0].truth_passport is None
+
+        with pytest.raises(HTTPException) as error:
+            update_chapter_endpoint(
+                compendium.id,
+                chapter.id,
+                CompendiumChapterUpdate(status="approved"),
+            )
+        assert getattr(error.value, "status_code", None) == 409
 
 
 def test_approval_attaches_the_pdf_to_the_selected_year_plan_period(monkeypatch):

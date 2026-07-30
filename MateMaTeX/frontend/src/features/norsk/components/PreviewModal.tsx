@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import type { CommonsImageCandidate, LessonResponse } from "../lib/fovTypes";
+import { TruthPassport } from "@/components/truth-passport";
 
 interface Props {
   previewData: LessonResponse;
@@ -64,6 +65,10 @@ export function PreviewModal({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-8">
+          {previewData.truth_passport && (
+            <TruthPassport passport={previewData.truth_passport} />
+          )}
+
           {imageCandidates.length > 0 && (
             <section className="rounded-xl border border-stone-200 bg-stone-50 p-4 sm:p-5">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
