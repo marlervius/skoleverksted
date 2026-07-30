@@ -450,3 +450,87 @@ def test_photosynthesis_uses_language_free_leaf_reserve(tmp_path, monkeypatch) -
         "A clear close-up photograph of healthy green leaves in natural sunlight"
     ]
     assert result.caption == "Grønne blader i sollys"
+
+
+def test_commons_gallery_keeps_safe_alternatives_when_critic_rejects_primary(
+    monkeypatch,
+) -> None:
+    primary = {
+        "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Primary.jpg",
+        "title": "Complex photosynthesis chart.jpg",
+        "description": "A complex chart",
+        "creator": "Creator A",
+        "license": "CC BY-SA 4.0",
+        "page_url": "https://commons.wikimedia.org/wiki/File:Primary.jpg",
+        "score": 2000,
+    }
+    fallback = {
+        "url": "https://upload.wikimedia.org/wikipedia/commons/b/bc/Leaves.jpg",
+        "title": "Green leaves in sunlight.jpg",
+        "description": "Healthy green leaves in natural sunlight",
+        "creator": "Creator B",
+        "license": "CC0",
+        "page_url": "https://commons.wikimedia.org/wiki/File:Leaves.jpg",
+        "score": 1000,
+    }
+    monkeypatch.setattr(
+        images,
+        "_plan_image",
+        lambda *args, **kwargs: {
+            "motif": "A simple photosynthesis diagram",
+            "rationale": "Support understanding",
+            "search_queries": ["photosynthesis diagram"],
+            "fallback_search_queries": ["green leaves sunlight"],
+            "fallback_motif": "Green leaves in sunlight",
+            "fallback_caption": "Grønne blader i sollys",
+            "fallback_alt_text": "Grønne blader i sollys",
+        },
+    )
+
+    def fake_search(query: str, plan: dict, limit: int = 6):
+        return [primary] if query == "photosynthesis diagram" else [fallback]
+
+    monkeypatch.setattr(images, "_search_wikimedia", fake_search)
+    monkeypatch.setattr(
+        images,
+        "_select_candidate",
+        lambda plan, candidates: (
+            fallback if candidates and candidates[0] is fallback else None
+        ),
+    )
+
+    gallery = images.discover_commons_images(
+        topic="Fotosyntesen",
+        subject="Naturfag",
+        level="A2.2",
+        text="Planter trenger lys.",
+    )
+
+    assert [candidate["title"] for candidate in gallery] == [
+        fallback["title"],
+        primary["title"],
+    ]
+    assert gallery[0]["recommended"] is True
+    assert gallery[0]["caption"] == "Grønne blader i sollys"
+    assert gallery[1]["review_status"] == "teacher_review"
+    assert all(candidate["license"] for candidate in gallery)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://upload.wikimedia.org/wikipedia/commons/a/ab/Example.jpg",
+            True,
+        ),
+        (
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Example.jpg/800px-Example.jpg",
+            True,
+        ),
+        ("http://upload.wikimedia.org/wikipedia/commons/a/ab/Example.jpg", False),
+        ("https://upload.wikimedia.org.evil.test/wikipedia/commons/a.jpg", False),
+        ("https://example.org/image.jpg", False),
+    ],
+)
+def test_commons_image_url_allowlist(url: str, expected: bool) -> None:
+    assert images.is_trusted_commons_image_url(url) is expected

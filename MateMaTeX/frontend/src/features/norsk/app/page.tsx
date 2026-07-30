@@ -42,6 +42,7 @@ import {
 } from "../lib/fovConstants";
 import type {
   AccessibilityState,
+  CommonsImageCandidate,
   HistoryItem,
   LessonResponse,
   OptionsState,
@@ -645,6 +646,18 @@ export default function HomeContent() {
     e.preventDefault();
     if (!isFormValid) return;
 
+    // Commons mode needs a teacher decision. Route ordinary single-PDF
+    // generation through the gallery instead of silently accepting "no image".
+    if (
+      imageMode === "commons" &&
+      !customImage &&
+      !multiLevelMode &&
+      !dualVersion
+    ) {
+      await handlePreview(e);
+      return;
+    }
+
     setStatus("loading");
     setErrorMessage("");
     setProgress({ step: 0, totalSteps: 4, message: "Starter generering..." });
@@ -720,6 +733,30 @@ export default function HomeContent() {
         );
       }
     }
+  };
+
+  const selectPreviewImage = (candidate: CommonsImageCandidate | null) => {
+    setPreviewData((current) => {
+      if (!current) return current;
+      if (!candidate) {
+        return {
+          ...current,
+          image_url: null,
+          image_mode: "none",
+          image_caption: "",
+          image_credit: "",
+          image_source_page: null,
+        };
+      }
+      return {
+        ...current,
+        image_url: candidate.image_url,
+        image_mode: "commons",
+        image_caption: candidate.caption || "",
+        image_credit: candidate.credit,
+        image_source_page: candidate.source_page_url,
+      };
+    });
   };
 
   const retryWithImageMode = (nextMode: ImageMode) => {
@@ -1438,32 +1475,34 @@ export default function HomeContent() {
                 </div>
               )}
               <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={handlePreview}
-                  disabled={
-                    !isFormValid ||
-                    status === "loading" ||
-                    multiLevelMode ||
-                    dualVersion ||
-                    !!customImage
-                  }
-                  className={`
-                    flex-1 py-3.5 px-6 rounded-lg font-medium text-base
-                    flex items-center justify-center gap-2 border
-                    transition-colors focus:outline-none focus:ring-2 focus:ring-stone-300
-                    ${
-                      status === "loading"
-                        ? "bg-stone-100 text-stone-400 border-stone-200 cursor-wait"
-                        : isFormValid && !multiLevelMode && !dualVersion && !customImage
-                        ? "bg-white text-stone-700 border-stone-300 hover:border-stone-400 hover:bg-stone-50"
-                        : "bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed"
+                {imageMode !== "commons" && (
+                  <button
+                    type="button"
+                    onClick={handlePreview}
+                    disabled={
+                      !isFormValid ||
+                      status === "loading" ||
+                      multiLevelMode ||
+                      dualVersion ||
+                      !!customImage
                     }
-                  `}
-                >
-                  <FileText className="w-5 h-5" />
-                  <span>Forhåndsvis først</span>
-                </button>
+                    className={`
+                      flex-1 py-3.5 px-6 rounded-lg font-medium text-base
+                      flex items-center justify-center gap-2 border
+                      transition-colors focus:outline-none focus:ring-2 focus:ring-stone-300
+                      ${
+                        status === "loading"
+                          ? "bg-stone-100 text-stone-400 border-stone-200 cursor-wait"
+                          : isFormValid && !multiLevelMode && !dualVersion && !customImage
+                          ? "bg-white text-stone-700 border-stone-300 hover:border-stone-400 hover:bg-stone-50"
+                          : "bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed"
+                      }
+                    `}
+                  >
+                    <FileText className="w-5 h-5" />
+                    <span>Forhåndsvis først</span>
+                  </button>
+                )}
                 <button
                   type="submit"
                   disabled={!isFormValid || status === "loading"}
@@ -1487,7 +1526,15 @@ export default function HomeContent() {
                   ) : status === "success" ? (
                     <><CheckCircle2 className="w-5 h-5" /><span>{isDual ? "ZIP lastet ned!" : "PDF lastet ned!"}</span></>
                   ) : (
-                    <><Sparkles className="w-5 h-5" /><span>{dualVersion ? "Lag ZIP" : customImage ? "Lag PDF med bilde" : "Generer PDF"}</span></>
+                    <><Sparkles className="w-5 h-5" /><span>{
+                      dualVersion
+                        ? "Lag ZIP"
+                        : customImage
+                        ? "Lag PDF med bilde"
+                        : imageMode === "commons" && !multiLevelMode
+                        ? "Finn bilder og velg"
+                        : "Generer PDF"
+                    }</span></>
                   )}
                 </button>
               </div>
@@ -1568,6 +1615,7 @@ export default function HomeContent() {
           isGenerating={status === "loading"}
           onClose={() => setIsPreviewing(false)}
           onGeneratePdf={generatePdfFromPreview}
+          onSelectImage={selectPreviewImage}
         />
       )}
     </div>

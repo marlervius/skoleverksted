@@ -48,6 +48,22 @@ export interface LanguageExercisesPayload {
   syntax_tasks?: Array<Record<string, unknown>>;
 }
 
+export interface CommonsImageCandidate {
+  image_url: string;
+  thumbnail_url: string;
+  source_page_url: string;
+  title: string;
+  description?: string;
+  creator?: string;
+  license: string;
+  credit: string;
+  caption?: string;
+  alt_text?: string;
+  rationale?: string;
+  recommended: boolean;
+  review_status: "recommended" | "teacher_review";
+}
+
 /** JSON lesson payload from /download-json (matches backend LessonResponse). */
 export interface LessonResponse {
   topic: string;
@@ -60,5 +76,6 @@ export interface LessonResponse {
   image_caption?: string;
   image_credit?: string;
   image_source_page?: string | null;
+  image_candidates?: CommonsImageCandidate[];
   language_exercises?: LanguageExercisesPayload | null;
 }
