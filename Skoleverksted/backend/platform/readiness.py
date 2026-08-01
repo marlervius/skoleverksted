@@ -54,6 +54,7 @@ def build_readiness(
         "missing": missing,
         "storage": dict(storage),
         "redis_configured": bool(env.get("REDIS_URL", "").strip()),
+        "job_queue_backend": "redis+sqlite" if env.get("REDIS_URL", "").strip() else "sqlite-local",
         "release": release[:12],
         "runtime": {
             "environment": env.get("ENVIRONMENT", "development"),

@@ -1,3 +1,4 @@
 -r ../../VGS_KI/backend/requirements.txt
 -r ../../ScriptoriumFOV/backend/requirements.txt
 -r ../../MateMaTeX/backend/requirements.txt
+psycopg[binary]>=3.2,<4

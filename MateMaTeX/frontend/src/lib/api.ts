@@ -55,17 +55,30 @@ function cancelAllWatchers(): void {
   activeWatchSignals.clear();
 }
 
-async function readErrorMessage(res: Response): Promise<string> {
+async function readErrorPayload(res: Response): Promise<{ detail: string; requestId: string }> {
   try {
     const data = await res.json();
-    if (typeof data?.detail === "string") return data.detail;
+    if (typeof data?.detail === "string") return { detail: data.detail, requestId: typeof data.request_id === "string" ? data.request_id : "" };
     if (Array.isArray(data?.detail)) {
-      return data.detail.map((d: { msg?: string }) => d.msg || "").filter(Boolean).join("; ");
+      return { detail: data.detail.map((d: { msg?: string }) => d.msg || "").filter(Boolean).join("; "), requestId: typeof data.request_id === "string" ? data.request_id : "" };
     }
   } catch {
     /* ignore */
   }
-  return res.statusText || `HTTP ${res.status}`;
+  return { detail: res.statusText || `HTTP ${res.status}`, requestId: res.headers.get("x-request-id") || "" };
+}
+
+async function readErrorMessage(res: Response): Promise<string> {
+  return (await readErrorPayload(res)).detail;
+}
+
+function friendlyGenerationError(status: number, detail: string): string {
+  if (status === 401 || status === 403) return "Ingen tilgang. Kontroller at tjenesten er riktig konfigurert.";
+  if (status === 404) return "Fant ikke genereringsjobben. Start en ny generering.";
+  if (status === 409) return detail || "Jobben kan ikke fortsette ennå. Kontroller feltene og prøv igjen.";
+  if (status === 429) return "For mange forespørsler akkurat nå. Vent litt og prøv igjen.";
+  if (status >= 500) return "Serveren klarte ikke å generere dokumentet. Prøv igjen om litt.";
+  return detail || `HTTP ${status}`;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -76,9 +89,16 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   if (init?.body && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(url, { ...init, headers });
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, headers });
+  } catch {
+    throw new Error("Fikk ikke kontakt med serveren. Kontroller nettverket og prøv igjen.");
+  }
   if (!res.ok) {
-    throw new Error(`${res.status}: ${await readErrorMessage(res)}`);
+    const error = await readErrorPayload(res);
+    const requestId = error.requestId ? ` (sporings-ID: ${error.requestId})` : "";
+    throw new Error(`${friendlyGenerationError(res.status, error.detail)}${requestId}`);
   }
   return res.json() as Promise<T>;
 }

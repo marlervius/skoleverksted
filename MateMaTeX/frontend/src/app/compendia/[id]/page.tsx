@@ -39,6 +39,7 @@ import {
   type ScopeContract,
 } from "@/lib/platform-api";
 import { TruthPassport } from "@/components/truth-passport";
+import { MarkdownPreview } from "@/components/markdown-preview";
 
 const chapterStatusLabels: Record<CompendiumChapterStatus, string> = {
   planned: "Planlagt",
@@ -256,7 +257,7 @@ function ChapterCard({
                   </div>
                 </>
               ) : (
-                <div className="mt-4 max-h-[520px] overflow-y-auto whitespace-pre-wrap rounded-lg bg-bg px-4 py-4 text-sm leading-7 text-text-secondary">{chapter.content_markdown}</div>
+                <div className="mt-4 max-h-[520px] overflow-y-auto rounded-lg bg-bg px-4 py-4"><MarkdownPreview markdown={chapter.content_markdown} /></div>
               )}
             </div>
           )}
@@ -298,15 +299,11 @@ function ChapterCard({
               <div className="grid gap-3 border-t border-border p-3 lg:grid-cols-2">
                 <div>
                   <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Før</h4>
-                  <div className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-bg p-3 text-xs leading-6 text-text-secondary">
-                    {chapter.previous_content_markdown}
-                  </div>
+                  <div className="max-h-80 overflow-y-auto rounded-lg bg-bg p-3"><MarkdownPreview markdown={chapter.previous_content_markdown} className="text-xs leading-6" /></div>
                 </div>
                 <div>
                   <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Etter</h4>
-                  <div className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-bg p-3 text-xs leading-6 text-text-secondary">
-                    {chapter.content_markdown}
-                  </div>
+                  <div className="max-h-80 overflow-y-auto rounded-lg bg-bg p-3"><MarkdownPreview markdown={chapter.content_markdown} className="text-xs leading-6" /></div>
                 </div>
               </div>
             </details>
@@ -372,7 +369,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
   }, [params.id]);
 
   const stats = useMemo(() => {
-    if (!compendium) return { approved: 0, produced: 0, sources: 0, weakSources: 0 };
+    if (!compendium) return { approved: 0, produced: 0, sources: 0, weakSources: 0, repairable: 0 };
     const visibleSources = compendium.chapters.flatMap((chapter) => chapter.sources
       .filter((source) => !isTransientSource(source.url)));
     const sourceKeys = new Set(visibleSources.map((source) => source.url || source.title));
@@ -382,11 +379,18 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
         + chapterSources.filter(sourceNeedsUpgrade).length
         + (chapter.content_markdown.trim() && chapterSources.length === 0 ? 1 : 0);
     }, 0);
+    const repairable = compendium.chapters.filter((chapter) => {
+      const chapterSources = chapter.sources.filter((source) => !isTransientSource(source.url));
+      const weak = chapterSources.filter(sourceNeedsUpgrade).length
+        + (chapter.content_markdown.trim() && chapterSources.length === 0 ? 1 : 0);
+      return chapter.content_markdown.trim() && (weak > 0 || (chapter.status === "needs_revision" && chapter.verification_notes.length > 0));
+    }).length;
     return {
       approved: compendium.chapters.filter((chapter) => chapter.status === "approved").length,
       produced: compendium.chapters.filter((chapter) => chapter.content_markdown.trim()).length,
       sources: sourceKeys.size,
       weakSources,
+      repairable,
     };
   }, [compendium]);
 
@@ -435,12 +439,13 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
     }
   }
 
-  async function upgradeAllSources() {
+  async function repairAllIssues() {
     if (!compendium) return;
     const chapters = compendium.chapters.filter((chapter) =>
       chapter.content_markdown.trim()
       && (
-        !chapter.sources.some((source) => !isTransientSource(source.url))
+        (chapter.status === "needs_revision" && chapter.verification_notes.length > 0)
+        || !chapter.sources.some((source) => !isTransientSource(source.url))
         || chapter.sources.some((source) => !isTransientSource(source.url) && sourceNeedsUpgrade(source))
       ));
     if (!chapters.length) return;
@@ -448,12 +453,12 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
     setError("");
     try {
       for (let index = 0; index < chapters.length; index += 1) {
-        setBatchProgress(`Oppgraderer kilder i kapittel ${index + 1} av ${chapters.length}: ${chapters[index].title}`);
+        setBatchProgress(`Sjekker og retter kapittel ${index + 1} av ${chapters.length}: ${chapters[index].title}`);
         const updated = await repairCompendiumChapter(compendium.id, chapters[index].id);
         setCompendium(updated);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Kildeløftet stoppet.");
+      setError(err instanceof Error ? err.message : "Den automatiske revisjonen stoppet.");
     } finally {
       setAction("");
       setBatchProgress("");
@@ -534,9 +539,9 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div><h2 className="text-xl font-semibold">Kapitler</h2><p className="mt-1 text-sm text-text-muted">Research, kontroller og godkjenn ett kapittel om gangen.</p></div>
             <div className="flex flex-wrap gap-2">
-              {stats.weakSources > 0 && (
-                <button className="btn-secondary" disabled={compendium.status === "outline" || Boolean(action)} onClick={() => void upgradeAllSources()}>
-                  {action === "sources" ? <Loader2 className="h-4 w-4 animate-spin" /> : <SearchCheck className="h-4 w-4" />} Forbedre kildegrunnlag ({stats.weakSources})
+              {stats.repairable > 0 && (
+                <button className="btn-secondary" disabled={compendium.status === "outline" || Boolean(action)} onClick={() => void repairAllIssues()}>
+                  {action === "sources" ? <Loader2 className="h-4 w-4 animate-spin" /> : <SearchCheck className="h-4 w-4" />} Sjekk og rett alle ({stats.repairable})
                 </button>
               )}
               <button className="btn-primary" disabled={compendium.status === "outline" || Boolean(action) || !compendium.chapters.some((chapter) => chapter.status === "planned" || chapter.status === "needs_revision")} onClick={() => void generateAll()}>
@@ -566,6 +571,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
               <div className="flex justify-between"><span className="text-text-secondary">Godkjente kapitler</span><strong>{stats.approved}/{compendium.chapters.length}</strong></div>
               <div className="flex justify-between"><span className="text-text-secondary">Kilder</span><strong>{stats.sources}</strong></div>
               {stats.weakSources > 0 && <div className="flex justify-between text-accent-orange"><span>Kildesvakheter</span><strong>{stats.weakSources}</strong></div>}
+              {stats.repairable > 0 && <div className="flex justify-between text-accent-orange"><span>Kan revideres automatisk</span><strong>{stats.repairable}</strong></div>}
               <div className="flex justify-between"><span className="text-text-secondary">Bilde</span><strong>{compendium.image_mode === "commons" ? "Commons" : compendium.image_mode === "ai" ? "KI-merket" : "Nei"}</strong></div>
               <div className="flex justify-between"><span className="text-text-secondary">Årsplankobling</span><strong>{compendium.period_ids.length || "Nei"}</strong></div>
             </div>

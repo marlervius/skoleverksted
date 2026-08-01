@@ -41,6 +41,15 @@ const sourceTierLabel = {
   other: "annen kilde",
 };
 
+function formatRetrievedAt(value: string) {
+  try {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("nb-NO", { dateStyle: "medium" }).format(date);
+  } catch {
+    return "";
+  }
+}
+
 export function TruthPassport({ passport }: { passport: TruthPassportType }) {
   const verified = passport.status === "verified";
   return (
@@ -107,6 +116,17 @@ export function TruthPassport({ passport }: { passport: TruthPassportType }) {
                       {claim.evidence && (
                         <p className="mt-1 text-xs text-stone-600">{claim.evidence}</p>
                       )}
+                      {claim.exact_text && claim.exact_text !== claim.claim && (
+                        <details className="mt-2 text-xs text-stone-600">
+                          <summary className="cursor-pointer font-medium">Se nøyaktig tekstutdrag</summary>
+                          <blockquote className="mt-1 border-l-2 border-stone-300 pl-2 italic">{claim.exact_text}</blockquote>
+                        </details>
+                      )}
+                      {claim.action === "qualify" && claim.replacement && (
+                        <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900">
+                          <span className="font-semibold">Foreslått presisering:</span> {claim.replacement}
+                        </p>
+                      )}
                       {claim.source_urls.length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-2">
                           {claim.source_urls.map((url) => {
@@ -162,6 +182,7 @@ export function TruthPassport({ passport }: { passport: TruthPassportType }) {
                   <span>
                     {source.publisher && ` · ${source.publisher}`}
                     {` · ${sourceTierLabel[source.source_tier]}`}
+                    {formatRetrievedAt(source.retrieved_at) && ` · hentet ${formatRetrievedAt(source.retrieved_at)}`}
                   </span>
                 </li>
               ))}

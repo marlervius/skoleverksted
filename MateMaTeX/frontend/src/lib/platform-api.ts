@@ -313,14 +313,63 @@ export interface CompendiumPlanInput {
 
 const baseUrl = () => serviceBackendUrl(undefined, "api/platform");
 
+export class PlatformApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly requestId: string;
+  readonly retryable: boolean;
+
+  constructor(message: string, details: { status: number; code?: string; requestId?: string; retryable?: boolean }) {
+    super(message);
+    this.name = "PlatformApiError";
+    this.status = details.status;
+    this.code = details.code || "platform_error";
+    this.requestId = details.requestId || "";
+    this.retryable = Boolean(details.retryable);
+  }
+}
+
+function validationDetail(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => (item && typeof item === "object" && "msg" in item ? String(item.msg) : ""))
+      .filter(Boolean)
+      .join("; ");
+  }
+  return "";
+}
+
+function friendlyPlatformError(status: number, detail: string): { message: string; code: string; retryable: boolean } {
+  if (detail && status !== 500) return { message: detail, code: `http_${status}`, retryable: status === 429 || status >= 500 };
+  if (status === 401 || status === 403) return { message: "Du mangler tilgang til denne funksjonen. Kontroller innlogging eller API-oppsett.", code: "access_denied", retryable: false };
+  if (status === 404) return { message: "Fant ikke innholdet. Last siden på nytt og prøv igjen.", code: "not_found", retryable: false };
+  if (status === 409) return { message: detail || "Handlingen kan ikke utføres ennå. Følg kontrollpunktene på siden først.", code: "conflict", retryable: false };
+  if (status === 422) return { message: "Noen felt er ugyldige eller mangler. Kontroller skjemaet og prøv igjen.", code: "validation", retryable: false };
+  if (status === 429) return { message: "Tjenesten har mange forespørsler akkurat nå. Vent litt og prøv igjen.", code: "rate_limited", retryable: true };
+  if (status >= 500) return { message: "Serveren klarte ikke å fullføre handlingen. Prøv igjen om litt.", code: "server_error", retryable: true };
+  return { message: detail || `Plattformfeil (${status})`, code: `http_${status}`, retryable: false };
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl()}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl()}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...init?.headers },
+    });
+  } catch {
+    throw new PlatformApiError("Fikk ikke kontakt med serveren. Kontroller nettverket og prøv igjen.", {
+      status: 0,
+      code: "network_error",
+      retryable: true,
+    });
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(typeof body.detail === "string" ? body.detail : `Plattformfeil (${response.status})`);
+    const friendly = friendlyPlatformError(response.status, validationDetail(body.detail));
+    const requestId = response.headers.get("x-request-id") || (typeof body.request_id === "string" ? body.request_id : "");
+    const suffix = requestId ? ` (sporings-ID: ${requestId})` : "";
+    throw new PlatformApiError(`${friendly.message}${suffix}`, { status: response.status, code: friendly.code, requestId, retryable: friendly.retryable });
   }
   return response.json() as Promise<T>;
 }

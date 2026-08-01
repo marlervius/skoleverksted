@@ -98,6 +98,15 @@ def _publisher(url: str) -> str:
     return (urlsplit(url).hostname or "").removeprefix("www.")
 
 
+def _is_concrete_source_url(url: str) -> bool:
+    """A source must point to a page, not only an organization's front page."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    return bool(parsed.path and parsed.path.rstrip("/"))
+
+
 def _source_tier(url: str) -> str:
     host = _publisher(url).casefold()
     if host.endswith((".gov", ".gov.uk", ".europa.eu", ".regjeringen.no")) or host in {
@@ -293,17 +302,26 @@ JSON:
         ][:8]
         # A model-written citation is never enough. It only counts when the URL
         # was independently observed in grounding metadata or teacher input.
-        if status == "verified" and not cited:
+        # A URL alone is not evidence. Require a concrete page, an explanation
+        # of what it supports, and a non-trivial confidence score before the
+        # green passport can rely on a claim.
+        evidence = _clean_text(raw.get("evidence"), 1200)
+        try:
+            confidence = max(0.0, min(float(raw.get("confidence") or 0), 1.0))
+        except (TypeError, ValueError):
+            confidence = 0
+        if status == "verified" and (
+            not cited
+            or not any(_is_concrete_source_url(url) for url in cited)
+            or not evidence
+            or confidence < 0.55
+        ):
             status = "unsupported"
         action = str(raw.get("action") or "keep")
         if status != "verified" and action == "keep":
             action = "remove" if status == "unsupported" else "qualify"
         if action not in {"keep", "qualify", "remove"}:
             action = "remove" if status == "unsupported" else "qualify"
-        try:
-            confidence = max(0.0, min(float(raw.get("confidence") or 0), 1.0))
-        except (TypeError, ValueError):
-            confidence = 0
         claim_text = _clean_text(raw.get("claim"), 1200)
         if not claim_text:
             continue
@@ -315,7 +333,7 @@ JSON:
                 action=action,  # type: ignore[arg-type]
                 replacement=_exact_text(raw.get("replacement"), 1600),
                 source_urls=list(dict.fromkeys(cited)),
-                evidence=_clean_text(raw.get("evidence"), 1200),
+                evidence=evidence,
                 confidence=confidence,
             )
         )
@@ -333,11 +351,12 @@ JSON:
         limitations.append(
             f"{len(unresolved_edits)} usikre påstand(er) kunne ikke endres automatisk."
         )
-    if not sources:
+    concrete_sources = [source for source in sources if _is_concrete_source_url(source.url)]
+    if not concrete_sources:
         limitations.append("Ingen konkrete, validerte kildesider ble registrert.")
     status = (
         "verified"
-        if claims and sources and not unresolved_edits
+        if claims and concrete_sources and verified_count > 0 and not unresolved_edits
         else "needs_review"
     )
     passport = TruthPassport(

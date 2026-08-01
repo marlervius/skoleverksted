@@ -33,6 +33,7 @@ from .models import (
     utc_now,
 )
 from .compendium import (
+    _source_quality_notes,
     generate_compendium_chapter,
     plan_compendium,
     repair_compendium_chapter,
@@ -182,6 +183,19 @@ def compile_compendium(compendium_id: str):
         raise HTTPException(
             status_code=409,
             detail="Disse kapitlene må ferdigstilles før dokumentbygging: " + ", ".join(incomplete[:6]),
+        )
+    source_issues = [
+        f"{chapter.title}: {note}"
+        for chapter in compendium.chapters
+        for note in _source_quality_notes(chapter.sources)
+    ]
+    if source_issues:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Kildesjekken stoppet byggingen. Rett eller oppgrader disse "
+                "kildene først: " + "; ".join(source_issues[:6])
+            ),
         )
     image = None
     try:

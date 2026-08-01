@@ -178,3 +178,38 @@ def test_teacher_source_may_count_but_model_only_source_may_not(monkeypatch):
     assert without_teacher_source.passport.claims[0].status == "unsupported"
     assert with_teacher_source.passport.claims[0].status == "verified"
     assert with_teacher_source.passport.status == "verified"
+
+
+def test_generic_homepage_cannot_make_a_claim_green(monkeypatch):
+    def fake_call(*_args, **_kwargs):
+        return (
+            {
+                "summary": "Kilden er for generell.",
+                "claims": [{
+                    "claim": "Unionen ble oppløst.",
+                    "exact_text": "Unionen mellom Norge og Sverige ble oppløst i 1905.",
+                    "status": "verified",
+                    "action": "keep",
+                    "replacement": "",
+                    "source_urls": ["https://www.stortinget.no"],
+                    "evidence": "Forsiden dokumenterer ikke påstanden.",
+                    "confidence": 0.99,
+                }],
+            },
+            [CompendiumSource(title="Stortinget", url="https://www.stortinget.no")],
+        )
+
+    monkeypatch.setattr(
+        "Skoleverksted.backend.platform.compendium._call_google_json",
+        fake_call,
+    )
+
+    result = audit_truth(
+        content=CONTENT,
+        topic="Unionsoppløsningen",
+        subject="Historie",
+        level="VG2",
+    )
+
+    assert result.passport.status == "needs_review"
+    assert result.passport.claims[0].status == "unsupported"

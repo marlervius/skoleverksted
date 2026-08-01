@@ -39,6 +39,30 @@ def _default_db_path() -> Path:
     return (output_dir / "platform" / "skoleverksted.sqlite3").resolve()
 
 
+class _PostgresConnection:
+    """Small compatibility wrapper so the store keeps one SQL surface."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def execute(self, query: str, params: Any = ()):
+        return self._connection.execute(query.replace("?", "%s"), params)
+
+    def executescript(self, script: str) -> None:
+        for statement in script.split(";"):
+            if statement.strip():
+                self.execute(statement)
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
+    def close(self) -> None:
+        self._connection.close()
+
+
 class PlatformStore:
     """Small durable platform store, deliberately independent of authentication.
 
@@ -48,6 +72,8 @@ class PlatformStore:
     """
 
     def __init__(self, path: str | Path | None = None, files_dir: str | Path | None = None):
+        self.database_url = os.getenv("DATABASE_URL", "").strip() if path is None else ""
+        self.uses_postgres = self.database_url.startswith(("postgres://", "postgresql://"))
         self.path = Path(path) if path is not None else _default_db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if files_dir is not None:
@@ -67,9 +93,19 @@ class PlatformStore:
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=5)
+        if self.uses_postgres:
+            try:
+                import psycopg  # type: ignore
+                from psycopg.rows import dict_row  # type: ignore
+            except ImportError as exc:  # pragma: no cover - deployment configuration
+                raise RuntimeError("DATABASE_URL er satt, men psycopg er ikke installert.") from exc
+            connection = psycopg.connect(self.database_url, connect_timeout=8, row_factory=dict_row)
+            return _PostgresConnection(connection)  # type: ignore[return-value]
+        conn = sqlite3.connect(self.path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
@@ -151,7 +187,11 @@ class PlatformStore:
     def health(self) -> dict[str, Any]:
         with self._connection() as conn:
             conn.execute("SELECT 1").fetchone()
-        return {"status": "healthy", "backend": "sqlite", "path": str(self.path)}
+        return {
+            "status": "healthy",
+            "backend": "postgres" if self.uses_postgres else "sqlite",
+            "path": "DATABASE_URL" if self.uses_postgres else str(self.path),
+        }
 
     def create_project(self, request: ProjectCreate, *, status: str = "draft") -> Project:
         project = Project(**request.model_dump(), status=status)
