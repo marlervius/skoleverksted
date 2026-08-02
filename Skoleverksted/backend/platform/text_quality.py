@@ -32,14 +32,23 @@ _TRAILING_CONNECTOR_RE = re.compile(
 def _headings_have_content(text: str) -> bool:
     lines = text.splitlines()
     for index, line in enumerate(lines):
-        if not re.match(r"^\s{0,3}#{1,6}\s+\S", line):
+        heading = re.match(r"^\s{0,3}(#{1,6})\s+\S", line)
+        if not heading:
             continue
+        level = len(heading.group(1))
         for following in lines[index + 1 :]:
             stripped = following.strip()
             if not stripped:
                 continue
-            if re.match(r"^\s{0,3}#{1,6}\s+\S", following):
-                return False
+            child_heading = re.match(r"^\s{0,3}(#{1,6})\s+\S", following)
+            if child_heading:
+                # A document title may be followed directly by its first
+                # subsection. That subsection is content for the title; only
+                # a sibling/parent heading with no intervening content is
+                # genuinely empty.
+                if len(child_heading.group(1)) <= level:
+                    return False
+                break
             break
         else:
             return False

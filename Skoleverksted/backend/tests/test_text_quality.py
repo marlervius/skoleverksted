@@ -6,6 +6,11 @@ def test_structural_quality_accepts_complete_markdown():
     assert inspect_markdown(text) == []
 
 
+def test_document_title_with_first_subheading_is_not_empty():
+    text = "## Kapittel\n\n### Innledning\n\nDette er innholdet under kapittelet."
+    assert inspect_markdown(text, min_words=1) == []
+
+
 def test_structural_quality_rejects_observed_fragments_and_empty_headings():
     text = "## Aktører\n\nSærlig ble en finansiell katastrofe.\n\n## Tom overskrift\n"
     codes = {issue.code for issue in inspect_markdown(text, min_words=5)}
