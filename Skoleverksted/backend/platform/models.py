@@ -116,6 +116,9 @@ TruthClaimStatus = Literal[
     "disputed",
     "time_sensitive",
     "unsupported",
+    "verification_failed",
+    "source_unavailable",
+    "not_evaluated",
 ]
 TruthAction = Literal["keep", "qualify", "remove"]
 
@@ -126,6 +129,8 @@ class TruthSource(BaseModel):
     publisher: str = Field(default="", max_length=180)
     source_tier: Literal["primary", "authoritative", "editorial", "other"] = "other"
     retrieved_at: str = Field(default_factory=utc_now)
+    origin: Literal["teacher", "grounding", "model"] = "model"
+    fetch_status: Literal["provided", "grounded", "model_reported", "fetched", "source_unavailable"] = "model_reported"
 
 
 class TruthClaim(BaseModel):
@@ -143,7 +148,14 @@ class TruthClaim(BaseModel):
 class TruthPassport(BaseModel):
     version: str = "1.0"
     generated_at: str = Field(default_factory=utc_now)
-    status: Literal["verified", "needs_review", "blocked"]
+    status: Literal[
+        "verified",
+        "needs_review",
+        "blocked",
+        "verification_failed",
+        "source_unavailable",
+        "not_evaluated",
+    ]
     topic: str = Field(default="", max_length=300)
     subject: str = Field(default="", max_length=120)
     coverage_percent: int = Field(default=0, ge=0, le=100)
@@ -322,7 +334,17 @@ CompendiumType = Literal[
     "appendix",
 ]
 CompendiumStatus = Literal["outline", "writing", "review", "approved", "archived"]
-CompendiumChapterStatus = Literal["planned", "generated", "approved", "needs_revision"]
+CompendiumChapterStatus = Literal[
+    "planned",
+    "generated",
+    "approved",
+    "needs_revision",
+    "generation_incomplete",
+    "parse_failure",
+    "language_quality_failed",
+    "source_grounding_failed",
+    "verification_failed",
+]
 CompendiumImageMode = Literal["none", "commons", "ai"]
 
 
@@ -330,6 +352,8 @@ class CompendiumSource(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     url: str = Field(default="", max_length=1000)
     publisher: str = Field(default="", max_length=180)
+    origin: Literal["teacher", "grounding", "model"] = "model"
+    fetch_status: Literal["provided", "grounded", "model_reported", "fetched", "source_unavailable"] = "model_reported"
 
 
 class ScopeContract(BaseModel):

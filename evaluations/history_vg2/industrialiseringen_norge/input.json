@@ -1,0 +1,11 @@
+{
+  "subject": "Historie",
+  "level": "VG2",
+  "topic": "Industrialiseringen i Norge",
+  "chapter_count": 3,
+  "target_pages": 6,
+  "competency_goals": ["utforske samfunnsendringer", "bruke historiske kilder"],
+  "source_brief": "https://snl.no/industrialisering\nhttps://www.nb.no/",
+  "differentiation": {"support": "begrepsstøtte", "extension": "kildekritisk drøfting"},
+  "anonymized": true
+}

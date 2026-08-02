@@ -58,7 +58,7 @@ def test_truth_layer_accepts_only_urls_observed_in_grounding(monkeypatch):
         level="VG2",
     )
 
-    assert result.passport.status == "verified"
+    assert result.passport.status == "needs_review"
     assert result.passport.coverage_percent == 50
     assert result.passport.verified_claims == 1
     assert result.passport.claims[1].status == "unsupported"
@@ -127,7 +127,7 @@ def test_truth_layer_blocks_output_when_research_is_unavailable(monkeypatch):
         level="VG2",
     )
 
-    assert result.passport.status == "blocked"
+    assert result.passport.status == "verification_failed"
     assert result.content == CONTENT
     assert result.passport.verified_claims == 0
     assert result.passport.limitations
@@ -211,5 +211,27 @@ def test_generic_homepage_cannot_make_a_claim_green(monkeypatch):
         level="VG2",
     )
 
-    assert result.passport.status == "needs_review"
+    assert result.passport.status == "source_unavailable"
     assert result.passport.claims[0].status == "unsupported"
+
+
+def test_truth_distinguishes_unavailable_sources_from_not_evaluated(monkeypatch):
+    def no_claims(*_args, **_kwargs):
+        return ({"summary": "Ingen påstander.", "claims": []}, [])
+
+    monkeypatch.setattr("Skoleverksted.backend.platform.compendium._call_google_json", no_claims)
+    unavailable = audit_truth(
+        content=CONTENT,
+        topic="Unionsoppløsningen",
+        subject="Historie",
+        level="VG2",
+    )
+    evaluated_without_claims = audit_truth(
+        content=CONTENT,
+        topic="Unionsoppløsningen",
+        subject="Historie",
+        level="VG2",
+        provided_sources=[{"title": "Stortinget", "url": "https://www.stortinget.no/1905"}],
+    )
+    assert unavailable.passport.status == "source_unavailable"
+    assert evaluated_without_claims.passport.status == "not_evaluated"

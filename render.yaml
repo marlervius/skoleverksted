@@ -46,6 +46,8 @@ services:
         value: "1"
       - key: MAX_CONCURRENT_COMPILES
         value: "1"
+      - key: COMPENDIUM_REPAIR_TIMEOUT_SECONDS
+        value: "120"
       - key: GOOGLE_API_KEY
         sync: false
       - key: GOOGLE_IMAGE_MODEL

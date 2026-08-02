@@ -46,7 +46,25 @@ const chapterStatusLabels: Record<CompendiumChapterStatus, string> = {
   generated: "Klar til kontroll",
   approved: "Godkjent",
   needs_revision: "Må revideres",
+  generation_incomplete: "Generering ufullført",
+  parse_failure: "Svar kunne ikke leses",
+  language_quality_failed: "Språkkontroll feilet",
+  source_grounding_failed: "Kildegrunnlag mangler",
+  verification_failed: "Faktakontroll feilet",
 };
+
+const chapterFailureStatuses: CompendiumChapterStatus[] = [
+  "needs_revision",
+  "generation_incomplete",
+  "parse_failure",
+  "language_quality_failed",
+  "source_grounding_failed",
+  "verification_failed",
+];
+
+function isChapterFailureStatus(status: CompendiumChapterStatus) {
+  return chapterFailureStatuses.includes(status);
+}
 
 const statusLabels = {
   outline: "Disposisjon",
@@ -158,7 +176,7 @@ function ChapterCard({
   const truthVerified = chapter.truth_passport?.status === "verified";
   const statusClass = chapter.status === "approved"
     ? "bg-accent-green/10 text-accent-green"
-    : chapter.status === "needs_revision"
+    : isChapterFailureStatus(chapter.status)
       ? "bg-accent-orange/10 text-accent-orange"
       : chapter.status === "generated"
         ? "bg-accent-blue/10 text-accent-blue"
@@ -263,10 +281,10 @@ function ChapterCard({
           )}
 
           {chapter.verification_notes.length > 0 && (
-            <div className={`mt-4 rounded-lg border p-3 text-sm ${chapter.status === "needs_revision" ? "border-accent-orange/30 bg-accent-orange/10" : "border-accent-blue/20 bg-accent-blue/5"}`}>
+            <div className={`mt-4 rounded-lg border p-3 text-sm ${isChapterFailureStatus(chapter.status) ? "border-accent-orange/30 bg-accent-orange/10" : "border-accent-blue/20 bg-accent-blue/5"}`}>
               <h4 className="flex items-center gap-2 font-semibold">
-                {chapter.status === "needs_revision" ? <ShieldAlert className="h-4 w-4 text-accent-orange" /> : <ShieldCheck className="h-4 w-4 text-accent-blue" />}
-                {chapter.status === "needs_revision" ? "Kontrollmerknader" : "Ny kontroll"}
+                {isChapterFailureStatus(chapter.status) ? <ShieldAlert className="h-4 w-4 text-accent-orange" /> : <ShieldCheck className="h-4 w-4 text-accent-blue" />}
+                {isChapterFailureStatus(chapter.status) ? "Kontrollmerknader" : "Ny kontroll"}
               </h4>
               <ul className="mt-2 space-y-1 text-text-secondary">{chapter.verification_notes.map((note) => <li key={note}>• {note}</li>)}</ul>
             </div>
@@ -383,7 +401,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
       const chapterSources = chapter.sources.filter((source) => !isTransientSource(source.url));
       const weak = chapterSources.filter(sourceNeedsUpgrade).length
         + (chapter.content_markdown.trim() && chapterSources.length === 0 ? 1 : 0);
-      return chapter.content_markdown.trim() && (weak > 0 || (chapter.status === "needs_revision" && chapter.verification_notes.length > 0));
+      return chapter.content_markdown.trim() && (weak > 0 || (isChapterFailureStatus(chapter.status) && chapter.verification_notes.length > 0));
     }).length;
     return {
       approved: compendium.chapters.filter((chapter) => chapter.status === "approved").length,
@@ -421,7 +439,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
 
   async function generateAll() {
     if (!compendium) return;
-    const chapters = compendium.chapters.filter((chapter) => chapter.status === "planned" || chapter.status === "needs_revision");
+    const chapters = compendium.chapters.filter((chapter) => chapter.status === "planned" || isChapterFailureStatus(chapter.status));
     if (!chapters.length) return;
     setAction("batch");
     setError("");
@@ -444,7 +462,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
     const chapters = compendium.chapters.filter((chapter) =>
       chapter.content_markdown.trim()
       && (
-        (chapter.status === "needs_revision" && chapter.verification_notes.length > 0)
+        (isChapterFailureStatus(chapter.status) && chapter.verification_notes.length > 0)
         || !chapter.sources.some((source) => !isTransientSource(source.url))
         || chapter.sources.some((source) => !isTransientSource(source.url) && sourceNeedsUpgrade(source))
       ));
@@ -544,7 +562,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
                   {action === "sources" ? <Loader2 className="h-4 w-4 animate-spin" /> : <SearchCheck className="h-4 w-4" />} Sjekk og rett alle ({stats.repairable})
                 </button>
               )}
-              <button className="btn-primary" disabled={compendium.status === "outline" || Boolean(action) || !compendium.chapters.some((chapter) => chapter.status === "planned" || chapter.status === "needs_revision")} onClick={() => void generateAll()}>
+              <button className="btn-primary" disabled={compendium.status === "outline" || Boolean(action) || !compendium.chapters.some((chapter) => chapter.status === "planned" || isChapterFailureStatus(chapter.status))} onClick={() => void generateAll()}>
                 {action === "batch" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Produser gjenstående
               </button>
             </div>

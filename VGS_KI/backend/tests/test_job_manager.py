@@ -4,7 +4,7 @@ import time
 import threading
 import pytest
 
-from job_manager import (
+from VGS_KI.backend.job_manager import (
     run_job_in_thread,
     cleanup_stale_jobs,
     compute_cache_key,

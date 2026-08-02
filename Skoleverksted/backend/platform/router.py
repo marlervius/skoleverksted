@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import os
+from threading import Event, Lock, Thread
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
@@ -47,6 +50,72 @@ from .year_planner import build_year_plan
 
 
 router = APIRouter(tags=["platform"])
+
+logger = logging.getLogger(__name__)
+_repair_registry_lock = Lock()
+_inflight_repairs: dict[tuple[str, str], str] = {}
+_REPAIR_TIMEOUT_SECONDS = max(
+    30,
+    min(300, int(os.getenv("COMPENDIUM_REPAIR_TIMEOUT_SECONDS", "120"))),
+)
+
+
+class RepairInProgressError(RuntimeError):
+    def __init__(self, operation_id: str):
+        super().__init__(f"En automatisk retting kjører allerede (jobb {operation_id}).")
+        self.operation_id = operation_id
+
+
+class RepairTimeoutError(TimeoutError):
+    def __init__(self, operation_id: str, timeout: int):
+        super().__init__(f"Automatisk retting nådde tidsgrensen på {timeout} sekunder (jobb {operation_id}).")
+        self.operation_id = operation_id
+
+
+def _run_repair_with_timeout(
+    compendium: Compendium,
+    chapter_id: str,
+    *,
+    operation_id: str,
+) -> CompendiumChapter:
+    key = (compendium.id, chapter_id)
+    with _repair_registry_lock:
+        previous = _inflight_repairs.get(key)
+        if previous:
+            raise RepairInProgressError(previous)
+        _inflight_repairs[key] = operation_id
+
+    done = Event()
+    result: dict[str, object] = {}
+
+    def worker() -> None:
+        try:
+            result["chapter"] = repair_compendium_chapter(compendium, chapter_id)
+        except BaseException as exc:  # preserve the original exception for the request
+            result["error"] = exc
+        finally:
+            with _repair_registry_lock:
+                if _inflight_repairs.get(key) == operation_id:
+                    _inflight_repairs.pop(key, None)
+            done.set()
+
+    Thread(target=worker, name=f"compendium-repair-{operation_id}", daemon=True).start()
+    if not done.wait(_REPAIR_TIMEOUT_SECONDS):
+        logger.error(
+            "Kompendiumreparasjon tidsavbrutt operation_id=%s compendium_id=%s chapter_id=%s timeout_s=%s",
+            operation_id,
+            compendium.id,
+            chapter_id,
+            _REPAIR_TIMEOUT_SECONDS,
+        )
+        raise RepairTimeoutError(operation_id, _REPAIR_TIMEOUT_SECONDS)
+    error = result.get("error")
+    if error:
+        raise error
+    chapter = result.get("chapter")
+    if not isinstance(chapter, CompendiumChapter):
+        raise RuntimeError(f"Reparasjonsjobben ga ikke et kapittelresultat (jobb {operation_id}).")
+    return chapter
 
 
 @router.get("/compendia", response_model=list[Compendium])
@@ -147,17 +216,50 @@ def produce_compendium_chapter(compendium_id: str, chapter_id: str):
 
 
 @router.post("/compendia/{compendium_id}/chapters/{chapter_id}/repair", response_model=Compendium)
-def repair_compendium_chapter_endpoint(compendium_id: str, chapter_id: str):
+def repair_compendium_chapter_endpoint(
+    compendium_id: str,
+    chapter_id: str,
+    request: Request,
+):
     store = get_platform_store()
     compendium = store.get_compendium(compendium_id)
     if compendium is None:
         raise HTTPException(status_code=404, detail="Kompendiet finnes ikke.")
+    operation_id = (request.headers.get("x-request-id") or uuid4().hex[:12]).strip()[:80]
     try:
-        chapter = repair_compendium_chapter(compendium, chapter_id)
+        chapter = _run_repair_with_timeout(
+            compendium,
+            chapter_id,
+            operation_id=operation_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RepairInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RepairTimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"Automatisk retting nådde tidsgrensen. Jobb-ID: {exc.operation_id}. "
+                "Kapittelet er ikke endret; prøv igjen."
+            ),
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "Kompendiumreparasjon feilet operation_id=%s compendium_id=%s chapter_id=%s",
+            operation_id,
+            compendium_id,
+            chapter_id,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Automatisk retting feilet. Jobb-ID: {operation_id}. "
+                "Kapittelet er ikke endret; prøv igjen."
+            ),
+        ) from exc
     updated = store.replace_compendium_chapter(compendium_id, chapter)
     if updated is None:
         raise HTTPException(status_code=404, detail="Kapitlet finnes ikke.")
@@ -174,7 +276,7 @@ def compile_compendium(compendium_id: str):
         chapter.title for chapter in compendium.chapters
         if (
             not chapter.content_markdown.strip()
-            or chapter.status in {"planned", "needs_revision"}
+            or chapter.status != "approved"
             or not chapter.truth_passport
             or chapter.truth_passport.status != "verified"
         )

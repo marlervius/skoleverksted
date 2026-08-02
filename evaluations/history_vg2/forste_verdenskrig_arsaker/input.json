@@ -1,0 +1,11 @@
+{
+  "subject": "Historie",
+  "level": "VG2",
+  "topic": "Årsakene til første verdenskrig",
+  "chapter_count": 3,
+  "target_pages": 6,
+  "competency_goals": ["forklare årsakssammenhenger", "bruke historiske kilder"],
+  "source_brief": "https://snl.no/foerste_verdenskrig\nhttps://encyclopedia.1914-1918-online.net/",
+  "differentiation": {"support": "tidslinje og begreper", "extension": "drøfting av flerårsaksteori"},
+  "anonymized": true
+}

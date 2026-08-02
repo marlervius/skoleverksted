@@ -16,6 +16,9 @@ const statusLabel = {
   verified: "Faktapasset er grønt",
   needs_review: "Må kontrolleres",
   blocked: "Kontrollen ble blokkert",
+  verification_failed: "Faktakontrollen feilet",
+  source_unavailable: "Kildegrunnlag utilgjengelig",
+  not_evaluated: "Ikke evaluert",
 };
 
 const claimLabel: Record<TruthClaimStatus, string> = {
@@ -24,6 +27,9 @@ const claimLabel: Record<TruthClaimStatus, string> = {
   disputed: "Omstridt",
   time_sensitive: "Tidsavhengig",
   unsupported: "Ikke dokumentert",
+  verification_failed: "Verifisering feilet",
+  source_unavailable: "Kilde utilgjengelig",
+  not_evaluated: "Ikke evaluert",
 };
 
 const claimIcon = {
@@ -32,6 +38,9 @@ const claimIcon = {
   disputed: ShieldAlert,
   time_sensitive: Clock3,
   unsupported: AlertTriangle,
+  verification_failed: AlertTriangle,
+  source_unavailable: AlertTriangle,
+  not_evaluated: AlertTriangle,
 };
 
 const sourceTierLabel = {
@@ -39,6 +48,20 @@ const sourceTierLabel = {
   authoritative: "faglig autoritet",
   editorial: "redaktørstyrt",
   other: "annen kilde",
+};
+
+const sourceOriginLabel = {
+  teacher: "lærerens kilde",
+  grounding: "Google-grounding",
+  model: "modellrapportert",
+};
+
+const sourceFetchLabel = {
+  provided: "oppgitt",
+  grounded: "hentet via søk",
+  model_reported: "ikke hentet av systemet",
+  fetched: "hentet",
+  source_unavailable: "ikke tilgjengelig",
 };
 
 function formatRetrievedAt(value: string) {
@@ -182,6 +205,8 @@ export function TruthPassport({ passport }: { passport: TruthPassportType }) {
                   <span>
                     {source.publisher && ` · ${source.publisher}`}
                     {` · ${sourceTierLabel[source.source_tier]}`}
+                    {` · ${sourceOriginLabel[source.origin]}`}
+                    {` · ${sourceFetchLabel[source.fetch_status]}`}
                     {formatRetrievedAt(source.retrieved_at) && ` · hentet ${formatRetrievedAt(source.retrieved_at)}`}
                   </span>
                 </li>

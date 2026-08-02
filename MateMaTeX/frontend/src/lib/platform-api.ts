@@ -43,7 +43,10 @@ export type TruthClaimStatus =
   | "interpretation"
   | "disputed"
   | "time_sensitive"
-  | "unsupported";
+  | "unsupported"
+  | "verification_failed"
+  | "source_unavailable"
+  | "not_evaluated";
 
 export interface TruthSource {
   title: string;
@@ -51,6 +54,8 @@ export interface TruthSource {
   publisher: string;
   source_tier: "primary" | "authoritative" | "editorial" | "other";
   retrieved_at: string;
+  origin: "teacher" | "grounding" | "model";
+  fetch_status: "provided" | "grounded" | "model_reported" | "fetched" | "source_unavailable";
 }
 
 export interface TruthClaim {
@@ -68,7 +73,7 @@ export interface TruthClaim {
 export interface TruthPassport {
   version: string;
   generated_at: string;
-  status: "verified" | "needs_review" | "blocked";
+  status: "verified" | "needs_review" | "blocked" | "verification_failed" | "source_unavailable" | "not_evaluated";
   topic: string;
   subject: string;
   coverage_percent: number;
@@ -219,13 +224,24 @@ export type CompendiumKind =
   | "source_collection"
   | "appendix";
 export type CompendiumStatus = "outline" | "writing" | "review" | "approved" | "archived";
-export type CompendiumChapterStatus = "planned" | "generated" | "approved" | "needs_revision";
+export type CompendiumChapterStatus =
+  | "planned"
+  | "generated"
+  | "approved"
+  | "needs_revision"
+  | "generation_incomplete"
+  | "parse_failure"
+  | "language_quality_failed"
+  | "source_grounding_failed"
+  | "verification_failed";
 export type CompendiumImageMode = "none" | "commons" | "ai";
 
 export interface CompendiumSource {
   title: string;
   url: string;
   publisher: string;
+  origin: "teacher" | "grounding" | "model";
+  fetch_status: "provided" | "grounded" | "model_reported" | "fetched" | "source_unavailable";
 }
 
 export interface ScopeContract {
@@ -350,19 +366,30 @@ function friendlyPlatformError(status: number, detail: string): { message: strin
   return { message: detail || `Plattformfeil (${status})`, code: `http_${status}`, retryable: false };
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 150_000): Promise<T> {
   let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     response = await fetch(`${baseUrl()}${path}`, {
       ...init,
+      signal: init?.signal || controller.signal,
       headers: { "Content-Type": "application/json", ...init?.headers },
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new PlatformApiError(
+        "Handlingen tok for lang tid og ble avbrutt. Kapittelet er ikke endret; prøv igjen.",
+        { status: 408, code: "request_timeout", retryable: true },
+      );
+    }
     throw new PlatformApiError("Fikk ikke kontakt med serveren. Kontroller nettverket og prøv igjen.", {
       status: 0,
       code: "network_error",
       retryable: true,
     });
+  } finally {
+    clearTimeout(timeout);
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));

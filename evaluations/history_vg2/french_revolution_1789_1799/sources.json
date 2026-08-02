@@ -1,0 +1,9 @@
+{
+  "types": ["editorial encyclopedia", "reference work", "official curriculum page"],
+  "urls": [
+    "https://snl.no/den_franske_revolusjonen",
+    "https://www.britannica.com/event/French-Revolution",
+    "https://www.udir.no/lk20/his01-03/kompetansemaal-og-vurdering/kv103"
+  ],
+  "secret_free": true
+}

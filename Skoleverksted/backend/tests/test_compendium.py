@@ -3,6 +3,8 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -12,6 +14,7 @@ from fastapi import HTTPException
 from Skoleverksted.backend.platform import compendium_renderer
 from Skoleverksted.backend.platform.compendium import (
     _extract_json,
+    _teacher_sources,
     _source_quality_notes,
     _source_payload,
     generate_compendium_chapter,
@@ -34,6 +37,11 @@ from Skoleverksted.backend.platform.models import (
     YearPlanPeriod,
 )
 from Skoleverksted.backend.platform.router import approve_compendium as approve_compendium_endpoint
+from Skoleverksted.backend.platform.router import (
+    RepairInProgressError,
+    RepairTimeoutError,
+    _run_repair_with_timeout,
+)
 from Skoleverksted.backend.platform.router import update_compendium_chapter as update_chapter_endpoint
 from Skoleverksted.backend.platform.store import PlatformStore
 from Skoleverksted.backend.platform.truth import TruthAudit
@@ -113,6 +121,15 @@ def test_source_payload_keeps_canonical_pages_and_drops_search_redirects():
     assert [source.url for source in sources] == ["https://snl.no/ideologi"]
 
 
+def test_teacher_urls_are_promoted_to_truth_sources():
+    sources = _teacher_sources(
+        "Kilder: https://snl.no/den_franske_revolusjonen og "
+        "https://www.udir.no/lk20/his01-03/kompetansemaal-og-vurdering/kv103"
+    )
+    assert [source.origin for source in sources] == ["teacher", "teacher"]
+    assert all(source.fetch_status == "provided" for source in sources)
+
+
 def test_source_quality_notes_reject_weak_sources_and_generic_homepages():
     notes = _source_quality_notes([
         CompendiumSource(
@@ -159,7 +176,7 @@ def test_failed_regeneration_keeps_the_previous_chapter(monkeypatch):
         )
 
         regenerated = generate_compendium_chapter(compendium, chapter.id)
-        assert regenerated.status == "needs_revision"
+        assert regenerated.status == "parse_failure"
         assert regenerated.content_markdown == previous_content
         assert regenerated.sources[0].title == "Eksisterende kilde"
         assert "bevart" in regenerated.verification_notes[0]
@@ -195,10 +212,83 @@ def test_failed_fact_check_keeps_the_new_research(monkeypatch):
         )
 
         regenerated = generate_compendium_chapter(compendium, chapter.id)
-        assert regenerated.status == "needs_revision"
+        assert regenerated.status == "verification_failed"
         assert regenerated.content_markdown == new_content.strip()
         assert regenerated.sources[0].title == "Dokumentert kilde"
         assert "produsert og lagret" in regenerated.verification_notes[0]
+
+
+def test_generation_passes_teacher_sources_and_blocks_broken_language(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
+        compendium.source_brief = "https://snl.no/den_franske_revolusjonen"
+        chapter = compendium.chapters[0]
+        captured: dict[str, object] = {}
+        content = "## Årsaker\n\n" + ("Særlig ble en finansiell katastrofe. " * 12)
+
+        def fake_google(*_args, **kwargs):
+            if kwargs.get("response_schema", {}).get("properties", {}).get("approved"):
+                return ({"approved": True, "notes": [], "unsafe_claims": []}, [])
+            return ({
+                "content_markdown": content,
+                "key_facts": ["En påstand"],
+                "glossary": ["Begrep – forklaring"],
+                "sources": [],
+            }, [])
+
+        def fake_audit(**kwargs):
+            captured["provided_sources"] = kwargs["provided_sources"]
+            return _verified_truth(kwargs["content"])
+
+        monkeypatch.setattr("Skoleverksted.backend.platform.compendium._call_google_json", fake_google)
+        monkeypatch.setattr("Skoleverksted.backend.platform.compendium.audit_truth", fake_audit)
+        result = generate_compendium_chapter(compendium, chapter.id)
+        assert result.status == "language_quality_failed"
+        assert result.truth_passport is not None
+        provided = captured["provided_sources"]
+        assert provided and provided[0].origin == "teacher"
+
+
+def test_repair_timeout_is_explicit_and_does_not_return_a_fake_success(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
+        monkeypatch.setattr("Skoleverksted.backend.platform.router._REPAIR_TIMEOUT_SECONDS", 0.01)
+
+        def hangs(*_args, **_kwargs):
+            time.sleep(0.1)
+
+        monkeypatch.setattr("Skoleverksted.backend.platform.router.repair_compendium_chapter", hangs)
+        with pytest.raises(RepairTimeoutError) as error:
+            _run_repair_with_timeout(compendium, compendium.chapters[0].id, operation_id="test-timeout")
+        assert error.value.operation_id == "test-timeout"
+
+
+def test_repair_lock_rejects_parallel_requests(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
+        monkeypatch.setattr("Skoleverksted.backend.platform.router._REPAIR_TIMEOUT_SECONDS", 1)
+        started = threading.Event()
+
+        def slow_success(*_args, **_kwargs):
+            started.set()
+            time.sleep(0.15)
+            return compendium.chapters[0]
+
+        monkeypatch.setattr("Skoleverksted.backend.platform.router.repair_compendium_chapter", slow_success)
+        outcome: list[object] = []
+        worker = threading.Thread(
+            target=lambda: outcome.append(
+                _run_repair_with_timeout(compendium, compendium.chapters[0].id, operation_id="first")
+            ),
+            daemon=True,
+        )
+        worker.start()
+        assert started.wait(1)
+        with pytest.raises(RepairInProgressError) as error:
+            _run_repair_with_timeout(compendium, compendium.chapters[0].id, operation_id="second")
+        assert error.value.operation_id == "first"
+        worker.join(timeout=2)
+        assert len(outcome) == 1
 
 
 def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch):
@@ -332,7 +422,7 @@ def test_automatic_repair_keeps_unresolved_claims_for_teacher_control(monkeypatc
     with tempfile.TemporaryDirectory() as tmp:
         compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
         chapter = compendium.chapters[0]
-        chapter.content_markdown = "## Kapittel\n\n" + ("En historisk framstilling. " * 30)
+        chapter.content_markdown = "## Kapittel\n\n" + ("En historisk framstilling. " * 50)
         chapter.status = "needs_revision"
         chapter.verification_notes = ["Et årstall mangler dokumentasjon."]
         calls = 0
@@ -364,7 +454,7 @@ def test_automatic_repair_keeps_unresolved_claims_for_teacher_control(monkeypatc
         )
 
         repaired = repair_compendium_chapter(compendium, chapter.id)
-        assert repaired.status == "needs_revision"
+        assert repaired.status == "source_grounding_failed"
         assert any("nøyaktige årstallet" in note for note in repaired.verification_notes)
         assert repaired.content_markdown == chapter.content_markdown.strip()
 
@@ -384,7 +474,7 @@ def test_automatic_repair_failure_never_overwrites_the_chapter(monkeypatch):
         )
 
         repaired = repair_compendium_chapter(compendium, chapter.id)
-        assert repaired.status == "needs_revision"
+        assert repaired.status == "verification_failed"
         assert repaired.content_markdown == original
         assert "bevart uendret" in repaired.verification_notes[-1]
 

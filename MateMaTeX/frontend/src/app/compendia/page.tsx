@@ -12,7 +12,7 @@ import {
   Plus,
   Sparkles,
 } from "lucide-react";
-import { listCompendia, type Compendium, type CompendiumStatus } from "@/lib/platform-api";
+import { listCompendia, type Compendium, type CompendiumChapterStatus, type CompendiumStatus } from "@/lib/platform-api";
 
 const statusLabels: Record<CompendiumStatus, string> = {
   outline: "Disposisjon",
@@ -22,12 +22,21 @@ const statusLabels: Record<CompendiumStatus, string> = {
   archived: "Arkivert",
 };
 
+const failedChapterStatuses: CompendiumChapterStatus[] = [
+  "needs_revision",
+  "generation_incomplete",
+  "parse_failure",
+  "language_quality_failed",
+  "source_grounding_failed",
+  "verification_failed",
+];
+
 function progress(compendium: Compendium): number {
   if (!compendium.chapters.length) return 0;
   const completed = compendium.chapters.reduce((sum, chapter) => {
     if (chapter.status === "approved") return sum + 1;
     if (chapter.status === "generated") return sum + 0.7;
-    if (chapter.status === "needs_revision") return sum + 0.4;
+    if (failedChapterStatuses.includes(chapter.status)) return sum + 0.2;
     return sum;
   }, 0);
   return Math.round((completed / compendium.chapters.length) * 100);

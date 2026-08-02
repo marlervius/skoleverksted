@@ -19,6 +19,7 @@ from .models import (
     utc_now,
 )
 from .truth import audit_truth
+from .text_quality import TextQualityIssue, inspect_markdown
 
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,7 @@ def _audit_chapter_material(
     topic: str,
     subject: str,
     level: str,
+    provided_sources: list[CompendiumSource] | None = None,
 ) -> tuple[str, list[str], list[str], TruthPassport]:
     audit_input = (
         f"{content.rstrip()}\n\n{_TRUTH_FACTS_MARKER}\n"
@@ -214,6 +216,7 @@ def _audit_chapter_material(
         topic=topic,
         subject=subject,
         level=level,
+        provided_sources=provided_sources or [],
     )
     revised = truth_audit.content
     if (
@@ -346,7 +349,14 @@ def _grounding_sources(response: object) -> list[CompendiumSource]:
                 url = _resolve_grounding_redirect(raw_url)
             title = _text(getattr(web, "title", ""), 300)
             if url and not any(item.url == url for item in sources):
-                sources.append(CompendiumSource(title=title or url, url=url))
+                sources.append(
+                    CompendiumSource(
+                        title=title or url,
+                        url=url,
+                        origin="grounding",
+                        fetch_status="grounded",
+                    )
+                )
     except Exception:
         logger.debug("Kunne ikke lese grounding-metadata", exc_info=True)
     return sources[:40]
@@ -683,8 +693,71 @@ def _source_payload(value: Any) -> list[CompendiumSource]:
                 title=title,
                 url=url,
                 publisher=_text(item.get("publisher"), 180),
+                origin="model",
+                fetch_status="model_reported",
             ))
     return result
+
+
+def _teacher_sources(source_brief: str) -> list[CompendiumSource]:
+    """Extract explicit teacher URLs so truth verification can use them.
+
+    The source brief remains untrusted prompt data, but concrete URLs supplied
+    by the teacher are durable evidence candidates.  We never infer a source
+    from a bare hostname or a model-written citation.
+    """
+    result: list[CompendiumSource] = []
+    for raw in re.findall(r"https?://[^\s<>'\"]+", source_brief or ""):
+        url = _canonical_source_url(raw.rstrip(".,);]"))
+        if not url or any(item.url == url for item in result):
+            continue
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").removeprefix("www.")
+        title = (parsed.path.rsplit("/", 1)[-1] or host).replace("_", " ").replace("-", " ")
+        result.append(
+            CompendiumSource(
+                title=title[:300],
+                url=url,
+                publisher=host[:180],
+                origin="teacher",
+                fetch_status="provided",
+            )
+        )
+    return result[:20]
+
+
+def _merge_sources(*groups: list[CompendiumSource]) -> list[CompendiumSource]:
+    """Deduplicate sources while preferring teacher/grounding provenance."""
+    result: list[CompendiumSource] = []
+    rank = {"teacher": 3, "grounding": 2, "model": 1}
+    for group in groups:
+        for source in group:
+            if not source.url:
+                continue
+            existing = next((item for item in result if item.url == source.url), None)
+            if existing is None:
+                result.append(source)
+                continue
+            if rank.get(source.origin, 0) > rank.get(existing.origin, 0):
+                index = result.index(existing)
+                result[index] = source
+    return result[:50]
+
+
+def _quality_notes(issues: list[TextQualityIssue]) -> list[str]:
+    return [f"{issue.message} ({issue.code})" for issue in issues]
+
+
+def _failure_status(passport: TruthPassport, issues: list[TextQualityIssue]) -> str | None:
+    if issues:
+        return "language_quality_failed"
+    if passport.status == "verification_failed":
+        return "verification_failed"
+    if passport.status == "source_unavailable":
+        return "source_grounding_failed"
+    if passport.status == "not_evaluated":
+        return "verification_failed"
+    return None
 
 
 def _fallback_chapter(
@@ -724,11 +797,12 @@ denne teksten skal ikke regnes som ferdig læremiddel.
             + ("Den forrige kapittelteksten er bevart. " if has_valuable_content else "")
             + "Prøv igjen om litt."
         )
+    failure_status = "parse_failure" if unreadable_response else "generation_incomplete"
     payload = chapter.model_dump()
     payload.update(
         content_markdown=content,
         verification_notes=[note],
-        status="needs_revision",
+        status=failure_status,
         updated_at=utc_now(),
     )
     return CompendiumChapter.model_validate(payload)
@@ -790,10 +864,12 @@ JSON:
         content = _markdown_text(payload.get("content_markdown"))
         if len(content) < 400:
             raise ValueError("Kapittelteksten var for kort")
-        sources = _source_payload(payload.get("sources"))
-        for source in grounded_sources:
-            if source.url and not any(item.url == source.url for item in sources):
-                sources.append(source)
+        teacher_sources = _teacher_sources(compendium.source_brief)
+        sources = _merge_sources(
+            _source_payload(payload.get("sources")),
+            teacher_sources,
+            grounded_sources,
+        )
         source_quality_notes = _source_quality_notes(sources)
         verification_prompt = f"""
 Du er en streng faktakontrollør og redaktør. Kontroller kapittelteksten nedenfor
@@ -843,6 +919,10 @@ eller svake kilder for sentrale påstander.
             topic=compendium.topic,
             subject=compendium.subject,
             level=compendium.level,
+            provided_sources=[
+                source for source in sources
+                if source.origin in {"teacher", "grounding"}
+            ],
         )
         for truth_source in truth_passport.sources:
             if not any(item.url == truth_source.url for item in sources):
@@ -851,9 +931,14 @@ eller svake kilder for sentrale påstander.
                         title=truth_source.title,
                         url=truth_source.url,
                         publisher=truth_source.publisher,
+                        origin=truth_source.origin,
+                        fetch_status=truth_source.fetch_status,
                     )
                 )
-        approved = approved and truth_passport.status == "verified"
+        quality_issues = inspect_markdown(content, min_words=120)
+        notes.extend(note for note in _quality_notes(quality_issues) if note not in notes)
+        failure_status = _failure_status(truth_passport, quality_issues)
+        approved = approved and failure_status is None and truth_passport.status == "verified"
         notes.extend(
             note
             for note in truth_passport.limitations
@@ -868,7 +953,7 @@ eller svake kilder for sentrale påstander.
             verification_notes=notes[:30],
             truth_passport=truth_passport,
             revision_summary=[],
-            status="generated" if approved else "needs_revision",
+            status="generated" if approved else (failure_status or "needs_revision"),
             updated_at=utc_now(),
         )
         return CompendiumChapter.model_validate(updated)
@@ -886,7 +971,7 @@ eller svake kilder for sentrale påstander.
                 "eller prøv å lage en ny versjon."
             ],
             revision_summary=[],
-            status="needs_revision",
+            status="verification_failed",
             updated_at=utc_now(),
         )
         return CompendiumChapter.model_validate(updated)
@@ -973,10 +1058,15 @@ JSON:
         changes = _strings(payload.get("changes"), 30)
         if not changes:
             raise ValueError("KI-redaktøren beskrev ingen endringer.")
-        sources = _source_payload(payload.get("sources"))
-        for source in grounded_sources:
-            if source.url and not any(item.url == source.url for item in sources):
-                sources.append(source)
+        sources = _merge_sources(
+            _source_payload(payload.get("sources")),
+            _teacher_sources(compendium.source_brief),
+            [
+                source for source in chapter.sources
+                if source.origin in {"teacher", "grounding"}
+            ],
+            grounded_sources,
+        )
         if not sources:
             raise ValueError("KI-redaktøren fant ingen etterprøvbare kilder.")
         remaining_source_issues = _source_quality_notes(sources)
@@ -986,6 +1076,14 @@ JSON:
             )
     except Exception as exc:
         logger.warning("Automatisk kapittelretting feilet for %s: %s", chapter.title, exc)
+        error_text = str(exc).casefold()
+        repair_status = (
+            "parse_failure"
+            if any(marker in error_text for marker in ("json", "modellsvaret", "uventet kort"))
+            else "source_grounding_failed"
+            if any(marker in error_text for marker in ("kilde", "etterprøvbare", "svake"))
+            else "verification_failed"
+        )
         updated = chapter.model_dump()
         updated.update(
             verification_notes=[
@@ -993,7 +1091,7 @@ JSON:
                 "Automatisk retting kunne ikke fullføres. Kapittelteksten er "
                 "bevart uendret; prøv igjen om litt.",
             ][:30],
-            status="needs_revision",
+            status=repair_status,
             updated_at=utc_now(),
         )
         return CompendiumChapter.model_validate(updated)
@@ -1053,6 +1151,10 @@ JSON:
         topic=compendium.topic,
         subject=compendium.subject,
         level=compendium.level,
+        provided_sources=[
+            source for source in sources
+            if source.origin in {"teacher", "grounding"}
+        ],
     )
     for truth_source in truth_passport.sources:
         if not any(item.url == truth_source.url for item in sources):
@@ -1061,9 +1163,14 @@ JSON:
                     title=truth_source.title,
                     url=truth_source.url,
                     publisher=truth_source.publisher,
+                    origin=truth_source.origin,
+                    fetch_status=truth_source.fetch_status,
                 )
             )
-    verified = verified and truth_passport.status == "verified"
+    quality_issues = inspect_markdown(repaired_content, min_words=120)
+    notes.extend(note for note in _quality_notes(quality_issues) if note not in notes)
+    failure_status = _failure_status(truth_passport, quality_issues)
+    verified = verified and failure_status is None and truth_passport.status == "verified"
     notes.extend(
         note
         for note in truth_passport.limitations
@@ -1078,7 +1185,7 @@ JSON:
         verification_notes=notes[:30],
         truth_passport=truth_passport,
         revision_summary=changes[:30],
-        status="generated" if verified else "needs_revision",
+        status="generated" if verified else (failure_status or "needs_revision"),
         updated_at=utc_now(),
     )
     return CompendiumChapter.model_validate(updated)

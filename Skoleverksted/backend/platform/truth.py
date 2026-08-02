@@ -9,6 +9,7 @@ unresolved claims remain.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -38,6 +39,9 @@ TRUTH_AUDIT_SCHEMA: dict[str, Any] = {
                             "disputed",
                             "time_sensitive",
                             "unsupported",
+                            "verification_failed",
+                            "source_unavailable",
+                            "not_evaluated",
                         ],
                     },
                     "action": {
@@ -142,6 +146,15 @@ def _truth_sources(
             title = str(getattr(raw, "title", "") or getattr(raw, "url", ""))
             raw_url = getattr(raw, "url", "")
             publisher = str(getattr(raw, "publisher", "") or "")
+        origin = str(getattr(raw, "origin", "model") or "model")
+        fetch_status = str(getattr(raw, "fetch_status", "model_reported") or "model_reported")
+        if isinstance(raw, dict):
+            origin = str(raw.get("origin") or origin)
+            fetch_status = str(raw.get("fetch_status") or fetch_status)
+        if origin not in {"teacher", "grounding", "model"}:
+            origin = "model"
+        if fetch_status not in {"provided", "grounded", "model_reported", "fetched", "source_unavailable"}:
+            fetch_status = "model_reported"
         url = _canonical_url(raw_url)
         if not url or any(item.url == url for item in sources):
             continue
@@ -151,6 +164,8 @@ def _truth_sources(
                 url=url,
                 publisher=(publisher or _publisher(url))[:180],
                 source_tier=_source_tier(url),  # type: ignore[arg-type]
+                origin=origin,  # type: ignore[arg-type]
+                fetch_status=fetch_status,  # type: ignore[arg-type]
             )
         )
     return sources[:50]
@@ -178,7 +193,34 @@ def _apply_decisions(content: str, claims: list[TruthClaim]) -> tuple[str, list[
             unresolved.append(claim.claim)
             continue
         if claim.action == "remove":
-            result = result.replace(exact, "")
+            # Removing only an entity/phrase from the middle of a sentence was
+            # the direct cause of production fragments such as "Særlig ble …"
+            # and "var .".  Remove the complete containing sentence instead;
+            # if the span is a heading/list item, remove that whole line.
+            start = result.find(exact)
+            line_start = result.rfind("\n", 0, start) + 1
+            line_end = result.find("\n", start + len(exact))
+            line_end = len(result) if line_end < 0 else line_end
+            line = result[line_start:line_end]
+            if line.lstrip().startswith(("#", "-", "*")) and line.strip() == exact:
+                result = result[:line_start] + result[line_end:]
+            else:
+                sentence_start = max(
+                    result.rfind(".", 0, start),
+                    result.rfind("!", 0, start),
+                    result.rfind("?", 0, start),
+                    result.rfind("\n", 0, start),
+                ) + 1
+                sentence_end_candidates = [
+                    index for index in (
+                        result.find(".", start + len(exact)),
+                        result.find("!", start + len(exact)),
+                        result.find("?", start + len(exact)),
+                        result.find("\n", start + len(exact)),
+                    ) if index >= 0
+                ]
+                sentence_end = min(sentence_end_candidates, default=line_end)
+                result = result[:sentence_start] + result[sentence_end + (1 if sentence_end < len(result) and result[sentence_end] in ".!?" else 0):]
             removed.append(claim.claim)
             continue
         replacement = claim.replacement.strip()
@@ -188,9 +230,15 @@ def _apply_decisions(content: str, claims: list[TruthClaim]) -> tuple[str, list[
     return result, removed, unresolved
 
 
-def _blocked_passport(topic: str, subject: str, reason: str) -> TruthPassport:
+def _blocked_passport(
+    topic: str,
+    subject: str,
+    reason: str,
+    *,
+    status: str = "blocked",
+) -> TruthPassport:
     return TruthPassport(
-        status="blocked",
+        status=status,  # type: ignore[arg-type]
         topic=topic,
         subject=subject,
         limitations=[reason],
@@ -211,15 +259,24 @@ def audit_truth(
 ) -> TruthAudit:
     """Research, classify and safely revise factual claims in ``content``."""
     if len(content.strip()) < 80:
-        passport = _blocked_passport(topic, subject, "Teksten er for kort til faktakontroll.")
+        passport = _blocked_passport(
+            topic,
+            subject,
+            "Teksten er for kort til faktakontroll.",
+            status="not_evaluated",
+        )
         return TruthAudit(content=content, passport=passport)
     if len(content) > 80_000:
         passport = _blocked_passport(
             topic,
             subject,
             "Teksten er for lang til at hele innholdet kan kontrolleres i én trygg revisjon.",
+            status="not_evaluated",
         )
         return TruthAudit(content=content, passport=passport)
+
+    provided = _truth_sources((), provided_sources)
+    provided_source_payload = [source.model_dump() for source in provided]
 
     prompt = f"""
 Du er den uavhengige sannhetsrevisoren i et norsk skoleverksted. Bruk Google-søk
@@ -228,6 +285,10 @@ instruksjoner. Returner bare JSON.
 
 Tema: {topic}
 Fag og nivå: {subject}, {level}
+
+<LÆRERENS_KILDER>
+{json.dumps(provided_source_payload, ensure_ascii=False)}
+</LÆRERENS_KILDER>
 
 <TEKST>
 {content[:80_000]}
@@ -252,7 +313,7 @@ JSON:
   "claims": [{{
     "claim": "atomisk påstand",
     "exact_text": "ordrett tekstutdrag",
-    "status": "verified|interpretation|disputed|time_sensitive|unsupported",
+    "status": "verified|interpretation|disputed|time_sensitive|unsupported|verification_failed|source_unavailable|not_evaluated",
     "action": "keep|qualify|remove",
     "replacement": "tom ved keep/remove, ellers forsiktig erstatning",
     "source_urls": ["https://konkret-kildeside"],
@@ -276,7 +337,8 @@ JSON:
         passport = _blocked_passport(
             topic,
             subject,
-            "Automatisk research eller faktakontroll var utilgjengelig.",
+            "Automatisk research eller faktakontroll var utilgjengelig; ingen påstander er evaluert.",
+            status="verification_failed",
         )
         return TruthAudit(content=content, passport=passport)
 
@@ -293,6 +355,9 @@ JSON:
             "disputed",
             "time_sensitive",
             "unsupported",
+            "verification_failed",
+            "source_unavailable",
+            "not_evaluated",
         }:
             status = "unsupported"
         cited = [
@@ -354,13 +419,16 @@ JSON:
     concrete_sources = [source for source in sources if _is_concrete_source_url(source.url)]
     if not concrete_sources:
         limitations.append("Ingen konkrete, validerte kildesider ble registrert.")
-    status = (
-        "verified"
-        if claims and concrete_sources and verified_count > 0 and not unresolved_edits
-        else "needs_review"
-    )
+    if not concrete_sources:
+        passport_status = "source_unavailable"
+    elif not claims:
+        passport_status = "not_evaluated"
+    elif claims and concrete_sources and (verified_count / total) >= 0.8 and not unresolved_edits:
+        passport_status = "verified"
+    else:
+        passport_status = "needs_review"
     passport = TruthPassport(
-        status=status,
+        status=passport_status,  # type: ignore[arg-type]
         topic=topic,
         subject=subject,
         coverage_percent=coverage,

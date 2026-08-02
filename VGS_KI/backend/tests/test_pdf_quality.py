@@ -9,14 +9,11 @@
 """
 import re
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from laeringsark_renderer import (  # noqa: E402
+from VGS_KI.backend.laeringsark_renderer import (
     balance_oppgaver,
     build_faktarapport_doc,
     build_laeringsark_doc,
@@ -26,7 +23,7 @@ from laeringsark_renderer import (  # noqa: E402
     parse_oppgaver,
     strip_ungrounded_k_markers,
 )
-from text_pipeline import (  # noqa: E402
+from VGS_KI.backend.text_pipeline import (
     extract_pdf_pages,
     find_english_leaks,
     lint_pdf,
@@ -42,7 +39,7 @@ requires_typst = pytest.mark.skipif(not _HAS_TYPST, reason="typst CLI not instal
 
 
 def _compile(source: str) -> bytes:
-    from pdf_service import compile_typst
+    from VGS_KI.backend.pdf_service import compile_typst
     return compile_typst(source)
 
 
@@ -237,7 +234,7 @@ def test_learning_sheet_caps_tall_images_to_protect_pagination():
 
 
 def test_markdown_answer_key_is_removed_from_student_tasks():
-    from pdf_service import parse_worksheet_content
+    from VGS_KI.backend.pdf_service import parse_worksheet_content
 
     worksheet = """
 FORSTÅELSE OG ANALYSE
@@ -301,7 +298,7 @@ def test_coerce_structured_rapport_does_not_split_string_fields_into_characters(
 @requires_typst
 def test_acceptance_laeringsark_render():
     data = coerce_structured_lesson(STRUCTURED_FIXTURE)
-    from pdf_service import parse_worksheet_content
+    from VGS_KI.backend.pdf_service import parse_worksheet_content
     sections = parse_worksheet_content(WORKSHEET_FIXTURE)
     oppgaver = parse_oppgaver(sections["comprehension"], sections["discussion"])
     assert oppgaver, "worksheet fixture must parse into oppgaver"
