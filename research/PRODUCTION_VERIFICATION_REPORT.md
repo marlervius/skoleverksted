@@ -11,13 +11,13 @@ RUNTIME`, `TESTET MOT EKTE MODELL`, `TESTET I PRODUKSJON` og `IKKE VERIFISERT`.
 | Kontroll | Resultat |
 |---|---|
 | Aktiv gren | `laerebokdesign-hefte` |
-| HEAD | `cb486fc Forbedre kildekontroll og jobbstabilitet` |
+| HEAD | `1c36544 Close compendium forensic incident and harden verification` |
 | Sporingsgren | `origin/laerebokdesign-hefte` peker lokalt på samme SHA |
-| Audit-endringer | Ukommitterte i arbeidskopien; ikke i HEAD/deploy |
+| Audit-endringer | Kommittert på aktiv branch; ikke deployet |
 | Produksjonsfrontend | `https://skoleverksted.vercel.app` |
 | Produksjonskompendium | `838938c88e994320a64281aafc871ec8` |
 | Backend-runtime brukt i lokale tester | Docker-image `vgs_samlet-backend:latest`, Python 3.12, arbeidskopien montert |
-| Friskt image fra nåværende Dockerfile | Ikke bygget ferdig; build ble avbrutt etter manglende fremdrift |
+| Friskt image fra nåværende Dockerfile | Bygget uten cache; digest `sha256:fe99c5aafa50df4f58f543c8c04ba85ffb2243905d63787c39efd3f5ced70c40` |
 | Ekte modell | Ikke brukt i lokal test; ingen produksjonskall utført etter retting |
 
 Urelaterte, allerede eksisterende lokale endringer er fortsatt urørte:

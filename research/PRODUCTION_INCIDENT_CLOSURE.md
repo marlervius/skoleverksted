@@ -80,9 +80,10 @@ uten hemmeligheter før neste gate.
 
 ## Rollback-plan
 
-Produksjonen står fortsatt på kjent HEAD `cb486fc`; audit-endringene er
-ukommitterte. Før publisering må endringene committes i en egen releasecommit,
-deployes, readiness kontrolleres og identisk scenario kjøres. Ved kritisk
+Produksjonen står fortsatt på kjent HEAD `cb486fc`; audit-endringene er nå
+kommittert som `1c36544` og lokalt verifisert i et ferskt image, men ikke
+deployet. Før publisering må readiness kontrolleres og identisk scenario kjøres.
+Ved kritisk
 produksjonsfeil rulles Render/Vercel tilbake til forrige kjente fungerende SHA,
 og PDF-blokkeringen beholdes.
 

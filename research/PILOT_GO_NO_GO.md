@@ -31,7 +31,8 @@ verifisert mot ekte modell eller identisk produksjonskjøring.
 * Ekte modellrespons, kildesøk og 80 %-faktapass er ikke testet.
 * Ekte timeout, retry, refresh og backend-omstart for reparasjon er ikke testet.
 * Ny PDF og Word er ikke visuelt kontrollert.
-* Fresh Docker-image fra gjeldende releasecommit er ikke bygget ferdig.
+* Fresh Docker-image fra gjeldende releasecommit er bygget lokalt og består full
+  monorepo-test, men er ikke publisert eller deployet.
 
 ### P2
 

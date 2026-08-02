@@ -4,7 +4,7 @@
 > Status: aktiv utvikling og pilot-/testfase
 > Repository: [marlervius/skoleverksted](https://github.com/marlervius/skoleverksted)
 > Aktiv arbeidsgren ved siste publisering: laerebokdesign-hefte
-> Siste publiserte commit: cb486fc – «Forbedre kildekontroll og jobbstabilitet»
+> Siste publiserte commit: 1c36544 – «Close compendium forensic incident and harden verification»
 
 Dette dokumentet beskriver hva Skoleverksted er, hva som er implementert, hvordan løsningene henger sammen, hva som er testet, og hva som bør gjøres før produktet kan brukes bredt i skolen.
 
@@ -459,11 +459,17 @@ Frontend åpnes på http://localhost:3000, backend på http://localhost:8000. Ty
 
 ## 16. Git-status
 
-Den samlede forbedringscommitten er publisert på:
+Den forrige samlede forbedringscommitten er publisert på:
 
 ~~~text
 origin/laerebokdesign-hefte
 cb486fc Forbedre kildekontroll og jobbstabilitet
+~~~
+
+Forensic-releasen er kommittert lokalt på aktiv branch:
+
+~~~text
+1c36544 Close compendium forensic incident and harden verification
 ~~~
 
 Denne status.md-filen er laget etter den committen. Den er ikke automatisk committet eller pushet sammen med den forrige leveransen. Ved neste publisering bør filen committes sammen med eventuelle andre ønskede endringer, og de to lokale filene nevnt over må avklares først.
@@ -477,9 +483,10 @@ Produktet er godt egnet til kontrollert pilotbruk. Det er ikke ferdig for full s
 ## 19. Production verification gate – 2. august 2026
 
 Production-verification-gaten er gjennomført som en releasebeslutning. Dommen er
-**REJECTED**: audit-endringene er fortsatt ukommitterte og produksjonsfanen viser
-gammel kode (`0 av 13` dokumenterte påstander og `Må revideres`). Det er derfor
-ikke kjørt en gyldig identisk produksjonskjøring etter retting.
+**REJECTED**: audit-endringene er kommittert lokalt, men ikke deployet, og
+produksjonsfanen viser gammel kode (`0 av 13` dokumenterte påstander og `Må
+revideres`). Det er derfor ikke kjørt en gyldig identisk produksjonskjøring etter
+retting.
 
 I produksjonsnær Docker-runtime bestod full monorepo-suiten **396 tester** med
 **2 eksplisitte skips og 47 warnings** på 53,26 sekunder. Frontend bestod 13

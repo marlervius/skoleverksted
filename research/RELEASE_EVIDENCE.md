@@ -1,6 +1,6 @@
 # Release evidence
 
-Status: `IN PROGRESS` — dette dokumentet skal ikke leses som produksjonsbevis
+Status: `DEPLOY PENDING` — dette dokumentet skal ikke leses som produksjonsbevis
 før deploy-ID, verifisert SHA og readiness-respons er fylt inn fra Render og
 Vercel.
 
@@ -37,7 +37,7 @@ Vercel.
 |---|---|
 | Branch | `laerebokdesign-hefte` |
 | Upstream | `origin/laerebokdesign-hefte` |
-| Implementasjonscommit | fylles inn etter fokusert commit |
+| Implementasjonscommit | `1c36544` (`Close compendium forensic incident and harden verification`) |
 | Release-/docscommit | fylles inn etter evidence-commit |
 | Dockerfile | `./Dockerfile` |
 | Render Blueprint branch | `main` (må samsvare med deploystrategien) |
@@ -54,9 +54,17 @@ docker run --rm -e GOOGLE_API_KEY=test-key -e PYTHONPATH=/app \
 ```
 
 Resultat etter pakkeimportretting: **396 passed, 2 skipped, 47 warnings** in
-53.26 s. Testen brukte ingen gyldig Google-nøkkel; en bakgrunnstest logget
+53.26 s. Samme test i ferskt no-cache image bestod med **396 passed, 2
+skipped, 47 warnings** på 46.12 s. Testen brukte ingen gyldig Google-nøkkel; en bakgrunnstest logget
 forventet `API_KEY_INVALID`, men testprosessen bestod. Dette er ikke ekte
 modell- eller produksjonsbevis.
+
+Ferskt image:
+
+* Build-kommando: `docker buildx build --no-cache --pull --progress=plain --load -t skoleverksted-audit:20260803 .`
+* Bygget: 2. august 2026 kl. 22:40 UTC (Docker metadata)
+* Image-ID/digest: `sha256:fe99c5aafa50df4f58f543c8c04ba85ffb2243905d63787c39efd3f5ced70c40`
+* Dockerfile-sjekker: Typst 0.14.2, pdfTeX/LuaHBTeX og `luaotfload-main.lua`
 
 Runtime-versjoner:
 
@@ -72,7 +80,7 @@ Runtime-versjoner:
 |---|---|
 | Render deploy-ID | Ikke tilgjengelig ennå |
 | Render verifisert SHA | Ikke tilgjengelig ennå |
-| Image-ID/digest | Fresh no-cache image ikke ferdig bygget ennå |
+| Image-ID/digest | `sha256:fe99c5aafa50df4f58f543c8c04ba85ffb2243905d63787c39efd3f5ced70c40` lokalt; ikke deployet |
 | Deploytidspunkt | Ikke tilgjengelig ennå |
 | Readiness | Ikke hentet fra deployet release |
 | Promptversjon | `skoleverksted-v3` i Blueprint; faktisk runtime ikke bekreftet |
