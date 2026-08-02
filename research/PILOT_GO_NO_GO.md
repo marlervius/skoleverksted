@@ -2,37 +2,35 @@
 
 ## Dom: `REJECTED`
 
-Skoleverksted skal ikke åpnes for én ekstern historielærer ennå. Dette er ikke
-fordi de lokale tiltakene mangler, men fordi de ikke er deployet og ikke er
-verifisert mot ekte modell eller identisk produksjonskjøring.
+Skoleverksted skal ikke åpnes for én ekstern historielærer ennå. Release
+`5b72a0541a20` er deployet og smoke-testet, men den identiske ekte modell-
+kjøringen fikk bare 32/44 verifiserte påstander (73 %), to kapitler i
+`needs_revision`, og reparasjonsjobben fikk HTTP 504 etter 120 sekunder.
 
 ## Hvorfor
 
-* Produksjonsfanen kjører fortsatt gammel kode og viser 0/13 dokumenterte
-  påstander samt `Må revideres`.
-* Ingen Render commit-SHA, readiness, modell/prompt-fingerprint eller
-  produksjonslogger kunne bekreftes.
-* Identisk 3-kapitlers scenario er ikke kjørt etter retting.
-* PDF/Word fra ny kjøring er ikke manuelt kontrollert.
-* Rå modellrespons og kildefetch-ledger for originalhendelsen mangler.
+* Render readiness beviser release `5b72a0541a20`, prompt `skoleverksted-v3`,
+  Gemini-modell og config-fingerprint; dashboardets deploy-ID er fortsatt
+  utilgjengelig.
+* Identisk scenario `084614b8247d413b8d1ba38cb6166fce` er kjørt mot ekte modell.
+* Lærer-URL-ene ble propagert med `origin=teacher`, `fetch_status=provided`.
+* PDF/Word ble korrekt blokkert med HTTP 409; ingen sluttfiler finnes.
+* Rå modellrespons og varig source-/response-ledger mangler.
 
 ## Åpne feil
 
 ### P0
 
-* Ingen gyldig produksjonsbevis for audit-koden.
-* Lærerens kilder kan ikke spores ende til ende i produksjon.
-* Identisk produksjonsscenario og manuell vurdering mangler.
-* Full monorepo-suite er nå grønn i Docker, men 47 warnings og en bakgrunnstest
-  med ugyldig testnøkkel må ikke forveksles med produksjonsbevis.
+* 80 %-regelen feiler i identisk produksjonsscenario (32/44 = 73 %).
+* Ingen vellykket produksjonsreparasjon eller manuell sluttproduktvurdering.
+* Render-dashboardets formelle deploy-ID og varig response-ledger mangler.
 
 ### P1
 
-* Ekte modellrespons, kildesøk og 80 %-faktapass er ikke testet.
-* Ekte timeout, retry, refresh og backend-omstart for reparasjon er ikke testet.
-* Ny PDF og Word er ikke visuelt kontrollert.
-* Fresh Docker-image fra gjeldende releasecommit er bygget lokalt og består full
-  monorepo-test, men er ikke publisert eller deployet.
+* Rå/normalisert truth- og modelltekst er ikke tilgjengelig i varig ledger.
+* Vellykket reparasjon, frontend-fremdrift og refresh/omstart er ikke
+  produksjonsverifisert.
+* Ny PDF og Word er ikke visuelt kontrollert fordi compile-porten blokkerte.
 
 ### P2
 
@@ -55,13 +53,13 @@ fra den gamle kjøringen som bevis på audit-endringene.
 
 ## Før ny vurdering
 
-1. Commit og deploy audit-koden til riktig Render/Vercel-tjeneste.
-2. Kontroller readiness, commit-SHA, promptversjon, modell og CORS.
-3. Kjør identisk scenario med samme tre kilder.
-4. Lagre request-/operation-ID, rå/normalisert tekst, claims, kildestatus,
-   reparasjonsendringer og logger.
-5. Kjør de fem historiefixturene og kontroller PDF/Word visuelt.
-6. Få en ekstern historielærer til å vurdere innholdet før `CONDITIONAL PILOT`.
+1. Reparer og kjør identisk scenario på nytt til minst 80 % evidens foreligger.
+2. Kjør en vellykket produksjonsreparasjon og kontroller frontendens før/etter-
+   visning, retry og kapittellås.
+3. Lagre request-/operation-ID, rå/normalisert tekst, claims, kildestatus,
+  reparasjonsendringer og logger.
+4. Kjør de fem historiefixturene og kontroller PDF/Word visuelt etter grønt pass.
+5. Få en ekstern historielærer til å vurdere innholdet før `CONDITIONAL PILOT`.
 
 ## Stoppkriterier under neste pilot
 

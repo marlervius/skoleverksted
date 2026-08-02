@@ -21,6 +21,18 @@ kan derfor ikke avgjøre om akkurat produksjonskallet hang i Google, retry,
 nettverk eller worker. Det vi kan fastslå er at kodebanen ikke hadde en
 stoppbetingelse.
 
+## Produksjonsverifikasjon etter retting
+
+Mot release `5b72a0541a20` ble repair testet på kompendium
+`084614b8247d413b8d1ba38cb6166fce`, kapittel
+`16eb2f0eeac544f08502ad93d2e6211e`. Kallet med operation-ID
+`audit-identical-20260803b-repair-ch2` returnerte HTTP 504 etter den eksplisitte
+120-sekundersgrensen. En umiddelbar retry returnerte HTTP 409 med teksten om at
+samme kapittel allerede repareres og viste den aktive jobb-ID-en. Dette beviser
+terminal timeout og idempotent kapittellås i backend. En vellykket ekte
+modellreparasjon, frontendens fremdriftsvisning og etterfølgende
+`revision_summary` ble ikke observert.
+
 ## Implementert kontroll
 
 `Skoleverksted/backend/platform/router.py:57-126` har nå:

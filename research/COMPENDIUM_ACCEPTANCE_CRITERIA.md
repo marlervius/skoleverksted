@@ -50,11 +50,13 @@ fungere likt.
 * `python -m compileall` for backend-modulene: bestått med bundled Python.
 * Frontend `npm test`: 5 testfiler, 13 tester bestått.
 * Frontend `npm run build`: bestått med Next.js type-/produksjonskontroll.
-* Separate backendpakker i produksjonsnær Docker-runtime: 396 tester bestått,
+* Separate backendpakker i produksjonsnær Docker-runtime: 397 tester bestått,
   2 eksplisitte skips (Skoleverksted 87, VGS_KI 75, ScriptoriumFOV 53,
-  MateMaTeX 181). Full monorepo-innsamling består også med 396 bestått,
+  MateMaTeX 181). Full monorepo-innsamling består også med 397 bestått,
   2 skips og 47 warnings etter at VGS_KI-testenes pakkeimporter ble korrigert.
   Dette er `TESTET I RIKTIG RUNTIME`, ikke produksjonsbevis.
-* Samme modell-/Render-E2E: ikke kjørt etter retting. Ingen ekte modell,
-  produksjonsdatabase eller produksjonslogg var tilgjengelig. Dette er en åpen
-  blokkering, ikke en grønn akseptanse.
+* Samme modell-/Render-E2E er kjørt mot release `5b72a0541a20` med kompendium
+  `084614b8247d413b8d1ba38cb6166fce`: 44 påstander, 32 verifiserte (73 %),
+  lærer-URL-er propagert som `teacher/provided`, språkport bestått og
+  compile-port blokkert. 80 %-kravet og vellykket reparasjon er ikke bestått;
+  dette er en åpen blokkering, ikke grønn akseptanse.

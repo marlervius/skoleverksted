@@ -466,13 +466,18 @@ origin/laerebokdesign-hefte
 cb486fc Forbedre kildekontroll og jobbstabilitet
 ~~~
 
-Forensic-releasen er kommittert lokalt på aktiv branch:
+Forensic-releasen er kommittert og publisert på aktiv branch og Render-tracked
+`main`:
 
 ~~~text
 1c36544 Close compendium forensic incident and harden verification
+9d9ce24 Record forensic release evidence and deployment gate
+5b72a05 Fix nested heading quality gate
 ~~~
 
-Denne status.md-filen er laget etter den committen. Den er ikke automatisk committet eller pushet sammen med den forrige leveransen. Ved neste publisering bør filen committes sammen med eventuelle andre ønskede endringer, og de to lokale filene nevnt over må avklares først.
+Urelaterte lokale endringer i `MateMaTeX/backend/app/latex/preamble.py` og
+`MateMaTeX/backend/tests/test_hefte_design.py`, samt fire urelaterte untracked
+research-filer, er bevisst ikke inkludert.
 
 ## 17. Kort konklusjon
 
@@ -480,24 +485,24 @@ Skoleverksted har nå en fungerende felles produktkjerne for tre lærerrettede A
 
 Produktet er godt egnet til kontrollert pilotbruk. Det er ikke ferdig for full skoleorganisasjon før autentisering, datatilgang, backup, overvåking, skalerbar lagring og mer omfattende faglige evalueringssett er på plass.
 
-## 19. Production verification gate – 2. august 2026
+## 19. Production verification gate – 3. august 2026
 
 Production-verification-gaten er gjennomført som en releasebeslutning. Dommen er
-**REJECTED**: audit-endringene er kommittert lokalt, men ikke deployet, og
-produksjonsfanen viser gammel kode (`0 av 13` dokumenterte påstander og `Må
-revideres`). Det er derfor ikke kjørt en gyldig identisk produksjonskjøring etter
-retting.
+fortsatt **REJECTED**, men av en annen og nå bevist grunn: release `5b72a05` er
+deployet og readiness viser `5b72a0541a20`, men identisk produksjonskjøring
+`084614b8247d413b8d1ba38cb6166fce` endte med 32/44 verifiserte påstander (73 %),
+to kapitler i `needs_revision` og reparasjonstimeout.
 
-I produksjonsnær Docker-runtime bestod full monorepo-suiten **396 tester** med
-**2 eksplisitte skips og 47 warnings** på 53,26 sekunder. Frontend bestod 13
+I ferskt produksjonsimage bestod full monorepo-suiten **397 tester** med
+**2 eksplisitte skips og 47 warnings** på 45,51 sekunder. Frontend bestod 13
 Vitest-tester og Next-produksjonsbuild. De to tidligere VGS_KI-
-pakkeimportfeilene er rettet uten å deaktivere tester. Tallene er
-lokal/runtime-evidens, ikke produksjonsbevis og ikke ekte modell-evaluering.
+pakkeimportfeilene er rettet uten å deaktivere tester. Produksjonssmoke bestod
+også på forsøk 1, og Vercel-/Render-koblingen svarte 200.
 
-Det som fortsatt mangler før en ekstern lærerpilot er deploy-SHA og readiness-
-bevis, ekte modell- og kildefetchresultater, rå/lagret/revidert tekst,
-reparasjonsledger, identisk trekapittels E2E-kjøring, ferdig PDF/Word og manuell
-faglig vurdering. Se `research/PRODUCTION_VERIFICATION_REPORT.md`,
+Det som fortsatt mangler før en ekstern lærerpilot er Render-dashboardets
+deploy-ID, rå/lagret/revidert response-ledger, en vellykket produksjons-
+reparasjon, grønn identisk E2E-kjøring, ferdig PDF/Word og manuell faglig
+vurdering. Se `research/PRODUCTION_VERIFICATION_REPORT.md`,
 `research/ACCEPTANCE_MATRIX.md`, `research/PRODUCTION_INCIDENT_CLOSURE.md` og
 `research/PILOT_GO_NO_GO.md` for den fullstendige gaten.
 
@@ -528,8 +533,9 @@ Deterministisk tekstkontroll, kildeproveniens, 80 %-krav for grønt faktapass,
 timeout/lås og frontend-feilmelding er implementert.
 
 Frontendens 13 Vitest-tester og Next-produksjonsbuild består, og backendens
-moduler består `compileall`. Separate backendpakker er kjørt i
-produksjonsnær Docker-runtime (396 bestått, 2 skips), mens full monorepo-
-innsamling fortsatt stopper ved to eksisterende VGS_KI-import-/miljøfeil. Ny
-identisk deployet ende-til-ende-kjøring er fortsatt ikke utført; produktet skal
-derfor ikke kalles ferdig eller klart for ekstern historielærer ennå.
+moduler består `compileall`. Fresh-image-suiten samler 397 bestått og 2 skips.
+Den identiske produksjonskjøringen beviste lærer-kildepropagasjon
+(`origin=teacher`, `fetch_status=provided`), ingen språkfragmenter og korrekt
+compile-blokkering. Den beviste også at faktapasset bare nådde 73 %, og at
+reparasjon fikk HTTP 504 etter 120 sekunder med en sporbar jobb-ID. Produktet
+skal derfor fortsatt ikke kalles ferdig eller klart for ekstern historielærer.

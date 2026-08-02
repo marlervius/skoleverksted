@@ -24,7 +24,6 @@ til ordfeilen `sidebyrdig` ikke endelig klassifisert.
 * Kompendiumrutene opprettet ikke varige Job-rader.
 * Monorepo-testinnsamlingen hadde to VGS_KI-modulsti-/pakkeimportfeil; de er nå
   rettet uten å deaktivere tester.
-* Produksjonsdeployen har ikke blitt verifisert mot audit-arbeidskopien.
 
 ## Implementerte tiltak
 
@@ -42,7 +41,7 @@ til ordfeilen `sidebyrdig` ikke endelig klassifisert.
 
 I produksjonsnær Docker-runtime består:
 
-* Hele monorepo-suiten: 396 tester bestått, 2 eksplisitte skips og 47 warnings;
+* Hele monorepo-suiten i seneste ferske image: 397 tester bestått, 2 eksplisitte skips og 47 warnings;
 * Skoleverksted-plattform: 87 tester;
 * VGS_KI: 75 tester i separat suite;
 * ScriptoriumFOV: 53 tester;
@@ -51,18 +50,26 @@ I produksjonsnær Docker-runtime består:
 * backend `compileall` og lokal språkport-smoke.
 
 Reparasjonssuite dekker suksess, nettverksfeil, timeout og parallellforespørsel.
-Dette er `LOKALT TESTET`/`TESTET I RIKTIG RUNTIME`, ikke produksjonsbevis.
+Dette er `LOKALT TESTET`/`TESTET I RIKTIG RUNTIME`; produksjonssmoke og release-
+readiness er også verifisert.
 
 ## Ikke-verifiserte tiltak
 
-* deploy på Render med audit-koden;
-* Vercel → riktig Render-backend og CORS;
-* ekte Gemini-respons og kildesøk;
-* faktiske source fetch-statusser;
-* identisk 3-kapitlers produksjonskjøring;
-* PDF-/Word-artefakter fra ny kjøring;
-* manuell faglig vurdering av ekstern lærer;
-* backend-omstart, frontend-refresh og ekte modell-timeout i prod.
+* Render-dashboardets deploy-ID og image-digest (dashboardet var uautentisert);
+* rå Gemini-respons, truth-intermediate og varig response-ledger;
+* vellykket ekte modellreparasjon og synlig frontend-fremdrift;
+* PDF-/Word-artefakter fra en grønn kjøring;
+* manuell faglig vurdering av ekstern lærer.
+
+Readiness viste release `5b72a0541a20`, prompt `skoleverksted-v3`, modell
+`gemini-3.5-flash`, config-fingerprint `dc08f612a352`, og
+`scripts/production_smoke.py` bestod med både Vercel og Render.
+
+Identisk scenario `084614b8247d413b8d1ba38cb6166fce` ble kjørt: 44 påstander,
+32 verifiserte (73 %). Lærer-URL-ene ble propagert som
+`origin=teacher/fetch_status=provided`. Kapittel 2-reparasjonen fikk HTTP 504
+etter 120 sekunder, og retry fikk HTTP 409 med aktiv jobb-ID. Compile-porten
+svarte HTTP 409 og blokkerte PDF/Word korrekt.
 
 ## Regresjonsvern
 
@@ -74,21 +81,20 @@ kan ikke erstatte modell-/produksjonskjøring.
 ## Observability-gap
 
 Det mangler varig response-ledger for rå/normalisert modelltekst, request-ID-
-kobling mellom frontend og reparasjon, per-URL hentelogger og eksplisitt
-production config-fingerprint i denne verifikasjonen. Disse feltene må samles
-uten hemmeligheter før neste gate.
+kobling mellom frontend og reparasjon og per-URL hentelogger. Release-
+config-fingerprint er verifisert fra readiness, men er ikke knyttet til en
+varig deployledger.
 
 ## Rollback-plan
 
-Produksjonen står fortsatt på kjent HEAD `cb486fc`; audit-endringene er nå
-kommittert som `1c36544` og lokalt verifisert i et ferskt image, men ikke
-deployet. Før publisering må readiness kontrolleres og identisk scenario kjøres.
+Produksjonen står på verifisert release `5b72a0541a20`. Forrige kjente release
+er `9d9ce243620b`; Render-dashboardets formelle deployreferanse mangler.
 Ved kritisk
 produksjonsfeil rulles Render/Vercel tilbake til forrige kjente fungerende SHA,
 og PDF-blokkeringen beholdes.
 
 ## Kan hendelsen lukkes?
 
-**Nei.** Tiltakene er lokalt implementert og testet, men incidenten kan ikke
-lukkes før ny deploy, komplett produksjonslogg, identisk E2E-kjøring og manuell
-PDF-/Word-vurdering foreligger.
+**Nei.** Deploy og identisk E2E er nå verifisert, men 80 %-regelen feiler,
+to kapitler krever revisjon, reparasjonssuksess er ikke observert, og PDF/Word
+ble korrekt blokkert. Incidenten er fortsatt åpen.

@@ -1,8 +1,12 @@
 # Release evidence
 
-Status: `DEPLOY PENDING` — dette dokumentet skal ikke leses som produksjonsbevis
-før deploy-ID, verifisert SHA og readiness-respons er fylt inn fra Render og
-Vercel.
+Status: `DEPLOYED / PRODUCTION GATE REJECTED`.
+
+Backend-releasen er identitetsverifisert i Render, men den identiske
+produksjonskjøringen oppfylte ikke kvalitetsporten og incidenten er derfor ikke
+lukket. Render-dashboardet var ikke autentisert i denne kjøringen, så et
+Render-deploy-ID kunne ikke hentes. Readiness-SHA og ikke-hemmelig
+request-/Render-ID er likevel registrert nedenfor.
 
 ## Release scope
 
@@ -38,7 +42,8 @@ Vercel.
 | Branch | `laerebokdesign-hefte` |
 | Upstream | `origin/laerebokdesign-hefte` |
 | Implementasjonscommit | `1c36544` (`Close compendium forensic incident and harden verification`) |
-| Release-/docscommit | fylles inn etter evidence-commit |
+| Evidence-/releasecommit | `9d9ce24` (`Record forensic release evidence and deployment gate`) |
+| Seneste produksjonscommit | `5b72a05` (`Fix nested heading quality gate`) |
 | Dockerfile | `./Dockerfile` |
 | Render Blueprint branch | `main` (må samsvare med deploystrategien) |
 | Frontend | Vercel-prosjektet `skoleverksted` |
@@ -54,22 +59,29 @@ docker run --rm -e GOOGLE_API_KEY=test-key -e PYTHONPATH=/app \
 ```
 
 Resultat etter pakkeimportretting: **396 passed, 2 skipped, 47 warnings** in
-53.26 s. Samme test i ferskt no-cache image bestod med **396 passed, 2
-skipped, 47 warnings** på 46.12 s. Testen brukte ingen gyldig Google-nøkkel; en bakgrunnstest logget
+53.26 s. Dette var før den siste porttesten. Seneste ferske image bestod med
+**397 passed, 2 skipped, 47 warnings** på 45.51 s. Testen brukte ingen gyldig Google-nøkkel; en bakgrunnstest logget
 forventet `API_KEY_INVALID`, men testprosessen bestod. Dette er ikke ekte
 modell- eller produksjonsbevis.
 
-Ferskt image:
+Ferskt image (første forensic-release):
 
 * Build-kommando: `docker buildx build --no-cache --pull --progress=plain --load -t skoleverksted-audit:20260803 .`
 * Bygget: 2. august 2026 kl. 22:40 UTC (Docker metadata)
 * Image-ID/digest: `sha256:fe99c5aafa50df4f58f543c8c04ba85ffb2243905d63787c39efd3f5ced70c40`
 * Dockerfile-sjekker: Typst 0.14.2, pdfTeX/LuaHBTeX og `luaotfload-main.lua`
 
+Ferskt image for seneste produksjonsrelease:
+
+* Build-kommando: `docker buildx build --no-cache --pull --progress=plain --load -t skoleverksted-audit:20260803b .`
+* Docker image digest: `sha256:034916e01d5787204e7b06d63832a0c299c98c5e857526fd31be511348eec646`
+* Image metadata `Created`: `2026-08-02T23:11:51.192058533Z`
+* Testresultat i image: **397 passed, 2 skipped, 47 warnings** på 45.51 s
+
 Runtime-versjoner:
 
 * Python 3.12.11
-* FastAPI 0.140.13
+* FastAPI 0.141.1 (fresh image)
 * Pydantic 2.12.5
 * Pytest 8.4.2
 * google-genai 1.65.0
@@ -78,15 +90,33 @@ Runtime-versjoner:
 
 | Felt | Verdi/status |
 |---|---|
-| Render deploy-ID | Ikke tilgjengelig ennå |
-| Render verifisert SHA | Ikke tilgjengelig ennå |
-| Image-ID/digest | `sha256:fe99c5aafa50df4f58f543c8c04ba85ffb2243905d63787c39efd3f5ced70c40` lokalt; ikke deployet |
-| Deploytidspunkt | Ikke tilgjengelig ennå |
-| Readiness | Ikke hentet fra deployet release |
-| Promptversjon | `skoleverksted-v3` i Blueprint; faktisk runtime ikke bekreftet |
-| Modell | `gemini-3.5-flash` i Blueprint; faktisk runtime ikke bekreftet |
-| Config fingerprint | Ikke hentet fra deploy |
-| Frontend-backend-kobling | Ikke verifisert mot ny release |
-| Rollback | Forrige kjente deploy/commit må bekreftes av Render |
+| Render deploy-ID | Ikke tilgjengelig fra uautentisert Render-dashboard. `rndr-id` for readiness-responsen: `7ce5fb96-3ba3-413f` (ikke deploy-ID) |
+| Render verifisert SHA | `5b72a0541a20` fra `/health/ready` |
+| Image-ID/digest | `sha256:034916e01d5787204e7b06d63832a0c299c98c5e857526fd31be511348eec646` lokalt bygget; Render image-digest er ikke eksponert av readiness |
+| Deploy-/readiness-tidspunkt | Readiness-header `Date: Sun, 02 Aug 2026 23:31:51 GMT` |
+| Readiness | HTTP 200; storage, Google AI, matematikk, norsk, Typst og pdfLaTeX `true`; `status=ready` |
+| Promptversjon | `skoleverksted-v3` |
+| Modell | `gemini-3.5-flash`; bilde: `gemini-3.1-flash-image` |
+| Config fingerprint | `dc08f612a352` |
+| Frontend-backend-kobling | `scripts/production_smoke.py` bestod på forsøk 1; Vercel `/`, `/fag`, `/norsk`, `/matematikk` og beskyttet matematikkproxy svarte 200 |
+| Frontend-bevis | Vercel HTTP 200, `X-Vercel-Id: arn1::bl69g-1785713541664-6205d409a077`, `Date: Sun, 02 Aug 2026 23:32:22 GMT` |
+| Rollback | Forrige verifiserte backend-SHA `9d9ce243620b`; Render-dashboardets deployreferanse mangler |
+
+## Production scenario evidence
+
+Den nye identiske produksjonskjøringen brukte kompendium-ID
+`084614b8247d413b8d1ba38cb6166fce` og request-ID-er med prefiks
+`audit-identical-20260803b-*`. Kapittelresponsene ble lagret lokalt uten
+hemmeligheter. Resultatet var 14/14, 13/21 og 5/9 verifiserte påstander (32/44,
+73 %), med kapittel 2 og 3 i `needs_revision`. Dette er ikke et grønt pass.
+
+Repair-kallet for kapittel 2 fikk HTTP 504 etter den konfigurerte 120-sekunders
+tidsgrensen med operation-ID `audit-identical-20260803b-repair-ch2`.
+Umiddelbar retry ble kontrollert av kapittellåsen og svarte HTTP 409 med
+`audit-identical-20260803b-repair-ch2` som aktiv jobb-ID. En vellykket ekte
+modellreparasjon ble ikke observert i produksjon.
+
+Kompilering av samme kompendium svarte HTTP 409 og listet alle tre kapitlene;
+PDF/Word ble dermed korrekt blokkert.
 
 Ingen hemmeligheter, tokens eller persondata er skrevet i dette dokumentet.

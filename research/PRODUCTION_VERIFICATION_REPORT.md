@@ -11,14 +11,14 @@ RUNTIME`, `TESTET MOT EKTE MODELL`, `TESTET I PRODUKSJON` og `IKKE VERIFISERT`.
 | Kontroll | Resultat |
 |---|---|
 | Aktiv gren | `laerebokdesign-hefte` |
-| HEAD | `1c36544 Close compendium forensic incident and harden verification` |
-| Sporingsgren | `origin/laerebokdesign-hefte` peker lokalt på samme SHA |
-| Audit-endringer | Kommittert på aktiv branch; ikke deployet |
+| HEAD | `5b72a05 Fix nested heading quality gate` |
+| Sporingsgren | `origin/laerebokdesign-hefte` og Render-tracked `main` peker på `5b72a05` |
+| Audit-endringer | Kommittert og deployet; produksjon identitetsverifisert |
 | Produksjonsfrontend | `https://skoleverksted.vercel.app` |
 | Produksjonskompendium | `838938c88e994320a64281aafc871ec8` |
 | Backend-runtime brukt i lokale tester | Docker-image `vgs_samlet-backend:latest`, Python 3.12, arbeidskopien montert |
-| Friskt image fra nåværende Dockerfile | Bygget uten cache; digest `sha256:fe99c5aafa50df4f58f543c8c04ba85ffb2243905d63787c39efd3f5ced70c40` |
-| Ekte modell | Ikke brukt i lokal test; ingen produksjonskall utført etter retting |
+| Friskt image fra nåværende Dockerfile | Bygget uten cache; seneste digest `sha256:034916e01d5787204e7b06d63832a0c299c98c5e857526fd31be511348eec646` |
+| Ekte modell | Brukt i identisk produksjonsscenario mot `gemini-3.5-flash` |
 
 Urelaterte, allerede eksisterende lokale endringer er fortsatt urørte:
 `MateMaTeX/backend/app/latex/preamble.py` og
@@ -26,17 +26,22 @@ Urelaterte, allerede eksisterende lokale endringer er fortsatt urørte:
 
 ## Deploybevis
 
-Produksjonsfanen ble kontrollert i nettleseren. Den viste fortsatt gammel
-flyt: kapitlene hadde `Må revideres`, faktapasset viste `0 av 13`, og ingen av
-de nye statusene eller den nye kildeproveniensvisningen var synlig. Dette er
-direkte bevis på at audit-endringene ikke er verifisert i produksjon.
+Render `/health/ready` svarte HTTP 200 med:
 
-Render `/health/ready` kunne ikke åpnes fra nettleserkonteksten (`ERR_BLOCKED_BY_CLIENT`).
-Ingen Render-commit-SHA, modellnavn, promptversjon, konfigurasjonsfingeravtrykk,
-database-/diskstatus eller CORS-respons kunne derfor bekreftes. Ingen
-hemmeligheter ble lest eller sendt.
+* `release=5b72a0541a20`;
+* `status=ready`, alle seks dependency checks `true`;
+* `prompt_version=skoleverksted-v3`, `google_model=gemini-3.5-flash`;
+* `config_fingerprint=dc08f612a352`;
+* `storage.backend=sqlite`, `job_queue_backend=sqlite-local`.
 
-**Status:** deploy `IKKE VERIFISERT`; produksjonskode er ikke audit-koden.
+Readiness-headeren hadde `rndr-id=7ce5fb96-3ba3-413f` og tidspunkt
+`Sun, 02 Aug 2026 23:31:51 GMT`. Dette er en request-/Render-ID, ikke et
+Render-dashboard deploy-ID; dashboardet var ikke autentisert, så deploy-ID og
+Render image-digest kunne ikke hentes. Frontend-smoke bestod på forsøk 1 og
+Vercel svarte HTTP 200 med `X-Vercel-Id=arn1::bl69g-1785713541664-6205d409a077`.
+
+**Status:** deploy `VERIFISERT`; release-identiteten er bevist, men gate-
+scenarioet er fortsatt `REJECTED`.
 
 ## Testkommandoer og resultater
 
@@ -52,10 +57,10 @@ frontendtestene som ble kjørt med lokal Node-runtime.
 | `python -m compileall -q Skoleverksted/backend/platform Skoleverksted/backend/tests` | passed | lokal bundled Python |
 | `npm test -- --run` | 13 passed | frontend |
 | `npm run build` | passed | Next.js type-/produksjonsbuild |
-| `docker ... python -m pytest -q` fra repo-roten med `GOOGLE_API_KEY=test-key`, `PYTHONPATH=/app` | 396 passed, 2 skipped | 53.26 s, 47 warnings; bakgrunnstest logger forventet ugyldig testnøkkel |
+| `docker ... python -m pytest -q` fra repo-roten med `GOOGLE_API_KEY=test-key`, `PYTHONPATH=/app` | 397 passed, 2 skipped | 45.51 s, 47 warnings i seneste fresh image; bakgrunnstest logger forventet ugyldig testnøkkel |
 
-Samlet autoritativ monorepo-suite: **396 passed, 2 skipped, 47 warnings** på
-53.26 s. De tidligere to innsamlingsfeilene var testimport-/pakke-stifeil i
+Samlet autoritativ monorepo-suite i seneste ferske image: **397 passed, 2
+skipped, 47 warnings** på 45.51 s. De tidligere to innsamlingsfeilene var testimport-/pakke-stifeil i
 VGS_KI-testene og er rettet med kvalifiserte pakkeimporter; ingen tester ble
 slettet eller deaktivert. En bakgrunnstest starter fortsatt en jobb med
 `GOOGLE_API_KEY=test-key` og logger `API_KEY_INVALID`; det er en testharness-
@@ -65,34 +70,46 @@ begrensning, ikke en skjult grønn produksjonskontroll.
 
 | Påstand fra forensic audit | Kodebevis | Testbevis | Produksjonsbevis | Status |
 |---|---|---|---|---|
-| `str.replace()` laget fragmenter | `truth.py:_apply_decisions` er endret til setnings-/linjenivå | 87 plattformtester + språkport | Gammel produksjon viser fragmentert tekst | `LOKALT TESTET`, ikke produksjonsverifisert |
-| Lærer-URL-er manglet i sannhetslaget | `compendium.py:_teacher_sources` og `provided_sources` | kildeproveniens- og fixturetester | Produksjon viser fortsatt 0/13 og gammel versjon | `LOKALT TESTET`, ikke deployet |
-| Teknisk verifikasjonsfeil må skilles fra unsupported | Nye Pydantic-/Truth-statuser og UI-labels | truth-status-tester | Ikke synlig i produksjon | `LOKALT TESTET`, ikke deployet |
-| Reparasjon må ha timeout/lås/ID | `router.py:_run_repair_with_timeout` | timeout- og parallellåstest | Gammel produksjon har gammel flyt | `LOKALT TESTET`, ikke deployet |
+| `str.replace()` laget fragmenter | `truth.py:_apply_decisions` er endret til setnings-/linjenivå | 87 plattformtester + språkport | Ny identisk run: 0 språkfragmenter flagget | `PRODUKSJONSTESTET` for generert tekst |
+| Lærer-URL-er manglet i sannhetslaget | `compendium.py:_teacher_sources` og `provided_sources` | kildeproveniens- og fixturetester | Ny run viser alle tre som `teacher/provided` | `PRODUKSJONSTESTET` i API-leddet |
+| Teknisk verifikasjonsfeil må skilles fra unsupported | Nye Pydantic-/Truth-statuser og UI-labels | truth-status-tester | Claims beholdt som `unsupported`/`interpretation`; compile ikke grønn | `PRODUKSJONSTESTET` |
+| Reparasjon må ha timeout/lås/ID | `router.py:_run_repair_with_timeout` | timeout- og parallellåstest | Ny run: HTTP 504 etter 120 s + HTTP 409 lock med jobb-ID | `PRODUKSJONSTESTET`, suksess mangler |
 | Femtema-regresjon | Fem anonymiserte fixture-inputs og kildeproveniens-test | fixture-kontraktstest | Modell-/produksjonskjøring mangler | `LOKALT TESTET` kun strukturelt |
-| PDF/Word-blokkering | `compile_compendium` krever approved + verified | eksisterende plattformtester | Gammel produksjon viste blokkering | blokkering `LOKALT TESTET`; sluttfiler `IKKE VERIFISERT` |
+| PDF/Word-blokkering | `compile_compendium` krever approved + verified | eksisterende plattformtester | Ny run: HTTP 409 listet alle tre kapitler | blokkering `PRODUKSJONSTESTET`; sluttfiler ikke produsert |
 
 ## Identisk produksjonsscenario
 
-Ikke kjørt etter retting. Det ville ha testet gammel deploykode, ikke den lokale
-audit-koden, og ville derfor ikke være gyldig releasebevis. Følgende mangler:
+Scenarioet ble kjørt etter release `5b72a0541a20` med kompendium-ID
+`084614b8247d413b8d1ba38cb6166fce` og tre kapittel-ID-er. Disposisjonen ble
+opprettet med samme lærerinput, tre lærer-URL-er, differensiering, 3 kapitler,
+6 sider og bildevalg `none`. Kapittelresultatene var:
 
-* request-/operation-ID og komplett tidslinje;
-* rå og normalisert modellrespons;
-* truth-input/-output og `provided_sources` i produksjon;
-* kildenes faktiske hentestatus;
-* før-/ettertekst fra reparasjon;
-* nye frontend-statusmeldinger;
-* godkjent PDF og Word med manuell gjennomgang;
-* ekte modellkostnad og runtime-logger.
+| Kapittel | Status | Påstander | Verifisert | Dekning |
+|---|---|---:|---:|---:|
+| 1 `71b44f...` | `generated` / `verified` | 14 | 14 | 100 % |
+| 2 `16eb2f...` | `needs_revision` / `needs_review` | 21 | 13 | 62 % |
+| 3 `3403e6...` | `needs_revision` / `needs_review` | 9 | 5 | 56 % |
+| **Totalt** | **ikke grønt** | **44** | **32** | **73 %** |
+
+Alle tre lærer-URL-ene kom tilbake i kapittelsvarene som `origin=teacher`,
+`fetch_status=provided`, og ble sendt til truth-laget. Modellrapporterte URL-er
+var separat merket. Ingen språkfragmenter ble flagget av den deployede
+strukturelle porten.
+
+Reparasjonskallet for kapittel 2 fikk HTTP 504 etter 120 sekunder med
+operation-ID `audit-identical-20260803b-repair-ch2`; retry fikk HTTP 409 og
+viste aktiv jobb-ID. Det ble ikke observert en vellykket ekte modellreparasjon.
+Compile-kallet fikk HTTP 409 med alle tre kapitlene listet, slik at PDF/Word
+ikke ble produsert.
 
 ## Språk, kilder og reparasjon
 
 Lokalt er språkporten og setningssikker fjerning testet. Fem regression-fixtures
 verifiserer at lærer-URL-er får `origin=teacher` og `fetch_status=provided`.
-Ingen modellrespons er brukt i disse fixturetestene. Reparasjonsjobben har
-lokale tester for suksess, nettverks-/modellfeil, timeout og dobbel forespørsel.
-Produksjonsrefresh, omstart, retry og ekte modell-timeout er ikke testet.
+Reparasjonsjobben har lokale tester for suksess, nettverks-/modellfeil, timeout
+og dobbel forespørsel. I produksjon ble timeout og dobbel forespørsel observert;
+vellykket modellreparasjon, frontendens synlige fremdriftsvisning og
+retry-resultat er ikke verifisert som suksess.
 
 ## Kompilering og manuell dokumentvurdering
 
@@ -102,7 +119,8 @@ tilgjengelig. Manuell sluttproduktvurdering er derfor `IKKE VERIFISERT`.
 
 ## Konklusjon
 
-Koden har dokumenterte lokale tiltak, og hele monorepo-suiten samles nå i
-produksjonsnær Docker-runtime. Gatekravene krever likevel deploybevis og en ny
-identisk produksjonskjøring. Siden deployen fortsatt viser gammel oppførsel og
-produksjonslogger/health/config ikke kan bekreftes, er dommen **REJECTED**.
+Koden er deployet med bevist release-identitet, og hele monorepo-suiten samles
+i fersk Docker-runtime. Identisk produksjonsscenario er kjørt, men 32/44
+verifiserte påstander er under 80 %-regelen, to kapitler står i
+`needs_revision`, og reparasjonsjobben nådde timeout. Dommen er derfor fortsatt
+**REJECTED**.
