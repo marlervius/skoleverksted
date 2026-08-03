@@ -226,7 +226,40 @@ def _apply_decisions(content: str, claims: list[TruthClaim]) -> tuple[str, list[
         replacement = claim.replacement.strip()
         if not replacement:
             replacement = f"Usikker opplysning: {exact}"
-        result = result.replace(exact, replacement)
+        start = result.find(exact)
+        line_start = result.rfind("\n", 0, start) + 1
+        line_end = result.find("\n", start + len(exact))
+        line_end = len(result) if line_end < 0 else line_end
+        line = result[line_start:line_end]
+        if line.lstrip().startswith(("#", "-", "*")):
+            if line.strip() != exact:
+                unresolved.append(claim.claim)
+                continue
+            result = result[:line_start] + replacement + result[line_end:]
+            continue
+
+        sentence_start = max(
+            result.rfind(".", 0, start),
+            result.rfind("!", 0, start),
+            result.rfind("?", 0, start),
+            result.rfind("\n", 0, start),
+        ) + 1
+        sentence_end_candidates = [
+            index for index in (
+                result.find(".", start + len(exact)),
+                result.find("!", start + len(exact)),
+                result.find("?", start + len(exact)),
+                result.find("\n", start + len(exact)),
+            ) if index >= 0
+        ]
+        sentence_end = min(sentence_end_candidates, default=line_end)
+        sentence = result[sentence_start:sentence_end].strip()
+        if sentence != exact:
+            unresolved.append(claim.claim)
+            continue
+        result = result[:sentence_start] + replacement + result[
+            sentence_end + (1 if sentence_end < len(result) and result[sentence_end] in ".!?" else 0):
+        ]
     return result, removed, unresolved
 
 

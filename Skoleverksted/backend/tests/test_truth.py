@@ -111,6 +111,42 @@ def test_truth_layer_is_fail_closed_when_safe_edit_cannot_be_applied(monkeypatch
     assert any("kunne ikke endres" in item for item in result.passport.limitations)
 
 
+def test_truth_layer_does_not_replace_a_partial_qualify_span(monkeypatch):
+    def fake_call(*_args, **_kwargs):
+        return (
+            {
+                "summary": "Påstanden trenger en forsiktig formulering.",
+                "claims": [{
+                    "claim": "En del av setningen må kvalifiseres.",
+                    "exact_text": "Norge",
+                    "status": "interpretation",
+                    "action": "qualify",
+                    "replacement": "landet",
+                    "source_urls": [],
+                    "evidence": "Dette er en tolkning.",
+                    "confidence": 0.8,
+                }],
+            },
+            [],
+        )
+
+    monkeypatch.setattr(
+        "Skoleverksted.backend.platform.compendium._call_google_json",
+        fake_call,
+    )
+
+    content = CONTENT + "\n\nNorge fikk en ny grunnlov i 1814."
+    result = audit_truth(
+        content=content,
+        topic="Grunnloven",
+        subject="Historie",
+        level="VG2",
+    )
+
+    assert result.content == content
+    assert any("kunne ikke endres" in item for item in result.passport.limitations)
+
+
 def test_truth_layer_blocks_output_when_research_is_unavailable(monkeypatch):
     def fail(*_args, **_kwargs):
         raise RuntimeError("research unavailable")
