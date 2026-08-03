@@ -483,7 +483,10 @@ research-filer, er bevisst ikke inkludert.
 
 Skoleverksted har nå en fungerende felles produktkjerne for tre lærerrettede AI-apper, årsplaner, kompendier, temapakker, kvalitetspass og dokumenteksport. Den viktigste forskjellen fra en vanlig AI-tekstgenerator er at systemet prøver å gjøre kilder, usikkerhet, matematikkverifikasjon og lærerens godkjenning synlig i selve arbeidsflyten.
 
-Produktet er godt egnet til kontrollert pilotbruk. Det er ikke ferdig for full skoleorganisasjon før autentisering, datatilgang, backup, overvåking, skalerbar lagring og mer omfattende faglige evalueringssett er på plass.
+Produktet har et teknisk grunnlag for videre kontrollert utvikling, men er ikke
+klart for lærerpilot. Produksjonsgaten er avvist, og autentisering,
+datatilgang, durable jobber, backup, overvåking og faglig sluttkontroll må være
+bevist før en pilot kan godkjennes.
 
 ## 19. Production verification gate – 3. august 2026
 
@@ -556,3 +559,32 @@ Kandidaten er ikke publisert til deploybranch. Offentlig readiness svarte
 HTTP 200 med release `69b00d81e5a7` og `rndr-id=e947f2ef-2374-426d`, som viser
 at produksjonen fortsatt kjører forrige release. Identisk produksjonsscenario
 er derfor ikke kjørt etter siste retting. Dommen er fortsatt **REJECTED**.
+
+## 21. Product excellence M1 — 3. august 2026
+
+Repo-, runtime- og produksjonssannhet er samlet i
+`research/PRODUCT_EXCELLENCE_EXECPLAN.md`, mens mål, nåverdier, evidens og eiere
+er samlet i `research/PRODUCT_SCORECARD.md`. Primær produktwedge er avgrenset til
+Historie VG2: én årsplanperiode til et kildeforankret, redigerbart og eksplisitt
+lærergodkjent læringsark eller kort kompendium. Dette er en hypotese som må
+valideres med lærere; repoet har ikke dokumentert bruk, retention eller betaling.
+
+Første milepæl retter en lokalt reprodusert kandidatregresjon der automatisk
+`remove` med avsluttende punktum kunne slette nabosetningen. Commit
+`912007b` (`Make truth edits sentence-safe`) tillater nå bare entydige hele
+setninger eller hele Markdown-linjer. Delvise og gjentatte treff blir stående og
+sendes til lærerreview.
+
+Verifikasjon på commit-en:
+
+* målrettet sannhetslag: **12 bestått**
+* full read-only Docker-suite: **403 bestått, 2 hoppet over, 47 warnings**
+* endrede Python-filer: `py_compile` bestått
+* frontend: **13/13 tester**, typekontroll og produksjonsbygg bestått
+* frontend-lint: **ikke operativ** fordi ESLint-konfigurasjon mangler
+
+Offentlig smoke bestod på forsøk 1 uten generering. Readiness viser fortsatt
+produksjonsrelease `69b00d81e5a7`, SQLite-lagring, `sqlite-local`-kø, ingen Redis
+og config-fingerprint `dc08f612a352`. M1 er ikke deployet, produksjon er urørt,
+og siste identiske scenario står fortsatt på 32/44 verifiserte påstander (73 %),
+repair 504, retry 409 og compile 409. Dommen er derfor fortsatt **REJECTED**.
