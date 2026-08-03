@@ -179,6 +179,51 @@ def _exact_text(value: object, limit: int) -> str:
     return str(value or "").replace("\x00", " ").strip()[:limit]
 
 
+def _complete_sentence_span(content: str, start: int, exact: str) -> tuple[int, int, str] | None:
+    """Return the exact sentence span only when its boundaries are unambiguous.
+
+    The verifier may include or omit the terminal punctuation in ``exact_text``.
+    It may also return only an entity or phrase.  Only the first two cases are
+    safe to edit automatically; a partial or repeated match must remain visible
+    for teacher review.
+    """
+    end = start + len(exact)
+
+    before = start - 1
+    while before >= 0 and content[before] in " \t":
+        before -= 1
+    if before >= 0 and content[before] not in ".!?\n\r":
+        return None
+
+    if exact[-1] in ".!?":
+        terminal = exact[-1]
+        sentence_end = end
+    elif end < len(content) and content[end] in ".!?":
+        terminal = content[end]
+        sentence_end = end + 1
+    else:
+        return None
+
+    if sentence_end < len(content) and not content[sentence_end].isspace():
+        return None
+    return start, sentence_end, terminal
+
+
+def _remove_span(content: str, start: int, end: int) -> str:
+    """Remove one complete span without joining or indenting its neighbours."""
+    prefix = content[:start]
+    suffix = content[end:]
+    if not prefix:
+        return suffix.lstrip(" \t")
+    if not suffix:
+        return prefix.rstrip(" \t")
+    if prefix.endswith(("\n", "\r")):
+        return prefix + suffix.lstrip(" \t")
+    if suffix.startswith(("\n", "\r")):
+        return prefix.rstrip(" \t") + suffix
+    return prefix.rstrip(" \t") + " " + suffix.lstrip(" \t")
+
+
 def _apply_decisions(content: str, claims: list[TruthClaim]) -> tuple[str, list[str], list[str]]:
     result = content
     removed: list[str] = []
@@ -189,77 +234,45 @@ def _apply_decisions(content: str, claims: list[TruthClaim]) -> tuple[str, list[
         if claim.status == "verified" or claim.action == "keep":
             continue
         exact = claim.exact_text.strip()
-        if not exact or exact not in result:
+        if not exact or result.count(exact) != 1:
             unresolved.append(claim.claim)
             continue
-        if claim.action == "remove":
-            # Removing only an entity/phrase from the middle of a sentence was
-            # the direct cause of production fragments such as "Særlig ble …"
-            # and "var .".  Remove the complete containing sentence instead;
-            # if the span is a heading/list item, remove that whole line.
-            start = result.find(exact)
-            line_start = result.rfind("\n", 0, start) + 1
-            line_end = result.find("\n", start + len(exact))
-            line_end = len(result) if line_end < 0 else line_end
-            line = result[line_start:line_end]
-            if line.lstrip().startswith(("#", "-", "*")) and line.strip() == exact:
-                result = result[:line_start] + result[line_end:]
-            else:
-                sentence_start = max(
-                    result.rfind(".", 0, start),
-                    result.rfind("!", 0, start),
-                    result.rfind("?", 0, start),
-                    result.rfind("\n", 0, start),
-                ) + 1
-                sentence_end_candidates = [
-                    index for index in (
-                        result.find(".", start + len(exact)),
-                        result.find("!", start + len(exact)),
-                        result.find("?", start + len(exact)),
-                        result.find("\n", start + len(exact)),
-                    ) if index >= 0
-                ]
-                sentence_end = min(sentence_end_candidates, default=line_end)
-                result = result[:sentence_start] + result[sentence_end + (1 if sentence_end < len(result) and result[sentence_end] in ".!?" else 0):]
-            removed.append(claim.claim)
-            continue
-        replacement = claim.replacement.strip()
-        if not replacement:
-            replacement = f"Usikker opplysning: {exact}"
         start = result.find(exact)
         line_start = result.rfind("\n", 0, start) + 1
         line_end = result.find("\n", start + len(exact))
         line_end = len(result) if line_end < 0 else line_end
         line = result[line_start:line_end]
-        if line.lstrip().startswith(("#", "-", "*")):
-            if line.strip() != exact:
-                unresolved.append(claim.claim)
-                continue
-            result = result[:line_start] + replacement + result[line_end:]
+        exact_is_markdown_line = (
+            line.lstrip().startswith(("#", "-", "*"))
+            and line.strip() == exact
+        )
+        if claim.action == "remove":
+            if exact_is_markdown_line:
+                result = result[:line_start] + result[line_end:]
+            else:
+                sentence_span = _complete_sentence_span(result, start, exact)
+                if sentence_span is None:
+                    unresolved.append(claim.claim)
+                    continue
+                sentence_start, sentence_end, _ = sentence_span
+                result = _remove_span(result, sentence_start, sentence_end)
+            removed.append(claim.claim)
+            continue
+        replacement = claim.replacement.strip()
+        if not replacement:
+            replacement = f"Usikker opplysning: {exact}"
+        if exact_is_markdown_line:
+            result = result[:start] + replacement + result[start + len(exact):]
             continue
 
-        sentence_start = max(
-            result.rfind(".", 0, start),
-            result.rfind("!", 0, start),
-            result.rfind("?", 0, start),
-            result.rfind("\n", 0, start),
-        ) + 1
-        sentence_end_candidates = [
-            index for index in (
-                result.find(".", start + len(exact)),
-                result.find("!", start + len(exact)),
-                result.find("?", start + len(exact)),
-                result.find("\n", start + len(exact)),
-            ) if index >= 0
-        ]
-        sentence_end = min(sentence_end_candidates, default=line_end)
-        sentence = result[sentence_start:sentence_end].strip()
-        if sentence != exact:
+        sentence_span = _complete_sentence_span(result, start, exact)
+        if sentence_span is None:
             unresolved.append(claim.claim)
             continue
-        result = result[:sentence_start] + replacement + result[
-            sentence_end + (1 if sentence_end < len(result) and result[sentence_end] in ".!?" else 0):
-        ]
+        sentence_start, sentence_end, terminal = sentence_span
+        if replacement[-1] not in ".!?":
+            replacement += terminal
+        result = result[:sentence_start] + replacement + result[sentence_end:]
     return result, removed, unresolved
 
 

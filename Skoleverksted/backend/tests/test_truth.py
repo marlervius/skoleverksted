@@ -147,6 +147,194 @@ def test_truth_layer_does_not_replace_a_partial_qualify_span(monkeypatch):
     assert any("kunne ikke endres" in item for item in result.passport.limitations)
 
 
+def test_truth_layer_does_not_remove_a_partial_sentence_span(monkeypatch):
+    def fake_call(*_args, **_kwargs):
+        return (
+            {
+                "summary": "Påstanden kan ikke dokumenteres.",
+                "claims": [{
+                    "claim": "Norge er nevnt uten dokumentasjon.",
+                    "exact_text": "Norge",
+                    "status": "unsupported",
+                    "action": "remove",
+                    "replacement": "",
+                    "source_urls": [],
+                    "evidence": "",
+                    "confidence": 0.2,
+                }],
+            },
+            [],
+        )
+
+    monkeypatch.setattr(
+        "Skoleverksted.backend.platform.compendium._call_google_json",
+        fake_call,
+    )
+
+    content = CONTENT + "\n\nNorge fikk en ny grunnlov i 1814."
+    result = audit_truth(
+        content=content,
+        topic="Grunnloven",
+        subject="Historie",
+        level="VG2",
+    )
+
+    assert result.content == content
+    assert result.passport.removed_claims == []
+    assert any("kunne ikke endres" in item for item in result.passport.limitations)
+
+
+def test_truth_layer_remove_with_punctuation_preserves_the_next_sentence(monkeypatch):
+    def fake_call(*_args, **_kwargs):
+        return (
+            {
+                "summary": "Den første påstanden mangler dokumentasjon.",
+                "claims": [{
+                    "claim": "Unionen ble oppløst i 1905.",
+                    "exact_text": "Unionen mellom Norge og Sverige ble oppløst i 1905.",
+                    "status": "unsupported",
+                    "action": "remove",
+                    "replacement": "",
+                    "source_urls": [],
+                    "evidence": "",
+                    "confidence": 0.2,
+                }],
+            },
+            [],
+        )
+
+    monkeypatch.setattr(
+        "Skoleverksted.backend.platform.compendium._call_google_json",
+        fake_call,
+    )
+
+    result = audit_truth(
+        content=CONTENT,
+        topic="Unionsoppløsningen",
+        subject="Historie",
+        level="VG2",
+    )
+
+    assert result.content == "## Historie\n\nEn hemmelig traktat fra 1904 bestemte alle detaljene."
+    assert result.passport.removed_claims == ["Unionen ble oppløst i 1905."]
+
+
+def test_truth_layer_remove_without_punctuation_preserves_the_next_sentence(monkeypatch):
+    def fake_call(*_args, **_kwargs):
+        return (
+            {
+                "summary": "Den første påstanden mangler dokumentasjon.",
+                "claims": [{
+                    "claim": "Unionen ble oppløst i 1905.",
+                    "exact_text": "Unionen mellom Norge og Sverige ble oppløst i 1905",
+                    "status": "unsupported",
+                    "action": "remove",
+                    "replacement": "",
+                    "source_urls": [],
+                    "evidence": "",
+                    "confidence": 0.2,
+                }],
+            },
+            [],
+        )
+
+    monkeypatch.setattr(
+        "Skoleverksted.backend.platform.compendium._call_google_json",
+        fake_call,
+    )
+
+    result = audit_truth(
+        content=CONTENT,
+        topic="Unionsoppløsningen",
+        subject="Historie",
+        level="VG2",
+    )
+
+    assert result.content == "## Historie\n\nEn hemmelig traktat fra 1904 bestemte alle detaljene."
+
+
+def test_truth_layer_qualifies_a_complete_sentence_and_preserves_its_neighbour(monkeypatch):
+    replacement = "Unionen ble formelt oppløst i 1905."
+
+    def fake_call(*_args, **_kwargs):
+        return (
+            {
+                "summary": "Den første påstanden trenger presisering.",
+                "claims": [{
+                    "claim": "Unionen ble oppløst i 1905.",
+                    "exact_text": "Unionen mellom Norge og Sverige ble oppløst i 1905.",
+                    "status": "interpretation",
+                    "action": "qualify",
+                    "replacement": replacement,
+                    "source_urls": [],
+                    "evidence": "Presisert formulering.",
+                    "confidence": 0.8,
+                }],
+            },
+            [],
+        )
+
+    monkeypatch.setattr(
+        "Skoleverksted.backend.platform.compendium._call_google_json",
+        fake_call,
+    )
+
+    result = audit_truth(
+        content=CONTENT,
+        topic="Unionsoppløsningen",
+        subject="Historie",
+        level="VG2",
+    )
+
+    assert result.content == (
+        "## Historie\n\n"
+        f"{replacement} En hemmelig traktat fra 1904 bestemte alle detaljene."
+    )
+    assert not any("kunne ikke endres" in item for item in result.passport.limitations)
+
+
+def test_truth_layer_leaves_repeated_exact_text_unmodified(monkeypatch):
+    repeated = (
+        "## Historie\n\n"
+        "Unionen ble oppløst i 1905. Unionen ble oppløst i 1905. "
+        "Dette er en tredje setning som gjør teksten lang nok for kontroll."
+    )
+
+    def fake_call(*_args, **_kwargs):
+        return (
+            {
+                "summary": "Treffet er tvetydig.",
+                "claims": [{
+                    "claim": "Unionen ble oppløst i 1905.",
+                    "exact_text": "Unionen ble oppløst i 1905.",
+                    "status": "unsupported",
+                    "action": "remove",
+                    "replacement": "",
+                    "source_urls": [],
+                    "evidence": "",
+                    "confidence": 0.2,
+                }],
+            },
+            [],
+        )
+
+    monkeypatch.setattr(
+        "Skoleverksted.backend.platform.compendium._call_google_json",
+        fake_call,
+    )
+
+    result = audit_truth(
+        content=repeated,
+        topic="Unionsoppløsningen",
+        subject="Historie",
+        level="VG2",
+    )
+
+    assert result.content == repeated
+    assert result.passport.removed_claims == []
+    assert any("kunne ikke endres" in item for item in result.passport.limitations)
+
+
 def test_truth_layer_blocks_output_when_research_is_unavailable(monkeypatch):
     def fail(*_args, **_kwargs):
         raise RuntimeError("research unavailable")
