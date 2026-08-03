@@ -102,3 +102,14 @@ sideantall, kilder, differensiering, dokumenttype og bildevalg (`none`) var
 identiske. Produksjonen bruker synkrone platform-ruter, så separate
 plan-/kapitteljobb-ID-er finnes ikke. Incidenten er åpen og dommen er
 `REJECTED`.
+
+## Kandidatstatus etter siste lokale retting
+
+Candidate commit `2e66ec7a5467f3fc23523930ec9ac51181e7c070` og image
+`sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858`
+består lokal backend-suite med 398 passed, 2 skipped og 47 warnings.
+Kandidaten er ikke deployet. Readiness viste release `69b00d81e5a7`, så ingen
+ny request-ID, kompendium-ID, kapittel-/jobb-ID, kildepropagering,
+truth-resultat, reparasjonsresultat eller kompilering kan tilskrives kandidaten.
+Forrige produksjonskjøring står som historisk `32/44 = 73 %`, repair `504`,
+retry `409` og compile `409`.

@@ -24,6 +24,24 @@ Urelaterte, allerede eksisterende lokale endringer er fortsatt urørte:
 `MateMaTeX/backend/app/latex/preamble.py` og
 `MateMaTeX/backend/tests/test_hefte_design.py`.
 
+## Siste closure-forsøk — 3. august 2026
+
+En nødvendig lokal sikkerhetsretting gjør at `qualify`-handlinger ikke lenger
+kan gjøre global frase-erstatning; delvise treff blir stående og markeres som
+ubehandlet. Committen er `2e66ec7a5467f3fc23523930ec9ac51181e7c070` på
+`laerebokdesign-hefte`.
+
+Kandidaten ble bygget som `skoleverksted-forensic:69b00d8-r1`, image-digest
+`sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858`,
+opprettet `2026-08-03T08:19:58.631325045Z`. Full backend-suite i image bestod
+med **398 passed, 2 skipped og 47 warnings** på 28,96 sekunder. Kandidaten er
+ikke pushet eller deployet.
+
+Offentlig readiness svarte HTTP 200, men viste fortsatt release
+`69b00d81e5a7`, ikke kandidatcommitten. `rndr-id=e947f2ef-2374-426d` er en
+request-ID og ikke et dashboard-deploy-ID. Identisk produksjonsscenario er
+derfor ikke kjørt på kandidaten.
+
 ## Deploybevis
 
 Render `/health/ready` svarte HTTP 200 med:

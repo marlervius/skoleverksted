@@ -120,3 +120,22 @@ Kompilering av samme kompendium svarte HTTP 409 og listet alle tre kapitlene;
 PDF/Word ble dermed korrekt blokkert.
 
 Ingen hemmeligheter, tokens eller persondata er skrevet i dette dokumentet.
+
+## Latest closure candidate — 3 August 2026
+
+| Felt | Verdi/status |
+|---|---|
+| Candidate branch | `laerebokdesign-hefte` |
+| Candidate commit | `2e66ec7a5467f3fc23523930ec9ac51181e7c070` |
+| Candidate image | `skoleverksted-forensic:69b00d8-r1` |
+| Candidate image digest | `sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858` |
+| Image Created | `2026-08-03T08:19:58.631325045Z` |
+| Candidate backend tests | 398 passed, 2 skipped, 47 warnings, 28.96 s |
+| Candidate frontend | 13 tests passed; typecheck and production build passed |
+| Public readiness | HTTP 200, release `69b00d81e5a7`, `rndr-id=e947f2ef-2374-426d` |
+| Candidate deploy status | Not deployed; current readiness SHA differs from candidate |
+| Render deploy ID | Not available; `rndr-id` is not a dashboard deploy ID |
+| Identical scenario on candidate | Not run because candidate is not deployed |
+| Rollback reference | Historical deployed release `69b00d81e5a7`; forensic baseline `5b72a0541a20` |
+
+The local candidate is intentionally not described as production-verified.

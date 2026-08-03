@@ -98,3 +98,15 @@ og PDF-blokkeringen beholdes.
 **Nei.** Deploy og identisk E2E er nå verifisert, men 80 %-regelen feiler,
 to kapitler krever revisjon, reparasjonssuksess er ikke observert, og PDF/Word
 ble korrekt blokkert. Incidenten er fortsatt åpen.
+
+## Siste closure-forsøk — 3. august 2026
+
+Commit `2e66ec7a5467f3fc23523930ec9ac51181e7c070` lukker et gjenværende
+fragmenteringsgap i `qualify`-banen og har regresjonstest. Kandidatimagets
+digest er `sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858`.
+Det består med 398 backendtester, 2 eksplisitte skips og 47 warnings.
+
+Git-push til deploydestinasjonen ble ikke gjennomført, og readiness viser
+fortsatt `69b00d81e5a7`. Det finnes derfor ikke et verifisert deploy-ID,
+produksjons-SHA for kandidaten eller en identisk E2E-kjøring etter siste
+retting. Hendelsen kan fortsatt ikke lukkes.

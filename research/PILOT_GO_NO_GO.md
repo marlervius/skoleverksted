@@ -7,6 +7,11 @@ Skoleverksted skal ikke åpnes for én ekstern historielærer ennå. Release
 kjøringen fikk bare 32/44 verifiserte påstander (73 %), to kapitler i
 `needs_revision`, og reparasjonsjobben fikk HTTP 504 etter 120 sekunder.
 
+Siste lokale kandidat er `2e66ec7a5467f3fc23523930ec9ac51181e7c070` med
+image-digest `sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858`.
+Den er ikke deployet; readiness viser fortsatt `69b00d81e5a7`. Dommen er
+derfor fortsatt `REJECTED`.
+
 ## Hvorfor
 
 * Render readiness beviser release `5b72a0541a20`, prompt `skoleverksted-v3`,
@@ -24,6 +29,7 @@ kjøringen fikk bare 32/44 verifiserte påstander (73 %), to kapitler i
 * 80 %-regelen feiler i identisk produksjonsscenario (32/44 = 73 %).
 * Ingen vellykket produksjonsreparasjon eller manuell sluttproduktvurdering.
 * Render-dashboardets formelle deploy-ID og varig response-ledger mangler.
+* Siste forensic-kandidat er ikke publisert til deploybranch.
 
 ### P1
 
@@ -31,6 +37,7 @@ kjøringen fikk bare 32/44 verifiserte påstander (73 %), to kapitler i
 * Vellykket reparasjon, frontend-fremdrift og refresh/omstart er ikke
   produksjonsverifisert.
 * Ny PDF og Word er ikke visuelt kontrollert fordi compile-porten blokkerte.
+* Identisk scenario er ikke kjørt på kandidaten `2e66ec7`.
 
 ### P2
 

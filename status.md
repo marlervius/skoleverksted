@@ -539,3 +539,20 @@ Den identiske produksjonskjøringen beviste lærer-kildepropagasjon
 compile-blokkering. Den beviste også at faktapasset bare nådde 73 %, og at
 reparasjon fikk HTTP 504 etter 120 sekunder med en sporbar jobb-ID. Produktet
 skal derfor fortsatt ikke kalles ferdig eller klart for ekstern historielærer.
+
+## 20. Ny forensic closure-kandidat — 3. august 2026
+
+Den siste lokale rettingen (`2e66ec7a5467f3fc23523930ec9ac51181e7c070`) gjør
+`qualify`-revisjon fail-closed når modellens tekstutdrag bare er en del av en
+setning eller punktlinje. Den globale frase-erstatningen er fjernet fra denne
+banen, og regresjonstesten består.
+
+Kandidatimagets digest er
+`sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858`.
+Full backend-suite i image bestod med **398 passed, 2 skipped, 47 warnings**
+på 28,96 sekunder. Frontend bestod med 13 tester, typecheck og produksjonsbuild.
+
+Kandidaten er ikke publisert til deploybranch. Offentlig readiness svarte
+HTTP 200 med release `69b00d81e5a7` og `rndr-id=e947f2ef-2374-426d`, som viser
+at produksjonen fortsatt kjører forrige release. Identisk produksjonsscenario
+er derfor ikke kjørt etter siste retting. Dommen er fortsatt **REJECTED**.

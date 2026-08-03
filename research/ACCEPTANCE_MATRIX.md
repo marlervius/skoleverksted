@@ -34,3 +34,16 @@ P0-kriteriene A07 og kildepropagasjonen i A02 er dokumentert, men A10 feiler
 fordi 32/44 påstander er verifisert og PDF/Word ikke kunne bygges. Reparasjon-
 suksess, frontendvisning og varig ledger mangler. Dette sperrer både
 `CONDITIONAL PILOT` og `PILOT READY`.
+
+## Siste closure-forsøk
+
+| Kontroll | Resultat |
+|---|---|
+| Lokal kandidatcommit | `2e66ec7a5467f3fc23523930ec9ac51181e7c070` |
+| Ferskt verifisert image | `sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858` |
+| Full backend-suite | 398 bestått, 2 skips, 47 warnings, 28,96 s |
+| Produksjonsrelease ved readiness | `69b00d81e5a7` — gammel release, ikke kandidaten |
+| Ny identisk E2E etter siste retting | Ikke kjørt; kandidaten er ikke deployet |
+| Ny PDF/Word-manualkontroll | Ikke mulig; kompileringsporten er ikke grønn |
+
+Dette endrer ikke dommen: `REJECTED`.
