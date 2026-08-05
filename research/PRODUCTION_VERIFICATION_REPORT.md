@@ -11,13 +11,14 @@ RUNTIME`, `TESTET MOT EKTE MODELL`, `TESTET I PRODUKSJON` og `IKKE VERIFISERT`.
 | Kontroll | Resultat |
 |---|---|
 | Aktiv gren | `laerebokdesign-hefte` |
-| HEAD | `5b72a05 Fix nested heading quality gate` |
-| Sporingsgren | `origin/laerebokdesign-hefte` og Render-tracked `main` peker på `5b72a05` |
-| Audit-endringer | Kommittert og deployet; produksjon identitetsverifisert |
+| HEAD / releasekandidat | `ff725bb6997879e74d60d1d539c57e18578f95ad` (`Document product excellence baseline`) |
+| Sporingsgren | `origin/main` og Render-tracked `main` peker på `69b00d81e5a7d823eb284bc7aee37a8cac6f29ed`; kandidatbranch er fire commits foran |
+| Kandidatens kodecommit | `912007bf5b4a68b736bbd14daa2011494bed266c` (`Make truth edits sentence-safe`) |
+| Audit-/M1-endringer | Lokalt verifisert; ikke pushet eller deployet |
 | Produksjonsfrontend | `https://skoleverksted.vercel.app` |
 | Produksjonskompendium | `838938c88e994320a64281aafc871ec8` |
-| Backend-runtime brukt i lokale tester | Docker-image `vgs_samlet-backend:latest`, Python 3.12, arbeidskopien montert |
-| Friskt image fra nåværende Dockerfile | Bygget uten cache; seneste digest `sha256:034916e01d5787204e7b06d63832a0c299c98c5e857526fd31be511348eec646` |
+| Backend-runtime brukt i lokale tester | Eksakt kandidat-image `skoleverksted-candidate:ff725bb`, Python 3.12 |
+| Kandidat-image | `sha256:d9fb7b5f4b4659aefdc729c34358b4e4d704716197f3ab96d3df7c32707c8792` |
 | Ekte modell | Brukt i identisk produksjonsscenario mot `gemini-3.5-flash` |
 
 Urelaterte, allerede eksisterende lokale endringer er fortsatt urørte:
@@ -26,37 +27,40 @@ Urelaterte, allerede eksisterende lokale endringer er fortsatt urørte:
 
 ## Siste closure-forsøk — 3. august 2026
 
-En nødvendig lokal sikkerhetsretting gjør at `qualify`-handlinger ikke lenger
-kan gjøre global frase-erstatning; delvise treff blir stående og markeres som
-ubehandlet. Committen er `2e66ec7a5467f3fc23523930ec9ac51181e7c070` på
-`laerebokdesign-hefte`.
+Den setningssikre rettingen ligger i `912007bf5b4a68b736bbd14daa2011494bed266c`;
+releasekandidaten er `ff725bb6997879e74d60d1d539c57e18578f95ad`. Kandidatens
+eksakte diff mot `origin/main` er fire commits (`2e66ec7`, `22b80d9`, `912007b`,
+`ff725bb`) i 11 filer.
 
-Kandidaten ble bygget som `skoleverksted-forensic:69b00d8-r1`, image-digest
-`sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858`,
-opprettet `2026-08-03T08:19:58.631325045Z`. Full backend-suite i image bestod
-med **398 passed, 2 skipped og 47 warnings** på 28,96 sekunder. Kandidaten er
-ikke pushet eller deployet.
+Kandidaten ble bygget fra ren Git-archive-context som
+`skoleverksted-candidate:ff725bb`, image-digest
+`sha256:d9fb7b5f4b4659aefdc729c34358b4e4d704716197f3ab96d3df7c32707c8792`.
+Full backend-/domene-suite i image bestod med **398 passed og 2 skipped**;
+`compileall` bestod. Kandidaten er ikke pushet eller deployet.
 
 Offentlig readiness svarte HTTP 200, men viste fortsatt release
-`69b00d81e5a7`, ikke kandidatcommitten. `rndr-id=e947f2ef-2374-426d` er en
-request-ID og ikke et dashboard-deploy-ID. Identisk produksjonsscenario er
-derfor ikke kjørt på kandidaten.
+`69b00d81e5a7`, ikke kandidatcommitten. Ved siste kontroll var
+`rndr-id=e42efd6a-0b2f-4353` og `Date=Mon, 03 Aug 2026 14:53:12 GMT`; dette er
+en request-/Render-ID og ikke et dashboard-deploy-ID. Identisk
+produksjonsscenario er derfor ikke kjørt på kandidaten.
 
 ## Deploybevis
 
-Render `/health/ready` svarte HTTP 200 med:
+Render `/health/ready` svarte HTTP 200 ved kontroll `2026-08-03 14:53:12 GMT`
+med:
 
-* `release=5b72a0541a20`;
+* `release=69b00d81e5a7`;
 * `status=ready`, alle seks dependency checks `true`;
 * `prompt_version=skoleverksted-v3`, `google_model=gemini-3.5-flash`;
 * `config_fingerprint=dc08f612a352`;
 * `storage.backend=sqlite`, `job_queue_backend=sqlite-local`.
 
-Readiness-headeren hadde `rndr-id=7ce5fb96-3ba3-413f` og tidspunkt
-`Sun, 02 Aug 2026 23:31:51 GMT`. Dette er en request-/Render-ID, ikke et
-Render-dashboard deploy-ID; dashboardet var ikke autentisert, så deploy-ID og
-Render image-digest kunne ikke hentes. Frontend-smoke bestod på forsøk 1 og
-Vercel svarte HTTP 200 med `X-Vercel-Id=arn1::bl69g-1785713541664-6205d409a077`.
+Readiness-headeren hadde `rndr-id=e42efd6a-0b2f-4353` og tidspunkt
+`Mon, 03 Aug 2026 14:53:12 GMT`. Dette er en request-/Render-ID, ikke et
+Render-dashboard deploy-ID; dashboardet var ikke autentisert, så formelt
+deploy-ID og Render image-digest kunne ikke hentes. Produksjonssmoke bestod på
+forsøk 1; Vercel svarte HTTP 200 med
+`X-Vercel-Id=arn1::8sldp-1785768793257-a08d9d8f809a`.
 
 **Status:** deploy `VERIFISERT`; release-identiteten er bevist, men gate-
 scenarioet er fortsatt `REJECTED`.
@@ -68,21 +72,19 @@ frontendtestene som ble kjørt med lokal Node-runtime.
 
 | Kommando | Resultat | Tid/status |
 |---|---:|---|
-| `docker run ... python -m pytest Skoleverksted/backend/tests -q` | 87 passed | 15.50 s, `TESTET I RIKTIG RUNTIME` |
-| `docker run ... python -m pytest VGS_KI/backend/tests VGS_KI/backend/test_akseptanse.py -q` med `GOOGLE_API_KEY=test-key` og korrekt `PYTHONPATH` | 75 passed | 18.59 s, import-/render-tester; ikke ekte modell |
-| `docker run ... python -m pytest ScriptoriumFOV/backend/tests -q` | 53 passed | 9.89 s |
-| `docker run ... python -m pytest MateMaTeX/backend/tests -q` | 181 passed, 2 skipped | 28.13 s |
-| `python -m compileall -q Skoleverksted/backend/platform Skoleverksted/backend/tests` | passed | lokal bundled Python |
+| `docker run ... python -m pytest -q Skoleverksted/backend/tests` | 94 passed | kandidat-image, 10.84 s |
+| `docker run ... python -m pytest -q VGS_KI/backend/tests` | 71 passed | kandidat-image, 11.51 s; test med ugyldig nøkkel logger forventet API-feil |
+| `docker run ... python -m pytest -q ScriptoriumFOV/backend/tests` | 53 passed | kandidat-image, 5.69 s |
+| `docker run ... python -m pytest -q MateMaTeX/backend/tests` | 180 passed, 2 skipped | kandidat-image, 19.48 s |
+| `docker run ... python -m compileall -q ...` | passed | kandidat-image |
 | `npm test -- --run` | 13 passed | frontend |
 | `npm run build` | passed | Next.js type-/produksjonsbuild |
 | `docker ... python -m pytest -q` fra repo-roten med `GOOGLE_API_KEY=test-key`, `PYTHONPATH=/app` | 397 passed, 2 skipped | 45.51 s, 47 warnings i seneste fresh image; bakgrunnstest logger forventet ugyldig testnøkkel |
 
-Samlet autoritativ monorepo-suite i seneste ferske image: **397 passed, 2
-skipped, 47 warnings** på 45.51 s. De tidligere to innsamlingsfeilene var testimport-/pakke-stifeil i
-VGS_KI-testene og er rettet med kvalifiserte pakkeimporter; ingen tester ble
-slettet eller deaktivert. En bakgrunnstest starter fortsatt en jobb med
-`GOOGLE_API_KEY=test-key` og logger `API_KEY_INVALID`; det er en testharness-
-begrensning, ikke en skjult grønn produksjonskontroll.
+Samlet autoritativ monorepo-suite i kandidat-imaget: **398 passed, 2 skipped**.
+Ingen tester ble slettet eller deaktivert. VGS-suiten starter en bakgrunnstest
+med `GOOGLE_API_KEY=test-key-not-used` og logger `API_KEY_INVALID`; det er en
+testharness-begrensning, ikke produksjonsbevis eller en skjult grønn kontroll.
 
 ## Sporbarhetsmatrise
 
@@ -135,10 +137,47 @@ PDF-blokkeringen er fortsatt implementert og lokalt dekket av eksisterende
 tester. En faktisk audit-generert PDF/Word fra identisk scenario er ikke
 tilgjengelig. Manuell sluttproduktvurdering er derfor `IKKE VERIFISERT`.
 
+## Deploygate og rollback
+
+| Kontroll | Status |
+|---|---|
+| Render branch | `main`, dokumentert i `render.yaml`; kandidat er ikke på `main` |
+| Vercel production-branch | Ikke dokumentert i repoet eller offentlig respons; må bekreftes i Vercel-prosjektinnstillinger |
+| Produksjonscommit nå | Render `69b00d81e5a7d823eb284bc7aee37a8cac6f29ed`; Vercel commit ikke eksponert i offentlig respons |
+| Kandidatcommit | `ff725bb6997879e74d60d1d539c57e18578f95ad` |
+| Kandidat deploy-ID | Ikke opprettet |
+| Menneskelig godkjenning | Kreves før merge/push til `main` og før kontrollert deploy |
+
+Påkrevd menneskelig handling er å godkjenne merge/push av kandidaten til den
+faktiske deploybranchen etter CI. Forventet effekt er at readiness viser
+kandidat-SHA. Risiko er ny modell-/kilde- eller reparasjonsregresjon. Rollback
+er redeploy av `69b00d81e5a7d823eb284bc7aee37a8cac6f29ed`; ingen force-push,
+nøkkelrotasjon eller produksjonsdataendring skal brukes.
+
+## Manuell produktgate — `pending teacher review`
+
+Denne pakken skal fylles ut av en faktisk Historie VG2-lærer for nøyaktig den
+PDF-/Word-digesten som eventuelt produseres:
+
+| Kontrollpunkt | Status før lærerreview |
+|---|---|
+| Faglig korrekthet og historisk presisjon | `pending teacher review` |
+| Kildekvalitet, proveniens og kildebruk | `pending teacher review` |
+| Språk, sammenheng og manglende fragmenter | `pending teacher review` |
+| Nivåtilpasning til VG2 | `pending teacher review` |
+| Læringsmål og kompetansemål | `pending teacher review` |
+| Pedagogisk anvendbarhet og nødvendige lærerredigeringer | `pending teacher review` |
+| Layout, PDF-/Word-lesbarhet og utskrift | `pending teacher review` |
+| Kan dokumentet faktisk deles ut? | `pending teacher review` |
+
+Ingen lærer har gjennomført vurderingen i denne milepælen. Den kan derfor ikke
+markeres som bestått.
+
 ## Konklusjon
 
-Koden er deployet med bevist release-identitet, og hele monorepo-suiten samles
-i fersk Docker-runtime. Identisk produksjonsscenario er kjørt, men 32/44
-verifiserte påstander er under 80 %-regelen, to kapitler står i
-`needs_revision`, og reparasjonsjobben nådde timeout. Dommen er derfor fortsatt
+Forrige produksjonsrelease har bevist release-identitet, og den nye kandidaten
+samles i eksakt Docker-runtime. Kandidaten er ikke deployet. Siste identiske
+produksjonsscenario på forrige release hadde 32/44 verifiserte påstander under
+80 %-regelen, to kapitler i `needs_revision`, repair-timeout og ingen sluttfil.
+Kandidatens identiske scenario og lærerreview mangler. Dommen er derfor fortsatt
 **REJECTED**.

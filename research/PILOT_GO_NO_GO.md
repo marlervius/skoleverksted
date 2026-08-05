@@ -2,21 +2,21 @@
 
 ## Dom: `REJECTED`
 
-Skoleverksted skal ikke åpnes for én ekstern historielærer ennå. Release
-`5b72a0541a20` er deployet og smoke-testet, men den identiske ekte modell-
-kjøringen fikk bare 32/44 verifiserte påstander (73 %), to kapitler i
+Skoleverksted skal ikke åpnes for én ekstern historielærer ennå. Den offentlige
+produksjonen kjører fortsatt `69b00d81e5a7`; smoke bestod, men siste identiske
+ekte modellkjøring fikk bare 32/44 verifiserte påstander (73 %), to kapitler i
 `needs_revision`, og reparasjonsjobben fikk HTTP 504 etter 120 sekunder.
 
-Siste lokale kandidat er `2e66ec7a5467f3fc23523930ec9ac51181e7c070` med
-image-digest `sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858`.
+Siste lokale kandidat er `ff725bb6997879e74d60d1d539c57e18578f95ad` med
+image-digest `sha256:d9fb7b5f4b4659aefdc729c34358b4e4d704716197f3ab96d3df7c32707c8792`.
 Den er ikke deployet; readiness viser fortsatt `69b00d81e5a7`. Dommen er
 derfor fortsatt `REJECTED`.
 
 ## Hvorfor
 
-* Render readiness beviser release `5b72a0541a20`, prompt `skoleverksted-v3`,
-  Gemini-modell og config-fingerprint; dashboardets deploy-ID er fortsatt
-  utilgjengelig.
+* Render readiness beviser fortsatt release `69b00d81e5a7`, prompt
+  `skoleverksted-v3`, Gemini-modell og config-fingerprint; siste `rndr-id` er
+  `e42efd6a-0b2f-4353`, men dashboardets formelle deploy-ID er utilgjengelig.
 * Identisk scenario `084614b8247d413b8d1ba38cb6166fce` er kjørt mot ekte modell.
 * Lærer-URL-ene ble propagert med `origin=teacher`, `fetch_status=provided`.
 * PDF/Word ble korrekt blokkert med HTTP 409; ingen sluttfiler finnes.
@@ -29,7 +29,8 @@ derfor fortsatt `REJECTED`.
 * 80 %-regelen feiler i identisk produksjonsscenario (32/44 = 73 %).
 * Ingen vellykket produksjonsreparasjon eller manuell sluttproduktvurdering.
 * Render-dashboardets formelle deploy-ID og varig response-ledger mangler.
-* Siste forensic-kandidat er ikke publisert til deploybranch.
+* Kandidaten `ff725bb` er ikke publisert til Render-sporede `main`; Vercel
+  production-branch er ikke verifisert fra repoet.
 
 ### P1
 
@@ -37,7 +38,7 @@ derfor fortsatt `REJECTED`.
 * Vellykket reparasjon, frontend-fremdrift og refresh/omstart er ikke
   produksjonsverifisert.
 * Ny PDF og Word er ikke visuelt kontrollert fordi compile-porten blokkerte.
-* Identisk scenario er ikke kjørt på kandidaten `2e66ec7`.
+* Identisk scenario er ikke kjørt på kandidaten `ff725bb`.
 
 ### P2
 
@@ -67,6 +68,14 @@ fra den gamle kjøringen som bevis på audit-endringene.
   reparasjonsendringer og logger.
 4. Kjør de fem historiefixturene og kontroller PDF/Word visuelt etter grønt pass.
 5. Få en ekstern historielærer til å vurdere innholdet før `CONDITIONAL PILOT`.
+
+## Manuell produktgate
+
+Status er `pending teacher review`. En navngitt Historie VG2-lærer må vurdere
+den eksakte sluttversjonen på faglig korrekthet, kildekvalitet/proveniens,
+språk/sammenheng, VG2-nivå, læringsmål, pedagogisk anvendbarhet,
+nødvendige lærerredigeringer og layout/utskrift. Først etter denne vurderingen
+kan det avgjøres om dokumentet faktisk kan deles ut.
 
 ## Stoppkriterier under neste pilot
 

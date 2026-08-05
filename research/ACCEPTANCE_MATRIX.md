@@ -1,7 +1,9 @@
 # Acceptance matrix
 
-Resultatene under er for release-gaten 2. august 2026. `IMPLEMENTERT` betyr
-kode finnes; det betyr ikke produksjonsgodkjenning.
+Resultatene under beskriver siste identiske produksjonskjøring på forrige
+release. `IMPLEMENTERT` betyr kode finnes; det betyr ikke produksjonsgodkjenning.
+Kandidatoppdateringen 2026-08-03 står i siste seksjon og er fortsatt
+`REJECTED` fordi den ikke er deployet.
 
 | ID | Kriterium | Bevis | Resultat | Alvorlighet | Oppfølging |
 |---|---|---|---|---|---|
@@ -16,7 +18,7 @@ kode finnes; det betyr ikke produksjonsgodkjenning.
 | C09 | Lærer ser hva reparasjon endret | `revision_summary` beholdes | **IKKE VERIFISERT**; ingen suksessrespons | P2 | Kjør en reparasjon som fullfører |
 | C10 | PDF kun etter eksplisitt godkjenning | compile endpoint | **BESTÅTT**; HTTP 409 blokkerte PDF/Word | P1 | Godkjenn kun etter grønt pass |
 | C11 | Ingen skjulte feil i hele kjøringen | readiness + smoke + E2E-responser | **IKKE BESTÅTT** som full gate; rå ledger mangler og reparasjon timeoutet | P0 | Varig request-/response-ledger |
-| C12 | Eksisterende tester består | Fresh image: 397 pass, 2 skip, 47 warnings; frontend 13 pass | **TESTET I RIKTIG RUNTIME** | P1 | Reduser testharness-warnings og kjør ekte modell separat |
+| C12 | Eksisterende tester består | Kandidat-image: 398 pass, 2 skip; frontend 13 pass, typecheck og build | **TESTET I RIKTIG RUNTIME** | P1 | Kjør ekte produksjonsscenario på kandidaten separat |
 | A01 | Ingen fragmenter introdusert av truth/reparasjon | deployet språkport og E2E-tekst | **BESTÅTT** for generert tekst; reparert tekst mangler | P1 | Sammenlign rå/lager/revidert tekst i prod |
 | A02 | Lærerkilder spores ende til ende | `provided_sources` og E2E-responser | **BESTÅTT** i API-leddet; sluttprodukt mangler | P0 | Varig ledger og grønn sluttkjøring |
 | A03 | Modell-URL blir ikke lærer-kilde | origin-rangering og produksjonsrespons | **BESTÅTT**; modellkilder separat merket | P1 | Fortsett med URL-variantregresjon |
@@ -25,7 +27,7 @@ kode finnes; det betyr ikke produksjonsgodkjenning.
 | A06 | Retry er sporbar og ikke dupliserer | HTTP 409 lock med jobb-ID | **BESTÅTT** for dobbel forespørsel | P1 | Test kontrollert frontend-dobbelklikk |
 | A07 | Uløste kritiske problemer blokkerer compile | HTTP 409 compile-respons | **BESTÅTT** | P0 | Behold porten |
 | A08 | Godkjent dokument lastes som PDF/Word | compile-port | **IKKE VERIFISERT**; blokkert før rendering | P1 | Manuell PDF-/Word-kontroll etter grønt pass |
-| A09 | Backend består produksjonsnær runtime | Fresh image: 397 pass, 2 skip | **TESTET I RIKTIG RUNTIME** | P1 | Behold fresh-image-bevis |
+| A09 | Backend består produksjonsnær runtime | Kandidat-image: 398 pass, 2 skip; `compileall` bestått | **TESTET I RIKTIG RUNTIME** | P1 | Behold kandidat-image-bevis |
 | A10 | Identisk scenario er manuelt vurdert | kompendium `084614...` API E2E | **IKKE BESTÅTT**; ingen manuell sluttfil og 73 % | P0 | Reparasjon, lærerreview og ny run |
 
 ## Matrisekonklusjon
@@ -39,11 +41,25 @@ suksess, frontendvisning og varig ledger mangler. Dette sperrer både
 
 | Kontroll | Resultat |
 |---|---|
-| Lokal kandidatcommit | `2e66ec7a5467f3fc23523930ec9ac51181e7c070` |
-| Ferskt verifisert image | `sha256:db88579d5240abd7b1381ad0cfae035a7f8d73cbe01a11963ab92e685da47858` |
-| Full backend-suite | 398 bestått, 2 skips, 47 warnings, 28,96 s |
-| Produksjonsrelease ved readiness | `69b00d81e5a7` — gammel release, ikke kandidaten |
+| Lokal kandidatcommit | `ff725bb6997879e74d60d1d539c57e18578f95ad` (kodecommit `912007bf5b4a68b736bbd14daa2011494bed266c`) |
+| Kandidatens eksakte diff | `origin/main..HEAD`: fire commits, 11 filer |
+| Kandidat-image | `sha256:d9fb7b5f4b4659aefdc729c34358b4e4d704716197f3ab96d3df7c32707c8792` |
+| Full backend-/domene-suite | 398 bestått, 2 skips, Docker `compileall` bestått |
+| Produksjonsrelease ved readiness | `69b00d81e5a7` — gammel release, ikke kandidaten; `rndr-id=e42efd6a-0b2f-4353` |
 | Ny identisk E2E etter siste retting | Ikke kjørt; kandidaten er ikke deployet |
 | Ny PDF/Word-manualkontroll | Ikke mulig; kompileringsporten er ikke grønn |
 
 Dette endrer ikke dommen: `REJECTED`.
+
+## Release- og manuell gate — 2026-08-03
+
+| Kontroll | Resultat |
+|---|---|
+| Render følger | `main`, bekreftet i `render.yaml`; merge/push krever eksplisitt menneskelig godkjenning |
+| Vercel følger | Production-branch ikke verifiserbar fra repoet eller offentlig respons; dashboardkontroll mangler |
+| Offentlig smoke | HTTP 200 readiness, frontend `/` og `/compendia`, beskyttet matematikk-estimat; forsøk 1 |
+| Kandidatdeploy | Ikke utført; ingen Render deploy-ID eller kandidat-jobb-ID finnes |
+| Kompendium-/jobb-/artefaktledger | Siste gamle run: `084614b8247d413b8d1ba38cb6166fce`; kandidat: ikke opprettet |
+| PDF-/Word-ID, filnavn, størrelse, hash | Ingen; compile var blokkert i siste identiske run |
+| Manuell faglig vurdering | `pending teacher review` |
+| Dom | `REJECTED` |

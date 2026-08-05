@@ -105,6 +105,17 @@ class TestTextbookPreamble:
         hues = {p[k] for k in ("mainBlue", "mainTeal", "mainOrange")}
         assert len(hues) == 3
 
+    def test_forklaring_cannot_butt_against_the_maths(self):
+        """
+        Written without the ``&&`` tab the annotation lands in the same cell as
+        the expression. Without a space of its own it renders as
+        "= \\sqrt{169}Adderer leddene", which is what shipped in the R1 vektorer
+        chapter. The macro carries its own leading space so the collision cannot
+        happen either way.
+        """
+        for preamble in (build_preamble(), build_preamble("laerebok", textbook=True)):
+            assert r"\newcommand{\forklaring}[1]{\quad\text{" in preamble
+
     def test_soft_box_titles_sit_on_the_light_background(self):
         """
         husk/utforsk/laeringsmaal colour their title text in the frame colour.

@@ -25,10 +25,10 @@ Scorecardet skiller mellom foreslått mål og faktisk observert verdi. Et mål e
 | Grønn claim uten observert/godkjent kilde | **0** | Koden avviser uobserverte URL-er; bare ett prodscenario bevist | CODE/LOCAL + begrenset PROD | Backend/platform | Negative prod-fixtures og artefaktreview |
 | Lærerkilder med bevart opprinnelse og fetch-status | **100 %** | 3/3 lærer-URL-er ble `origin=teacher`, `fetch_status=provided` i scenariet | PROD/DOC | Backend/platform | Verifiser at de samme kildene vises i sluttfil |
 | Systemintroduserte språkfragmenter | **0** | 0 flagget i ett prodscenario; bred manuell språkreview mangler | PROD/DOC | Produktkvalitet | Manuell kontroll av alle kapitler og sluttfiler |
-| Utrygg automatisk mutasjon av delvis/gjentatt tekst | **0** | Punktumfeil reprodusert og rettet lokalt; 12 målrettede tester grønne | LOCAL | Backend/platform | Full suite, så identisk prodscenario |
+| Utrygg automatisk mutasjon av delvis/gjentatt tekst | **0** | Punktumfeil reprodusert og rettet; 12 målrettede tester og kandidat-image grønne | LOCAL/RUNTIME | Backend/platform | Samme identiske produksjonsscenario etter deploy |
 | Matematiske svar kontrollert | 100 % av parsebare svar; 0 kjente feil i godkjent sett; uparsebare synliggjøres | Deterministiske kontrollører og tester finnes; fersk prod-generering `UKJENT` | CODE/RUNTIME | Matematikkfaglig eier | Fast fixture + manuell kontroll i produksjon |
 | Udokumenterte påstander i godkjent sluttfil | **0** | `UKJENT`; ingen godkjent kompendiumsluttfil fra identisk scenario | DOC | Fagreviewer | Claim-til-fil-revisjon på PDF og DOCX |
-| Kritiske fag-/språk-/layoutfeil i manuell review | **0** | `UKJENT` | — | Pilotleder + fagreviewer | To uavhengige reviewere, fast rubrikk |
+| Kritiske fag-/språk-/layoutfeil i manuell review | **0** | `pending teacher review`; ingen lærer har vurdert sluttartefakt | — | Pilotleder + fagreviewer | To uavhengige reviewere, fast rubrikk |
 | Godkjenning knyttet til eksakt versjon/digest | **100 %** | Kapittelstatus invalidiseres ved tekstendring; komplett artefaktdigest/reviewer-kjede `UKJENT` | CODE | Backend/platform | Journalfør reviewer, tidspunkt og digest |
 
 ## Pålitelighet og jobbkontroll
@@ -42,7 +42,7 @@ Scorecardet skiller mellom foreslått mål og faktisk observert verdi. Et mål e
 | Refresh kan gjenoppta venting | **100 %** | Kompendium-side har lokal loading; `IKKE OPPFYLT` | CODE | Frontend + backend | E2E refresh under outline/generate/repair/compile |
 | Compile-feil har trygg recovery uten ny generering | **100 %** | Compile ble korrekt blokkert; vellykket recovery `UKJENT` | PROD/DOC | Backend/platform | Reparer → approve → compile samme versjon |
 | Frontendstatus samsvarer med autoritativ ledger | **100 %** | Fag/Norsk/Matematikk og platform har forskjellige jobbmekanismer; samlet verdi `UKJENT` | CODE | Plattformarkitektur | Kontrakttest for accepted/running/terminal |
-| Full runtime-regresjon | **100 % grønn** | Etter M1: **403 bestått, 2 hoppet over, 47 warnings** | RUNTIME | Produktkvalitet | Gjenta på hver eksakte releasekandidat |
+| Full runtime-regresjon | **100 % grønn** | Kandidat-image `sha256:d9fb7b5f...`: **398 bestått, 2 hoppet over**; compileall bestått | RUNTIME | Produktkvalitet | Gjenta på hver eksakte releasekandidat |
 | Frontend test/type/build/lint | Alle fire grønne | 13/13 test, type og build grønne; lint **ikke konfigurert** | LOCAL | Frontend | Legg til ikke-interaktiv ESLint-konfig og CI-gate |
 
 ## Lærertid og brukerreise
@@ -62,7 +62,7 @@ Scorecardet skiller mellom foreslått mål og faktisk observert verdi. Et mål e
 
 | Metrikk | Foreslått mål / port | Nåverdi | Evidens | Eier | Neste måling |
 |---|---|---|---|---|---|
-| Produksjonsrelease kan identifiseres | 100 % av readiness-responser | `69b00d81e5a7`, fingerprint `dc08f612a352` | PROD | Drift | Behold smoke per deploy |
+| Produksjonsrelease kan identifiseres | 100 % av readiness-responser | `69b00d81e5a7`, fingerprint `dc08f612a352`, `rndr-id=e42efd6a-0b2f-4353` | PROD | Drift | Render dashboard deploy-ID og kandidatcommit må verifiseres etter godkjent deploy |
 | Klikk → request → jobb → resultat → artefakt har én korrelasjon | **100 %** | `IKKE OPPFYLT` for platform repair | CODE | Drift + backend | Propager samme ID og test loggkjeden |
 | Platform-objekter med autentisert eier/tenant | **100 % før flerbrukerpilot** | **0 % dokumentert**; store er auth-uavhengig | CODE | Sikkerhet + backend | Skjema/migrasjon og negative auth-tester |
 | Uautorisert kryssbrukertilgang | **0** | `UKJENT`; platform har ingen eierkontroll | CODE | Sikkerhet | IDOR-test for list/get/patch/download |
@@ -71,7 +71,7 @@ Scorecardet skiller mellom foreslått mål og faktisk observert verdi. Et mål e
 | Backup med verifisert restore | Daglig backup; kvartalsvis restore; RPO/RTO avtales før pilot | `UKJENT` | — | Drift | Gjenopprett kopi av SQLite og filer i isolert miljø |
 | Retention, eksport og sletting | 100 % dokumentert og testet | `IKKE OPPFYLT` for platform | CODE | Produkteier + personvern | Policy + API/operasjonstest |
 | Telemetry-feil som er synlige for drift | 100 % varsles uten å stoppe brukerjobben | Middleware svelger feil; platform-ruter observeres ikke | CODE | Drift | Test og varsel på telemetry write failure |
-| Produksjonssmoke etter deploy | 100 % | Bestod på forsøk 1 den 2026-08-03, uten generering | PROD | Drift | Kjør ved hver release og arkiver release-ID |
+| Produksjonssmoke etter deploy | 100 % | Bestod på forsøk 1 2026-08-03 16:53+02 mot gammel release, uten generering | PROD | Drift | Kjør på kandidat etter deploy og arkiver release-ID |
 
 ## Produktbevis
 
@@ -87,4 +87,17 @@ Scorecardet skiller mellom foreslått mål og faktisk observert verdi. Et mål e
 
 Produktet er **ikke pilotklart**. Tekniske sperrer fungerer delvis, men det finnes ingen vellykket produksjonsverifisert sluttartefakt for det identiske scenarioet, ingen durable platform-jobb, ingen plattformeier/tenant og ingen gyldige bruks-/retentiondata.
 
-M1 er commit `912007b` og har full runtime-regresjon. Neste oppdatering skal bare endre scorecardet når en ny måling faktisk er utført; målverdier og antakelser skal ikke presenteres som resultater.
+M1-koden er `912007bf5b4a68b736bbd14daa2011494bed266c`; releasekandidaten er `ff725bb6997879e74d60d1d539c57e18578f95ad`. Kandidat-image og lokal suite er grønne, men produksjonen kjører fortsatt `69b00d81e5a7`, identisk scenario er ikke kjørt på kandidaten, sluttfil mangler og manuell review er `pending teacher review`. Neste oppdatering skal bare endre scorecardet når en ny måling faktisk er utført; målverdier og antakelser skal ikke presenteres som resultater.
+
+## Releasekandidatgate — 2026-08-03
+
+| Felt | Verdi |
+|---|---|
+| Kandidat | `ff725bb6997879e74d60d1d539c57e18578f95ad` |
+| Diffgrunnlag | `origin/main..HEAD`, fire commits, 11 filer |
+| Kandidat-image | `sha256:d9fb7b5f4b4659aefdc729c34358b4e4d704716197f3ab96d3df7c32707c8792` |
+| Render branch | `main`, kandidat ikke publisert |
+| Vercel branch | Ikke dokumentert/verifisert i repo eller offentlig respons |
+| Kandidat-E2E | Ikke kjørt; krever autorisert deploy |
+| Manuell lærerreview | `pending teacher review` |
+| Dom | `REJECTED` |

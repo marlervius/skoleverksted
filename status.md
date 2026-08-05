@@ -588,3 +588,41 @@ produksjonsrelease `69b00d81e5a7`, SQLite-lagring, `sqlite-local`-kø, ingen Red
 og config-fingerprint `dc08f612a352`. M1 er ikke deployet, produksjon er urørt,
 og siste identiske scenario står fortsatt på 32/44 verifiserte påstander (73 %),
 repair 504, retry 409 og compile 409. Dommen er derfor fortsatt **REJECTED**.
+
+## 22. Release candidate gate — 3. august 2026, 16:54+02
+
+Den entydige releasekandidaten er `ff725bb6997879e74d60d1d539c57e18578f95ad`
+(`Document product excellence baseline`) på `laerebokdesign-hefte`. Den bygger
+på kodecommit `912007bf5b4a68b736bbd14daa2011494bed266c`
+(`Make truth edits sentence-safe`) og diffgrunnlaget
+`origin/main..HEAD`: `2e66ec7`, `22b80d9`, `912007b`, `ff725bb` — 11 filer,
+809 innsettinger og 29 slettinger.
+
+Kandidat-imaget ble bygget fra ren Git-archive-context som
+`skoleverksted-candidate:ff725bb`, digest
+`sha256:d9fb7b5f4b4659aefdc729c34358b4e4d704716197f3ab96d3df7c32707c8792`.
+Den eksakte Docker-suiten bestod med **398 tester og 2 skips**; `compileall` og
+Dockerfile-check bestod. Frontend bestod med **13 tester**, TypeScript og
+produksjonsbygg. `npm run lint` er `not operational` fordi ESLint-konfigurasjon
+mangler og Next åpner interaktiv førstegangskonfigurasjon.
+
+Arbeidskopien har fortsatt de urørte MateMaTeX-endringene i
+`MateMaTeX/backend/app/latex/preamble.py` og
+`MateMaTeX/backend/tests/test_hefte_design.py`, samt de fire utrackede
+strategidokumentene `EXPERIMENT_BACKLOG.md`, `PRODUCT_WEDGE.md`,
+`STOP_BUILDING.md` og `UNICORN_AUDIT.md`. De er ikke del av kandidaten.
+
+Render følger `main` etter beståtte GitHub-checks. Offentlig readiness viste ved
+siste kontroll HTTP 200, release `69b00d81e5a7`, `rndr-id=e42efd6a-0b2f-4353`
+og tidspunkt `Mon, 03 Aug 2026 14:53:12 GMT`. Kandidaten er ikke pushet eller
+deployet; Vercel production-branch og formelt Render deploy-ID er ikke bevist
+fra repoet/offentlig respons. Merge/push til deploybranch krever derfor
+eksplisitt menneskelig godkjenning.
+
+Produksjonsdommen er fortsatt **REJECTED**. Kandidatens identiske Historie
+VG2-scenario er ikke kjørt. Siste produksjonsscenario står på 32/44 (73 %),
+kapittel 2/3 `needs_revision`, repair HTTP 504 etter 120 sekunder, retry HTTP
+409, compile HTTP 409 og ingen PDF/Word-artefakter. Manuell vurdering er
+`pending teacher review`. Rollback er redeploy av
+`69b00d81e5a7d823eb284bc7aee37a8cac6f29ed`; ingen force-push, nøkkelrotasjon
+eller produksjonsdataendring skal brukes.

@@ -28,8 +28,9 @@ Alle påstander i planen merkes etter dette evidenshierarkiet:
 | Felt | Verifisert tilstand 2026-08-03 | Evidens |
 |---|---|---|
 | Aktiv branch | `laerebokdesign-hefte` | lokal Git |
-| Lokal HEAD før denne milepælen | `22b80d913bdd9f54ba8dc08025bba7814354f5d1` | lokal Git |
+| Lokal HEAD / releasekandidat | `ff725bb6997879e74d60d1d539c57e18578f95ad` (`Document product excellence baseline`) | lokal Git |
 | M1 kodecommit | `912007b` (`Make truth edits sentence-safe`) | lokal Git; ikke deployet |
+| Kandidatens eksakte diffgrunnlag | `origin/main..HEAD`: `2e66ec7`, `22b80d9`, `912007b`, `ff725bb`; 11 filer, 809 innsettinger, 29 slettinger | lokal Git |
 | `origin/main` og produksjonsrelease | `69b00d81e5a7d823eb284bc7aee37a8cac6f29ed` | lokal Git + offentlig readiness |
 | Offentlig frontend | `https://skoleverksted.vercel.app` svarte 200 og viste felles inngang og produktkort | produksjonsobservasjon |
 | Offentlig backend | readiness svarte 200, `status=ready`, alle readiness-sjekker sanne | produksjonsobservasjon 2026-08-03 |
@@ -49,7 +50,7 @@ Arbeidskopien inneholdt allerede urelaterte endringer i MateMaTeX og fire utrack
 - Kildenes opprinnelse og fetch-status ble bevart i det identiske produksjonsscenarioet. Påstander uten godkjent evidens blir ikke automatisk grønne.
 - Fag-verktøyet har et asynkront jobbforløp og kan levere elev-PDF og separat lærerrapport. Norsk har bakgrunnsjobber og delt passordbeskyttelse. Matematikk har bruker-/jobb-eierskap, server-side API-nøkkel og deterministiske kontrollører for blant annet matematikk og LaTeX.
 - PDF/DOCX-renderere, strukturelle tekstkontroller, timeout og kapittellås har omfattende lokale tester.
-- Kandidatruntime før denne milepælen bestod 398 tester, med 2 hoppet over. Frontend bestod 13 tester, typekontroll og produksjonsbygg.
+- Kandidat-runtimen i det eksakte Docker-imaget bestod **398 tester og 2 hoppet over**. Frontend bestod 13 tester, typekontroll og produksjonsbygg. Lint er ikke operativ fordi ESLint-konfigurasjon mangler.
 
 Dette er ikke det samme som at hele produktet er pilotklart. Det beviser komponenter og sperrer, ikke et vellykket lærerforløp.
 
@@ -199,7 +200,7 @@ Akseptanse:
 - Delvis treff og gjentatt tekst blir ikke endret.
 - Eksisterende sannhetslagtester og hele monorepo-suiten må være grønne.
 
-Målrettet resultat: **12 tester bestått**. Full runtime-regresjon etter endringen: **403 bestått, 2 hoppet over, 47 warnings**. De to endrede Python-filene bestod separat `py_compile`.
+Målrettet resultat: **12 tester bestått**. Kandidat-imaget bestod **398 tester, 2 hoppet over** på tvers av plattform og alle tre domener; `compileall`, `py_compile`, frontendtest, typekontroll og produksjonsbygg bestod. Dette er runtime-bevis, ikke produksjonsbevis.
 
 ### Hvorfor denne milepælen går foran auth, jobbarkitektur og UX
 
@@ -207,7 +208,7 @@ Alle tre er større pilotblokkere, men denne feilen var konkret reproduserbar i 
 
 ### Gjenværende risiko og rollback
 
-Rettelsen gjør ingen semantisk vurdering av om erstatningsteksten er korrekt. Den garanterer bare at automatisk mutasjon har en entydig avgrensning. Den er ikke produksjonsverifisert. Rollback er å reversere milepælcommit-en; ingen migrasjon eller produksjonsdata berøres.
+Rettelsen gjør ingen semantisk vurdering av om erstatningsteksten er korrekt. Den garanterer bare at automatisk mutasjon har en entydig avgrensning. Den er ikke produksjonsverifisert. Rollback er å redeploye siste kjente produksjonsrelease `69b00d81e5a7`; ingen migrasjon eller produksjonsdata berøres.
 
 ## 10. Verifikasjonsprotokoll
 
@@ -241,10 +242,19 @@ Baseline: **13/13 tester**, typekontroll og produksjonsbygg bestod. Lint-gaten e
 
 - `scripts/production_smoke.py` med ett forsøk og uten generering bestod på forsøk 1.
 - Offentlig frontend og sentrale sider svarte.
-- Backend readiness svarte 200 og identifiserte release `69b00d81e5a7`.
+- Backend readiness svarte 200 og identifiserte fortsatt release `69b00d81e5a7` (`rndr-id=e42efd6a-0b2f-4353`, `Date=2026-08-03 14:53:12 GMT`).
 - Matematikk-estimat gjennom beskyttet proxy svarte.
 
 Smoken beviser kobling og grunnleggende tilgjengelighet. Den beviser ikke innholdskvalitet eller en fullført wedge-reise.
+
+### Kandidatkontroll — 2026-08-03 16:54+02
+
+- Kandidat: `ff725bb6997879e74d60d1d539c57e18578f95ad` på `laerebokdesign-hefte`.
+- Kandidat-imaget ble bygget fra ren Git-archive-context som `skoleverksted-candidate:ff725bb`; digest er `sha256:d9fb7b5f4b4659aefdc729c34358b4e4d704716197f3ab96d3df7c32707c8792`.
+- Docker-suiten bestod med 398 bestått og 2 hoppet over; Dockerfile `--check`, `compileall`, `py_compile`, frontend 13 tester, TypeScript og produksjonsbygg bestod.
+- `npm run lint` er `not operational`: Next mangler ESLint-konfigurasjon og åpner interaktiv førstegangskonfigurasjon.
+- Kandidaten er ikke pushet til Render-sporet og ingen deploy ble trigget. Render-sporet er `main`; Vercel production-branch er ikke dokumentert i repoet og må bekreftes i Vercel-prosjektet.
+- Identisk Historie VG2-scenario ble derfor ikke kjørt på kandidaten. Siste produksjonsevidens er fortsatt 32/44 (73 %), repair 504, retry 409 og compile 409, uten PDF/Word.
 
 ## 11. Release- og produksjonsport
 
@@ -258,7 +268,7 @@ Ingen deploy er autorisert i denne leveransen. Kandidaten kan først vurderes n�
 6. scorecardet har faktiske målinger for lærertid, tapte utkast, jobbsuksess og sluttartefakt;
 7. en ansvarlig person gir eksplisitt produksjonsgodkjenning.
 
-Når 1–7 er oppfylt, er den konkrete menneskelige handlingen å slå sammen den identifiserte, testede commit-en til den Render-sporede branchen og trigge én kontrollert deploy. Forventet effekt er ny backend-release med den eksakte commit-SHA-en i readiness. Risikoen er modell-/runtime-regresjon og datamutering. Rollback er redeploy av `69b00d81e5a7`. Verifikasjon er readiness → smoke → identisk scenario → manuell PDF/DOCX-kontroll → oppdatert go/no-go. Eksakte deploykommandoer skal hentes fra den faktiske Render-konfigurasjonen når godkjenningen gis; de skal ikke gjettes nå.
+Når 1–7 er oppfylt, er den konkrete menneskelige handlingen å merge/pushe den identifiserte kandidaten til Render-sporede `main` etter eksplisitt menneskelig godkjenning. Forventet effekt er ny backend-release med kandidat-SHA i readiness. Risikoen er modell-/runtime-regresjon og datamutering. Rollback er redeploy av `69b00d81e5a7`; ingen force-push eller produksjonsdataendring er tillatt. Verifikasjon er readiness → smoke → identisk scenario → manuell PDF/DOCX-kontroll → oppdatert go/no-go.
 
 ## 12. Gjennomføringsrekkefølge
 
@@ -280,10 +290,11 @@ Når 1–7 er oppfylt, er den konkrete menneskelige handlingen å slå sammen de
 - Endret sannhetslaget til entydig, fail-closed setningsredigering.
 - La til regresjonstester for punktum med/uten, kvalifisering, delvis treff og gjentatte treff.
 - Målrettet test: 12 bestått.
-- Full monorepo-regresjon: 403 bestått, 2 hoppet over, 47 warnings.
+- Eksakt kandidat-image: 398 bestått, 2 hoppet over; Dockerfile-check og syntaxkontroll bestått.
 - Frontend: 13/13 tester, typekontroll og produksjonsbygg bestått; lint fortsatt ikke konfigurert.
 - Kodecommit: `912007b` (`Make truth edits sentence-safe`).
 - Produksjon: urørt, fortsatt release `69b00d81e5a7`, dom `REJECTED`.
+- Manuell faglig vurdering: `pending teacher review`; ingen lærer har vurdert sluttartefakt.
 - Neste høyest prioriterte arbeid: M2, men M3 må fullføres før flerbrukerpilot.
 
 ## 14. Beslutningsregel for videre arbeid

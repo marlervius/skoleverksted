@@ -464,7 +464,12 @@ _MATH_COMMANDS = r"""
 
 % Step justification in align-environments, textbook style:
 %   2x &= 8 && \forklaring{del begge sider på 2}
-\newcommand{\forklaring}[1]{\text{\small\color{mainGray}#1}}
+%
+% The leading \quad is defensive. Written without the ``&&`` alignment tab the
+% annotation lands in the same cell as the expression, and with no space of its
+% own it butts straight against the maths: "= \sqrt{169}Adderer leddene". The
+% tab is the correct usage and the extra space is harmless there.
+\newcommand{\forklaring}[1]{\quad\text{\small\color{mainGray}#1}}
 
 % Consistent display-math spacing + allow page breaks in long align-blocks
 \allowdisplaybreaks[1]

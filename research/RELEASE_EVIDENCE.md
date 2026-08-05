@@ -1,6 +1,6 @@
 # Release evidence
 
-Status: `DEPLOYED / PRODUCTION GATE REJECTED`.
+Status: `RELEASE CANDIDATE LOCAL / PRODUCTION GATE REJECTED`.
 
 Backend-releasen er identitetsverifisert i Render, men den identiske
 produksjonskjøringen oppfylte ikke kvalitetsporten og incidenten er derfor ikke
@@ -139,3 +139,29 @@ Ingen hemmeligheter, tokens eller persondata er skrevet i dette dokumentet.
 | Rollback reference | Historical deployed release `69b00d81e5a7`; forensic baseline `5b72a0541a20` |
 
 The local candidate is intentionally not described as production-verified.
+
+## Release candidate evidence — 3 August 2026, 16:54+02
+
+| Felt | Verdi/status |
+|---|---|
+| Release candidate | `ff725bb6997879e74d60d1d539c57e18578f95ad` (`Document product excellence baseline`) |
+| Code milestone | `912007bf5b4a68b736bbd14daa2011494bed266c` (`Make truth edits sentence-safe`) |
+| Exact diff base | `origin/main..HEAD`: `2e66ec7`, `22b80d9`, `912007b`, `ff725bb`; 11 files, 809 additions, 29 deletions |
+| Candidate image | `skoleverksted-candidate:ff725bb` |
+| Candidate image digest | `sha256:d9fb7b5f4b4659aefdc729c34358b4e4d704716197f3ab96d3df7c32707c8792` |
+| Candidate runtime suite | 398 passed, 2 skipped; Docker `compileall` passed |
+| Frontend | 13 tests passed; TypeScript and production build passed |
+| ESLint | `not operational`; root frontend has no ESLint config and `next lint` is interactive |
+| Current Render release | `69b00d81e5a7d823eb284bc7aee37a8cac6f29ed`; readiness HTTP 200 |
+| Current Render request ID | `rndr-id=e42efd6a-0b2f-4353`, `Date=Mon, 03 Aug 2026 14:53:12 GMT` |
+| Render deploy ID | Not available; dashboard access is unauthenticated |
+| Vercel production branch | Not proven from repository/public headers |
+| Candidate deploy | Not performed; no compendium/job/artifact IDs created |
+| Rollback | Redeploy Render SHA `69b00d81e5a7d823eb284bc7aee37a8cac6f29ed`; no force-push or data mutation |
+| Manual product review | `pending teacher review` |
+| Gate decision | `REJECTED` |
+
+The current smoke passed once against the old release: readiness, frontend `/`
+and `/compendia`, and the protected mathematics estimate returned HTTP 200.
+This does not substitute for the missing candidate deploy, identical E2E,
+successful repair, final PDF/Word artifacts, or teacher review.
