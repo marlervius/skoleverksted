@@ -12,6 +12,7 @@ Modes:
 from __future__ import annotations
 
 import base64
+import io
 from importlib.metadata import PackageNotFoundError, version
 import json
 import logging
@@ -22,7 +23,7 @@ import time
 from dataclasses import asdict, dataclass
 from html import unescape
 from typing import Any, Literal, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ _FREE_LICENSE_MARKERS = (
     "gfdl",
 )
 _RESTRICTIVE_LICENSE_MARKERS = ("noncommercial", "no derivatives", "cc by-nc", "cc by-nd")
+_RASTER_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 
 @dataclass
@@ -67,6 +69,19 @@ class ImageResult:
         data = asdict(self)
         data.pop("local_path", None)
         return data
+
+
+def is_trusted_commons_image_url(value: object) -> bool:
+    """Allow only HTTPS image files served by Wikimedia's upload host."""
+    try:
+        parsed = urlparse(str(value or "").strip())
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and (parsed.hostname or "").casefold() == "upload.wikimedia.org"
+        and parsed.path.startswith("/wikipedia/commons/")
+    )
 
 
 def normalize_image_mode(value: object) -> ImageMode:
@@ -133,6 +148,16 @@ def _fallback_plan(topic: str, subject: str, level: str) -> dict:
             topic,
         ],
         "fallback_search_queries": [topic, f"{topic} {subject}"],
+        "fallback_motif": (
+            f"One simple, authentic and clearly identifiable subject directly connected to {topic}, "
+            "without explanatory text"
+        ),
+        "fallback_rationale": (
+            f"Reservebildet gir eleven et konkret observasjonspunkt knyttet til {topic}, "
+            "uten å påstå at bildet viser en usynlig prosess eller hele fagforklaringen."
+        ),
+        "fallback_caption": f"Et konkret eksempel knyttet til {topic}"[:80],
+        "fallback_alt_text": f"Et tydelig motiv knyttet til {topic}",
         "generation_prompt": (
             f"A clear educational illustration of {topic} for a {subject} lesson at level {level}. "
             "Show the core concept concretely with one obvious focal point."
@@ -184,6 +209,11 @@ Utdrag fra ferdig læringstekst:
 Bildet må vise hovedideen konkret, være faglig trygt, fungere på papir og gi
 eleven noe relevant å observere eller snakke om. Unngå pynt, kollasjer og tett
 tekst. For historiske eller vitenskapelige tema må usikre detaljer utelates.
+Planlegg også ett enklere reservebilde som er direkte knyttet til temaet dersom
+det ideelle motivet ikke finnes. Reservebildet kan vise et observerbart objekt
+eller fenomen som støtter samtalen, men bildeteksten må være ærlig og må ikke
+påstå at bildet viser en usynlig prosess eller hele forklaringen. Eksempel:
+Ved fotosyntese kan reservebildet vise tydelige grønne blader i sollys.
 
 Svar KUN med ett JSON-objekt:
 {{
@@ -191,6 +221,10 @@ Svar KUN med ett JSON-objekt:
   "rationale": "<hvordan bildet støtter læringen>",
   "search_queries": ["<engelsk Commons-søk 1>", "<søk 2>", "<søk 3>"],
   "fallback_search_queries": ["<kort, bredt engelsk søk 1>", "<bredt søk 2>"],
+  "fallback_motif": "<enklere, observerbart reservemotiv>",
+  "fallback_rationale": "<hva eleven kan observere uten at bildet overforklares>",
+  "fallback_caption": "<ærlig bildetekst for reservemotivet, maks 12 ord>",
+  "fallback_alt_text": "<konkret alternativ tekst for reservemotivet>",
   "generation_prompt": "<detaljert engelsk bildeprompt>",
   "caption": "<kort bildetekst på samme språk som læringsarket, maks 12 ord>",
   "alt_text": "<kort, konkret alternativ tekst>"
@@ -268,7 +302,14 @@ def _search_wikimedia(query: str, plan: dict, limit: int = 6) -> list[dict]:
         if not info_list:
             continue
         info = info_list[0]
-        if info.get("mime") not in {"image/jpeg", "image/png", "image/webp"}:
+        source_mime = str(info.get("mime") or "").lower()
+        thumbnail_url = str(info.get("thumburl") or "").strip()
+        raster_source = source_mime in _RASTER_MIME_TYPES
+        # Commons stores many of its best scientific diagrams as SVG. The API
+        # provides a rasterised thumbnail through iiurlwidth; use that exact
+        # PNG/WebP preview while keeping the original Commons file page as the
+        # attribution target.
+        if not raster_source and not (source_mime == "image/svg+xml" and thumbnail_url):
             continue
         width, height = int(info.get("width", 0)), int(info.get("height", 0))
         if width < 500 or height < 300:
@@ -289,8 +330,8 @@ def _search_wikimedia(query: str, plan: dict, limit: int = 6) -> list[dict]:
         page_url = "https://commons.wikimedia.org/wiki/File:" + quote(title.replace(" ", "_"))
         candidates.append(
             {
-                "url": info.get("thumburl") or info.get("url"),
-                "original_url": info.get("url"),
+                "url": thumbnail_url or info.get("url"),
+                "original_url": info.get("url") if raster_source else None,
                 "title": title,
                 "description": description,
                 "creator": creator,
@@ -496,9 +537,13 @@ def _verified_remote_candidate_path(plan: dict, candidate: dict) -> Optional[str
     image_bytes, content_type = downloaded
     if not _verify_image_bytes(plan, image_bytes, content_type, "Wikimedia Commons"):
         return None
+    try:
+        image_bytes, content_type = _normalize_image_for_documents(image_bytes)
+    except Exception as exc:
+        logger.warning("Commons-bildet kunne ikke normaliseres for PDF/Word: %s", exc)
+        return None
 
-    suffix = ".jpg" if content_type in {"image/jpeg", "image/jpg"} else ".png"
-    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_commons_", suffix=suffix, delete=False)
+    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_commons_", suffix=".png", delete=False)
     try:
         handle.write(image_bytes)
         return handle.name
@@ -518,6 +563,154 @@ def _collect_commons_candidates(
                 seen.add(item["url"])
                 candidates.append(item)
     return candidates
+
+
+def _fallback_commons_plan(plan: dict) -> tuple[dict, list[str]]:
+    primary_queries = [
+        q.strip() for q in plan.get("search_queries", []) if isinstance(q, str) and q.strip()
+    ]
+    planned_fallback_queries = [
+        q.strip()
+        for q in plan.get("fallback_search_queries", [])
+        if isinstance(q, str) and q.strip() and q.strip() not in primary_queries
+    ]
+    topic_reserve = _topic_commons_reserve(plan)
+    fallback_queries = list(
+        dict.fromkeys(
+            [
+                *topic_reserve.get("queries", []),
+                *planned_fallback_queries,
+            ]
+        )
+    )
+    if not fallback_queries:
+        fallback_queries = [str(plan.get("context_topic") or plan.get("motif", ""))]
+    fallback_plan = {
+        **plan,
+        "motif": str(
+            topic_reserve.get("motif")
+            or plan.get("fallback_motif")
+            or (
+                "A simple, authentic subject directly connected to "
+                f"{plan.get('context_topic') or plan.get('motif', '')}"
+            )
+        ),
+        "rationale": str(
+            topic_reserve.get("rationale")
+            or plan.get("fallback_rationale")
+            or plan.get("rationale", "")
+        ),
+        "caption": str(
+            topic_reserve.get("caption")
+            or plan.get("fallback_caption")
+            or plan.get("caption", "")
+        ),
+        "alt_text": str(
+            topic_reserve.get("alt_text")
+            or plan.get("fallback_alt_text")
+            or plan.get("alt_text", "")
+        ),
+        "search_queries": fallback_queries,
+        "fallback_search_queries": [],
+    }
+    return fallback_plan, fallback_queries
+
+
+def _public_commons_candidate(candidate: dict, plan: dict, *, recommended: bool) -> dict:
+    creator = str(candidate.get("creator") or "ukjent opphav")
+    title = str(candidate.get("title") or "Wikimedia Commons-bilde")
+    license_name = str(candidate.get("license") or "")
+    return {
+        "image_url": str(candidate.get("url") or ""),
+        "thumbnail_url": str(candidate.get("url") or ""),
+        "source_page_url": str(candidate.get("page_url") or ""),
+        "title": title[:240],
+        "description": str(candidate.get("description") or "")[:400],
+        "creator": creator[:160],
+        "license": license_name[:100],
+        "credit": (
+            f"Kilde: Wikimedia Commons · «{title}» · {creator} · {license_name}"
+        )[:500],
+        "caption": str(plan.get("caption") or title)[:120],
+        "alt_text": str(
+            plan.get("alt_text")
+            or candidate.get("description")
+            or title
+        )[:240],
+        "rationale": str(plan.get("rationale") or "")[:500],
+        "recommended": recommended,
+        "review_status": "recommended" if recommended else "teacher_review",
+    }
+
+
+def discover_commons_images(
+    *,
+    topic: str,
+    subject: str,
+    level: str,
+    text: str,
+    limit: int = 8,
+) -> list[dict]:
+    """Return a small, licence-safe candidate gallery for teacher review.
+
+    The critic still recommends at most one candidate. Other results have
+    passed deterministic licence, format, resolution and metadata relevance
+    checks, but are explicitly left for the teacher to assess.
+    """
+    safe_limit = max(1, min(int(limit), 12))
+    try:
+        plan = {
+            **_plan_image(topic, subject, level, text, "commons"),
+            "context_topic": topic,
+            "context_subject": subject,
+            "context_level": level,
+        }
+        primary_queries = [
+            q.strip()
+            for q in plan.get("search_queries", [])
+            if isinstance(q, str) and q.strip()
+        ] or [str(plan.get("motif", ""))]
+
+        seen: set[str] = set()
+        primary = _collect_commons_candidates(plan, primary_queries, seen)
+        chosen = _select_candidate(plan, primary)
+        candidate_plans: list[tuple[dict, dict]] = [
+            (candidate, plan) for candidate in primary
+        ]
+
+        # Search the broader, honest reserve brief whenever the first round was
+        # rejected or did not fill the gallery. This is generic for all topics;
+        # selected core topics may additionally provide a deterministic reserve.
+        if chosen is None or len(candidate_plans) < safe_limit:
+            fallback_plan, fallback_queries = _fallback_commons_plan(plan)
+            fallback = _collect_commons_candidates(fallback_plan, fallback_queries, seen)
+            if chosen is None:
+                chosen = _select_candidate(fallback_plan, fallback)
+            candidate_plans.extend((candidate, fallback_plan) for candidate in fallback)
+
+        trusted_candidate_plans = [
+            item
+            for item in candidate_plans
+            if is_trusted_commons_image_url(item[0].get("url"))
+        ]
+        ordered = sorted(
+            trusted_candidate_plans,
+            key=lambda item: (
+                item[0] is not chosen,
+                -float(item[0].get("score", 0)),
+            ),
+        )
+        return [
+            _public_commons_candidate(
+                candidate,
+                candidate_plan,
+                recommended=candidate is chosen,
+            )
+            for candidate, candidate_plan in ordered[:safe_limit]
+        ]
+    except Exception as exc:
+        logger.exception("Kunne ikke bygge Commons-galleri; fortsetter uten forslag: %s", exc)
+        return []
 
 
 def _try_commons_candidates(plan: dict, candidates: list[dict]) -> Optional[ImageResult]:
@@ -553,6 +746,31 @@ def _try_commons_candidates(plan: dict, candidates: list[dict]) -> Optional[Imag
     return None
 
 
+def _topic_commons_reserve(plan: dict) -> dict:
+    """Return a deterministic, honest reserve brief for selected core topics."""
+    topic = str(plan.get("context_topic") or "").casefold()
+    if "fotosyntese" in topic or "photosynthesis" in topic:
+        english = str(plan.get("context_subject") or "").strip().casefold() == "engelsk"
+        return {
+            "queries": [
+                "green leaf sunlight close up",
+                "green leaves sunlight photograph",
+            ],
+            "motif": "A clear close-up photograph of healthy green leaves in natural sunlight",
+            "rationale": (
+                "Eleven kan observere grønne blader og sollys som to konkrete "
+                "forutsetninger for fotosyntesen, uten at fotoet påstås å vise selve prosessen."
+            ),
+            "caption": "Green leaves in sunlight" if english else "Grønne blader i sollys",
+            "alt_text": (
+                "Close-up of green leaves in sunlight"
+                if english
+                else "Nærbilde av grønne blader i sollys"
+            ),
+        }
+    return {}
+
+
 def _commons_image(plan: dict) -> Optional[ImageResult]:
     primary_queries = [
         q.strip() for q in plan.get("search_queries", []) if isinstance(q, str) and q.strip()
@@ -566,16 +784,10 @@ def _commons_image(plan: dict) -> Optional[ImageResult]:
     if result:
         return result
 
-    fallback_queries = [
-        q.strip()
-        for q in plan.get("fallback_search_queries", [])
-        if isinstance(q, str) and q.strip() and q.strip() not in primary_queries
-    ]
-    if not fallback_queries:
-        fallback_queries = [str(plan.get("context_topic") or plan.get("motif", ""))]
     logger.info("Første Commons-runde ga ikke et godkjent bilde; prøver bredere søk")
-    fallback = _collect_commons_candidates(plan, fallback_queries, seen)
-    return _try_commons_candidates(plan, fallback)
+    fallback_plan, fallback_queries = _fallback_commons_plan(plan)
+    fallback = _collect_commons_candidates(fallback_plan, fallback_queries, seen)
+    return _try_commons_candidates(fallback_plan, fallback)
 
 
 _AI_STYLE_RULES = """
@@ -618,6 +830,28 @@ def _extract_generated_image(response: object) -> tuple[Optional[bytes], str]:
         if image_bytes:
             return image_bytes, str(getattr(inline, "mime_type", None) or "image/png")
     return None, "image/png"
+
+
+def _normalize_image_for_documents(image_bytes: bytes) -> tuple[bytes, str]:
+    """Decode any supported source image and emit a real, document-safe PNG."""
+    from PIL import Image, ImageOps
+
+    if not image_bytes or len(image_bytes) > MAX_GENERATED_IMAGE_BYTES:
+        raise ValueError("Bildedata mangler eller er for stor")
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        opened.load()
+        image = ImageOps.exif_transpose(opened)
+        image.thumbnail((2400, 2400), Image.Resampling.LANCZOS)
+        has_alpha = "A" in image.getbands()
+        image = image.convert("RGBA" if has_alpha else "RGB")
+        output = io.BytesIO()
+        image.save(output, format="PNG", optimize=True)
+    normalized = output.getvalue()
+    if not normalized.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("Bildekonverteringen ga ikke en gyldig PNG")
+    if len(normalized) > MAX_GENERATED_IMAGE_BYTES:
+        raise ValueError("Det normaliserte bildet er større enn 15 MB")
+    return normalized, "image/png"
 
 
 def _supports_current_interactions_schema() -> bool:
@@ -687,9 +921,13 @@ def generate_ai_image(prompt: str) -> Optional[str]:
     if not image_bytes or len(image_bytes) > MAX_GENERATED_IMAGE_BYTES:
         logger.warning("Google returnerte ingen gyldig bildedata")
         return None
+    try:
+        image_bytes, mime_type = _normalize_image_for_documents(image_bytes)
+    except Exception as exc:
+        logger.warning("Google-bildet kunne ikke normaliseres for PDF/Word: %s", exc)
+        return None
 
-    suffix = ".jpg" if mime_type in {"image/jpeg", "image/jpg"} else ".png"
-    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_ai_", suffix=suffix, delete=False)
+    handle = tempfile.NamedTemporaryFile(prefix="skoleverksted_ai_", suffix=".png", delete=False)
     try:
         handle.write(image_bytes)
         return handle.name

@@ -15,6 +15,8 @@ const PAGE_TITLES: Record<string, string> = {
   "/theme-pack": "Temapakke",
   "/year-plans": "Årsplaner",
   "/year-plans/new": "Ny årsplan",
+  "/compendia": "Kompendier",
+  "/compendia/new": "Nytt kompendium",
   "/projects": "Prosjekter",
   "/exercises": "Oppgavebank",
   "/templates": "Maler",
@@ -55,7 +57,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Get breadcrumb from path
   const pageTitle = PAGE_TITLES[pathname]
     || (pathname.startsWith("/projects/") ? "Prosjekt" : "")
-    || (pathname.startsWith("/year-plans/") ? "Årsplan" : "");
+    || (pathname.startsWith("/year-plans/") ? "Årsplan" : "")
+    || (pathname.startsWith("/compendia/") ? "Kompendium" : "");
   const isImmersiveWorkspace = pathname === "/fag" || pathname === "/norsk";
 
   return (

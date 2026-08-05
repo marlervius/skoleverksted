@@ -1,0 +1,11 @@
+{
+  "subject": "Historie",
+  "level": "VG2",
+  "topic": "En historisk kontrovers med flere forsvarlige tolkninger",
+  "chapter_count": 3,
+  "target_pages": 6,
+  "competency_goals": ["analysere historiske tolkninger", "vurdere kildegrunnlag"],
+  "source_brief": "https://snl.no/historie\nhttps://www.historians.org/",
+  "differentiation": {"support": "modell for kildeanalyse", "extension": "argumentere for flere tolkninger"},
+  "anonymized": true
+}

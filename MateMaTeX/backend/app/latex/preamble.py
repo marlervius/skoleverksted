@@ -49,6 +49,23 @@ THEMES: dict[str, dict[str, str]] = {
         "mainGray": "90,90,100", "lightGray": "247,247,250",
         "mainRed": "230,60,70", "lightRed": "255,235,236",
     },
+    # Textbook palette (Produksjonsoppskrift for matematikkhefter).
+    #
+    # Three hues plus neutrals, not seven: blue carries structure (definitions,
+    # goals, summaries, headings), teal carries worked thinking (examples,
+    # exploration, prior knowledge), ochre carries "attend to this" (rules and
+    # common mistakes). Exercises drop to neutral grey so twenty of them in a
+    # row stop shouting. Rule and mistake share the ochre and are told apart by
+    # weight instead — a solid title bar against a bare left rule.
+    "laerebok": {
+        "mainBlue": "29,78,107", "lightBlue": "237,242,246",
+        "mainGreen": "46,128,115", "lightGreen": "234,242,240",
+        "mainOrange": "166,124,45", "lightOrange": "250,244,232",
+        "mainPurple": "99,106,114", "lightPurple": "243,244,246",
+        "mainTeal": "46,128,115", "lightTeal": "234,242,240",
+        "mainGray": "88,95,103", "lightGray": "244,246,248",
+        "mainRed": "166,124,45", "lightRed": "250,244,232",
+    },
     # Strong contrast for visual accessibility (WCAG-friendly)
     "highcontrast": {
         "mainBlue": "0,51,153", "lightBlue": "255,255,255",
@@ -62,6 +79,31 @@ THEMES: dict[str, dict[str, str]] = {
 }
 
 DEFAULT_THEME = "default"
+
+# Palette that carries the textbook look (see THEMES["laerebok"]).
+TEXTBOOK_THEME = "laerebok"
+
+# Material types that are produced as finished teaching texts rather than
+# worksheets, and therefore get the textbook design by default.
+TEXTBOOK_MATERIAL_TYPES = frozenset({"hefte", "kapittel"})
+
+_LATEX_ESCAPES = {
+    "\\": r"\textbackslash{}",
+    "&": r"\&",
+    "%": r"\%",
+    "$": r"\$",
+    "#": r"\#",
+    "_": r"\_",
+    "{": r"\{",
+    "}": r"\}",
+    "~": r"\textasciitilde{}",
+    "^": r"\textasciicircum{}",
+}
+
+
+def _escape_latex(text: str) -> str:
+    """Escape user-supplied text destined for the preamble (running heads)."""
+    return "".join(_LATEX_ESCAPES.get(ch, ch) for ch in text)
 
 
 def _color_block(theme: str) -> str:
@@ -124,6 +166,8 @@ def build_preamble(
     accessible: bool = False,
     dyslexia: bool = False,
     high_contrast: bool = False,
+    textbook: bool = False,
+    running_head: str = "",
 ) -> str:
     """
     Build a complete LaTeX preamble (everything before \\begin{document}).
@@ -134,6 +178,10 @@ def build_preamble(
         accessible: Emit PDF language metadata and opt into tagged-PDF mode.
         dyslexia: Sans-serif body + generous leading and spacing.
         high_contrast: Force the high-contrast palette regardless of `theme`.
+        textbook: Textbook chrome — square boxes, no shadows, subject running
+            head, sans labelling on figures and tables.
+        running_head: Subject line for the textbook running head (ignored
+            unless ``textbook``). Escaped before it reaches LaTeX.
     """
     if high_contrast:
         theme = "highcontrast"
@@ -176,19 +224,26 @@ def build_preamble(
         + "\n"
         + rf"\usepackage[colorlinks=true, {pdflang}linkcolor=mainBlue, urlcolor=mainBlue, citecolor=mainGreen]{{hyperref}}"
         + "\n"
-        + _BOXES
+        + _boxes_block(textbook=textbook)
         + _MATH_COMMANDS
-        + _SECTION_STYLING
+        + (_SECTION_STYLING_TEXTBOOK if textbook else _SECTION_STYLING_CLASSIC)
         + _PGFPLOTS_DEFAULTS
         + _FIGURE_MACROS
         + _PEDAGOGICAL_MACROS
-        + _HEADER_FOOTER
+        + (
+            _header_footer_textbook(running_head)
+            if textbook
+            else _HEADER_FOOTER_CLASSIC
+        )
         + student_block
         + f"\n% ---- Spacing ----\n{leading}\n"
         + rf"\setlength{{\parskip}}{{{parskip}}}" + "\n"
         + r"\setlength{\parindent}{0pt}" + "\n"
         + r"\setlist{itemsep=0.3em, parsep=0.2em, topsep=0.3em}" + "\n"
         + _LAYOUT_HARDENING
+        # Last, so \flushbottom wins over the \raggedbottom in _LAYOUT_HARDENING
+        # and the geometry override lands after the package is loaded.
+        + (_TEXTBOOK_EXTRAS if textbook else "")
     )
 
 
@@ -248,7 +303,10 @@ _MATH_GRAPHICS_LAYOUT = r"""
 \usepackage[most]{tcolorbox}
 """
 
-_BOXES = r"""
+# Worksheet chrome: rounded corners, floating boxed titles, soft drop shadow.
+# This is the look every non-textbook material type has always had, so the
+# string is kept verbatim.
+_BOX_STYLE_CLASSIC = r"""
 % Shared box style
 \tcbset{matebox/.style={
   enhanced, breakable,
@@ -258,7 +316,41 @@ _BOXES = r"""
   sharp corners=downhill,
   drop fuzzy shadow=black!12,
 }}
+\tcbset{matesoft/.style={
+  enhanced, breakable, arc=2mm,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+}}
+"""
 
+# Textbook chrome ("Lærebokpreg fremfor dokumentpreg"): square corners, no
+# shadow, no floating title fane. The title becomes a solid bar in the frame
+# colour and the box keeps its identity through a left rule only — the same
+# restraint the production spec asks for ("stram typografi", "ingen pynt for
+# pyntens skyld"). ``boxed title style`` in the individual box definitions is
+# inert here because no title is attached.
+_BOX_STYLE_TEXTBOOK = r"""
+% Shared box style — textbook
+\tcbset{matebox/.style={
+  enhanced, breakable,
+  sharp corners,
+  boxrule=0pt, leftrule=2.5pt,
+  left=10pt, right=10pt, top=8pt, bottom=8pt,
+  fonttitle=\bfseries\sffamily\small,
+  titlerule=0pt, toptitle=3pt, bottomtitle=3pt,
+}}
+% The four left-rule boxes colour their title text in the frame colour, which
+% on a title *bar* of the same colour is unreadable. Setting the title into the
+% upper part removes the bar entirely — a bold coloured heading on the light
+% background, which is what the spec's own layout does.
+\tcbset{matesoft/.style={
+  enhanced, breakable, sharp corners,
+  boxrule=0pt,
+  attach title to upper={\par\vspace{0.25em}},
+  left=10pt, right=10pt, top=7pt, bottom=7pt,
+}}
+"""
+
+_BOX_DEFINITIONS = r"""
 \newtcolorbox{definitionbox}[1][]{matebox, colback=lightBlue, colframe=mainBlue,
   fonttitle=\bfseries\sffamily, title={Definisjon},
   boxed title style={colback=mainBlue, colframe=mainBlue}, #1}
@@ -307,37 +399,40 @@ _BOXES = r"""
   boxed title style={colback=mainRed, colframe=mainRed}, #1}
 
 % Recall of prior knowledge — chapter openers ("Husk fra før")
-\newtcolorbox{husk}[1][]{enhanced, breakable, arc=2mm,
+\newtcolorbox{husk}[1][]{matesoft,
   colback=lightTeal, colframe=mainTeal!70,
   borderline west={2.5pt}{0pt}{mainTeal},
-  fonttitle=\bfseries\sffamily\color{mainTeal}, title={Husk fra før},
-  left=8pt, right=8pt, top=6pt, bottom=6pt, #1}
+  fonttitle=\bfseries\sffamily\color{mainTeal}, title={Husk fra før}, #1}
 
 % Common mistake / misconception — shows the wrong way and the right way
-\newtcolorbox{vanligfeil}[1][]{enhanced, breakable, arc=2mm,
+\newtcolorbox{vanligfeil}[1][]{matesoft,
   colback=lightRed, colframe=mainRed!70,
   borderline west={2.5pt}{0pt}{mainRed},
-  fonttitle=\bfseries\sffamily\color{mainRed}, title={Vanlig feil},
-  left=8pt, right=8pt, top=6pt, bottom=6pt, #1}
+  fonttitle=\bfseries\sffamily\color{mainRed}, title={Vanlig feil}, #1}
 
 % Exploration / inquiry activity ("Utforsk") — open-ended thinking task
-\newtcolorbox{utforsk}[1][]{enhanced, breakable, arc=2mm,
+\newtcolorbox{utforsk}[1][]{matesoft,
   colback=lightPurple, colframe=mainPurple!70,
   borderline west={2.5pt}{0pt}{mainPurple},
-  fonttitle=\bfseries\sffamily\color{mainPurple}, title={Utforsk},
-  left=8pt, right=8pt, top=6pt, bottom=6pt, #1}
+  fonttitle=\bfseries\sffamily\color{mainPurple}, title={Utforsk}, #1}
 
 % Learning goals — chapter opener ("I dette kapittelet lærer du å ...")
-\newtcolorbox{laeringsmaal}[1][]{enhanced, breakable, arc=2mm,
+\newtcolorbox{laeringsmaal}[1][]{matesoft,
   colback=lightBlue, colframe=mainBlue!60,
   borderline west={2.5pt}{0pt}{mainBlue},
-  fonttitle=\bfseries\sffamily\color{mainBlue}, title={I dette kapittelet lærer du å},
-  left=8pt, right=8pt, top=6pt, bottom=6pt, #1}
+  fonttitle=\bfseries\sffamily\color{mainBlue}, title={I dette kapittelet lærer du å}, #1}
 
 % Chapter summary — collects the key formulas/methods
 \newtcolorbox{oppsummering}[1][]{matebox, colback=lightBlue, colframe=mainBlue,
   fonttitle=\bfseries\sffamily, title={Sammendrag},
   boxed title style={colback=mainBlue, colframe=mainBlue}, #1}
+
+% Key point — solid primary-colour callout for the one sentence the pupil must
+% take away from a section. Deliberately has no title bar: the text *is* the
+% point.
+\newtcolorbox{nokkelpoeng}[1][]{matesoft,
+  colback=mainBlue, colframe=mainBlue, coltext=white,
+  fontupper=\bfseries\sffamily, #1}
 
 % Theorem environments (fallback)
 \newtheorem{theorem}{Teorem}[section]
@@ -345,6 +440,12 @@ _BOXES = r"""
 \newtheorem{example}[theorem]{Eksempel}
 \newtheorem{exercise}{Oppgave}[section]
 """
+
+
+def _boxes_block(*, textbook: bool) -> str:
+    """Box definitions, with worksheet or textbook chrome."""
+    style = _BOX_STYLE_TEXTBOOK if textbook else _BOX_STYLE_CLASSIC
+    return style + _BOX_DEFINITIONS
 
 _MATH_COMMANDS = r"""
 \newcommand{\N}{\mathbb{N}}
@@ -363,7 +464,12 @@ _MATH_COMMANDS = r"""
 
 % Step justification in align-environments, textbook style:
 %   2x &= 8 && \forklaring{del begge sider på 2}
-\newcommand{\forklaring}[1]{\text{\small\color{mainGray}#1}}
+%
+% The leading \quad is defensive. Written without the ``&&`` alignment tab the
+% annotation lands in the same cell as the expression, and with no space of its
+% own it butts straight against the maths: "= \sqrt{169}Adderer leddene". The
+% tab is the correct usage and the extra space is harmless there.
+\newcommand{\forklaring}[1]{\quad\text{\small\color{mainGray}#1}}
 
 % Consistent display-math spacing + allow page breaks in long align-blocks
 \allowdisplaybreaks[1]
@@ -375,10 +481,25 @@ _MATH_COMMANDS = r"""
 }
 """
 
-_SECTION_STYLING = r"""
+_SECTION_STYLING_CLASSIC = r"""
 \usepackage{titlesec}
 \titleformat{\section}{\Large\bfseries\sffamily\color{mainBlue}}{\thesection}{1em}{}[\color{mainBlue}\titlerule]
 \titleformat{\subsection}{\large\bfseries\sffamily\color{mainPurple}}{\thesubsection}{1em}{}
+"""
+
+# Textbook headings: bigger chapter titles over a hairline, secondary colour on
+# subheadings (the spec assigns "deloverskrifter" to the muted teal), and real
+# space above a new section so pages get the visual rhythm the spec asks for.
+_SECTION_STYLING_TEXTBOOK = r"""
+\usepackage{titlesec}
+\titleformat{\section}
+  {\LARGE\bfseries\sffamily\color{mainBlue}}{\thesection}{0.8em}{}
+  [{\vspace{1pt}\color{mainBlue!30}\titlerule[1.2pt]}]
+\titlespacing*{\section}{0pt}{2.2em}{1.0em}
+\titleformat{\subsection}{\large\bfseries\sffamily\color{mainTeal}}{\thesubsection}{0.7em}{}
+\titlespacing*{\subsection}{0pt}{1.5em}{0.55em}
+\titleformat{\subsubsection}{\normalsize\bfseries\sffamily\color{mainGray}}{\thesubsubsection}{0.6em}{}
+\titlespacing*{\subsubsection}{0pt}{1.1em}{0.4em}
 """
 
 _PGFPLOTS_DEFAULTS = r"""
@@ -568,7 +689,7 @@ _PEDAGOGICAL_MACROS = r"""
 }
 """
 
-_HEADER_FOOTER = r"""
+_HEADER_FOOTER_CLASSIC = r"""
 \usepackage{fancyhdr}
 \pagestyle{fancy}
 \fancyhf{}
@@ -578,6 +699,155 @@ _HEADER_FOOTER = r"""
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
 \fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\small\color{mainGray}\thepage}\renewcommand{\headrulewidth}{0pt}}
+"""
+
+
+def _header_footer_textbook(running_head: str) -> str:
+    """
+    Textbook running head: the *subject* in the corner, not the tool that made
+    the file. "Generert av MateMaTeX" and today's date are exactly the document
+    preg the spec's first rule rejects, so neither appears on the page.
+    """
+    head = _escape_latex(running_head).strip()
+    head_line = (
+        rf"\fancyhead[R]{{\footnotesize\sffamily\color{{mainGray}}\MakeUppercase{{{head}}}}}"
+        if head
+        else ""
+    )
+    return rf"""
+\usepackage{{fancyhdr}}
+% The running head sets a rule under sans small-caps; 14pt clips it and
+% fancyhdr warns on every compile. 22pt clears it with room to spare.
+\setlength{{\headheight}}{{22pt}}
+\pagestyle{{fancy}}
+\fancyhf{{}}
+{head_line}
+\fancyfoot[C]{{\small\sffamily\color{{mainGray}}\thepage}}
+\renewcommand{{\headrulewidth}}{{0.4pt}}
+\renewcommand{{\footrulewidth}}{{0pt}}
+\renewcommand{{\headrule}}{{\hbox to\headwidth{{\color{{mainBlue!30}}\leaders\hrule height \headrulewidth\hfill}}}}
+\fancypagestyle{{plain}}{{\fancyhf{{}}\fancyfoot[C]{{\small\sffamily\color{{mainGray}}\thepage}}\renewcommand{{\headrulewidth}}{{0pt}}}}
+"""
+
+
+# Body text colour, sans-serif figure/table labelling and the page furniture the
+# spec's own layout uses. Body text stays serif (Libertinus) while everything
+# structural — headings, box titles, axis labels, table heads — is sans.
+_TEXTBOOK_EXTRAS = r"""
+% ---- Textbook mode ----
+\definecolor{bodyText}{RGB}{30,37,43}
+\AtBeginDocument{\color{bodyText}}
+
+% Page architecture: a 13.5 cm text block (2.75 alphabets, ~71 characters —
+% the article default of 16 cm runs to ~84, well past a comfortable measure)
+% beside a 3 cm note column for glossary, tips and tricks.
+%
+% ``includemp`` is what makes this work: it counts the note column as part of
+% the body so \textwidth is *derived* from the margins. Passing inner, outer
+% and textwidth together over-determines the system — geometry silently keeps
+% the margins, drops textwidth, and throws the notes off the paper.
+\geometry{includemp, inner=2.2cm, outer=1.8cm, marginparsep=0.5cm,
+          marginparwidth=3.0cm, top=2.4cm, bottom=2.6cm}
+
+% A product ends its text block at the same height on every page.
+\flushbottom
+% Let TeX optimise page breaks instead of nailing every figure where it stands.
+\floatplacement{figure}{htbp}
+
+% Figures and tables label in sans, so structure reads apart from prose.
+\pgfplotsset{
+  every axis/.append style={
+    width=0.92\textwidth,
+    tick label style={font=\small\sffamily},
+    label style={font=\small\sffamily},
+    legend style={font=\small\sffamily},
+    title style={font=\bfseries\sffamily},
+  },
+}
+\newcommand{\MMAtabellhode}[1]{{\sffamily\bfseries #1}}
+
+% Captions join the design system instead of staying LaTeX-article default.
+\IfFileExists{caption.sty}{%
+  \usepackage{caption}%
+  \captionsetup{font={small}, labelfont={bf,sf,color=mainBlue}, textfont={sf},
+                labelsep=period, justification=raggedright,
+                singlelinecheck=false, skip=6pt}%
+}{}
+
+% Exercise sets are a numbered list under a heading, not one tinted box per
+% exercise — twenty boxes in a row is worksheet rhythm, and each one costs
+% vertical padding. Short items go in \begin{multicols}{2}.
+\newlist{oppgaver}{enumerate}{2}
+\setlist[oppgaver]{label=\bfseries\sffamily\arabic*., leftmargin=1.9em,
+                   itemsep=0.55em, topsep=0.4em}
+
+% ---- Margin notes ----
+% A 3 cm column needs permission to hyphenate; without it every note either
+% overflows or opens rivers. Notes must sit in running body text — \marginpar
+% is not allowed inside multicols or a tcolorbox.
+\newcommand{\MMAmargsetup}{\raggedright\footnotesize\sffamily
+  \hyphenpenalty=50 \exhyphenpenalty=50 \tolerance=9999 \emergencystretch=1em}
+
+% \MMAmargbegrep{begrep}{kort forklaring} — vocabulary gloss beside the line
+% where the term first appears.
+\newcommand{\MMAmargbegrep}[2]{%
+  \marginpar{\MMAmargsetup\textbf{\color{mainTeal}#1}\par
+             \vspace{0.15em}\color{mainGray}#2}}
+% \MMAmargtips{...} — a nudge in the reader's ear.
+\newcommand{\MMAmargtips}[1]{%
+  \marginpar{\MMAmargsetup\textbf{\color{mainOrange}Tips}\par
+             \vspace{0.15em}\color{mainGray}#1}}
+% \MMAmargtriks{...} — a shortcut worth remembering.
+\newcommand{\MMAmargtriks}[1]{%
+  \marginpar{\MMAmargsetup\textbf{\color{mainOrange}Triks}\par
+             \vspace{0.15em}\color{mainGray}#1}}
+% \MMAmargnote{...} — plain aside, no label.
+\newcommand{\MMAmargnote}[1]{\marginpar{\MMAmargsetup\color{mainGray}#1}}
+
+% \MMAsteg{01}{Overskrift}{utdypning} — numbered step marker (progression,
+% checklists, "slik gjør du"). Third argument may be empty.
+\newcommand{\MMAsteg}[3]{%
+  \par\vspace{0.3em}\noindent
+  \begin{minipage}[t]{2.4em}%
+    % \fboxsep would add 3pt of padding on each side of the \makebox and push
+    % the number tab past the minipage; \makebox already sets the width.
+    {\setlength{\fboxsep}{0pt}%
+     \colorbox{mainBlue}{\makebox[2.4em][c]{\rule[-0.35em]{0pt}{1.55em}%
+       \sffamily\bfseries\small\color{white}#1}}}%
+  \end{minipage}%
+  \hspace{0.6em}%
+  \begin{minipage}[t]{\dimexpr\linewidth-3.2em\relax}%
+    \sffamily\bfseries #2%
+    \if\relax\detokenize{#3}\relax\else
+      \\[0.15em]{\normalfont\small\color{mainGray}#3}%
+    \fi
+  \end{minipage}%
+  \par\vspace{0.3em}%
+}
+
+% \MMAheftetittel{tema}{fag og nivå}{undertittel} — booklet cover block.
+% Deliberately no \clearpage: place the visual motif after it, then break.
+\newcommand{\MMAheftetittel}[3]{%
+  \thispagestyle{empty}%
+  \begingroup\raggedright
+  \vspace*{2.2cm}\par
+  {\sffamily\bfseries\footnotesize\color{mainTeal}\MakeUppercase{#2}}\par
+  \vspace{0.9em}
+  {\color{mainBlue}\rule{\linewidth}{2.5pt}}\par
+  \vspace{0.8em}
+  {\sffamily\bfseries\Huge\color{mainBlue}#1}\par
+  \vspace{0.7em}
+  {\sffamily\large\color{mainGray}#3}\par
+  \vspace{1.6em}
+  \endgroup
+}
+
+% The worksheet cover signs the page "Generert av MateMaTeX" and stamps the
+% date — precisely the document preg the spec's first rule rejects. Route it to
+% the booklet cover so the rule holds even if the author calls the old macro.
+% The teacher argument is dropped: a textbook cover names the subject, not the
+% person who generated the file.
+\renewcommand{\MMAforside}[4]{\MMAheftetittel{#1}{#3}{#2}}
 """
 
 
@@ -593,6 +863,8 @@ def wrap_with_preamble(
     accessible: bool = False,
     dyslexia: bool = False,
     high_contrast: bool = False,
+    textbook: bool = False,
+    running_head: str = "",
 ) -> str:
     """
     Wrap body content with a complete preamble.
@@ -608,6 +880,8 @@ def wrap_with_preamble(
         accessible=accessible,
         dyslexia=dyslexia,
         high_contrast=high_contrast,
+        textbook=textbook,
+        running_head=running_head,
     )
     return (
         preamble
@@ -665,4 +939,6 @@ def wrap_with_style(body_content: str, style: object | None = None) -> str:
         accessible=getattr(style, "accessible", False),
         dyslexia=getattr(style, "dyslexia", False),
         high_contrast=getattr(style, "high_contrast", False),
+        textbook=bool(getattr(style, "textbook", False)),
+        running_head=getattr(style, "running_head", "") or "",
     )

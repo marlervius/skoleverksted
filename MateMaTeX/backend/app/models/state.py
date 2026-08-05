@@ -12,7 +12,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ class PdfStyle(BaseModel):
     """
     theme: str = Field(
         default="default",
-        description="Color palette: default|calm|playful|highcontrast",
+        description="Color palette: default|calm|playful|highcontrast|laerebok",
     )
     student_mode: bool = Field(
         default=False, description="Favour writing space (answer fields)"
@@ -68,6 +68,18 @@ class PdfStyle(BaseModel):
     high_contrast: bool = Field(
         default=False, description="Force the high-contrast palette"
     )
+    textbook: bool | None = Field(
+        default=None,
+        description=(
+            "Textbook chrome (square boxes, no shadows, subject running head). "
+            "None = derive from material_type; set explicitly to override."
+        ),
+    )
+    running_head: str = Field(
+        default="",
+        max_length=120,
+        description="Subject line in the textbook running head; derived when empty",
+    )
 
 
 class GenerationRequest(BaseModel):
@@ -76,7 +88,7 @@ class GenerationRequest(BaseModel):
     topic: str = Field(description="Math topic", max_length=500)
     material_type: str = Field(
         default="arbeidsark",
-        description="arbeidsark|kapittel|prøve|differensiert",
+        description="arbeidsark|hefte|kapittel|prøve|differensiert",
     )
     language_level: str = Field(default="standard", description="standard|b2|b1")
     num_exercises: int = Field(default=10, ge=1, le=50)
@@ -89,6 +101,34 @@ class GenerationRequest(BaseModel):
     competency_goals: list[str] = Field(default_factory=list)
     extra_instructions: str = Field(default="", max_length=10_000)
     pdf_style: PdfStyle = Field(default_factory=PdfStyle)
+
+    @model_validator(mode="after")
+    def _apply_textbook_design(self) -> GenerationRequest:
+        """
+        Give finished teaching texts the textbook design without making every
+        caller ask for it.
+
+        ``hefte`` and ``kapittel`` are read as products, not worksheets, so they
+        get the textbook palette, chrome and running head by default. An explicit
+        choice always wins: ``textbook=False`` keeps the worksheet look, and a
+        deliberately picked palette (anything but the untouched ``default``) is
+        never overwritten.
+        """
+        from app.latex.preamble import TEXTBOOK_MATERIAL_TYPES, TEXTBOOK_THEME
+
+        is_textbook_type = self.material_type in TEXTBOOK_MATERIAL_TYPES
+
+        if self.pdf_style.textbook is None:
+            self.pdf_style.textbook = is_textbook_type
+
+        if self.pdf_style.textbook:
+            if self.pdf_style.theme == "default":
+                self.pdf_style.theme = TEXTBOOK_THEME
+            if not self.pdf_style.running_head.strip():
+                parts = [p for p in (self.topic.strip(), self.grade.strip()) if p]
+                self.pdf_style.running_head = " · ".join(parts)[:120]
+
+        return self
 
 
 class MathClaim(BaseModel):

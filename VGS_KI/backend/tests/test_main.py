@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from main import app, sanitize_description
+from VGS_KI.backend.main import app, sanitize_description
 
 client = TestClient(app)
 
@@ -113,25 +113,25 @@ def test_stream_nonexistent_job():
 # ── PDF service: Typst escaping ───────────────────────────────────────────────
 
 def test_sanitize_for_typst_escapes_hash():
-    from pdf_service import sanitize_for_typst
+    from VGS_KI.backend.pdf_service import sanitize_for_typst
     result = sanitize_for_typst("Price: #100")
     assert "\\#" in result
 
 
 def test_sanitize_for_typst_escapes_dollar():
-    from pdf_service import sanitize_for_typst
+    from VGS_KI.backend.pdf_service import sanitize_for_typst
     result = sanitize_for_typst("Cost: $50")
     assert "\\$" in result
 
 
 def test_sanitize_for_typst_escapes_at():
-    from pdf_service import sanitize_for_typst
+    from VGS_KI.backend.pdf_service import sanitize_for_typst
     result = sanitize_for_typst("Email: user@example.com")
     assert "\\@" in result
 
 
 def test_sanitize_for_typst_preserves_norwegian():
-    from pdf_service import sanitize_for_typst
+    from VGS_KI.backend.pdf_service import sanitize_for_typst
     result = sanitize_for_typst("Ærlig øvelse åpner")
     assert "æ" in result.lower() or "Æ" in result
     assert "ø" in result.lower() or "Ø" in result
@@ -140,7 +140,7 @@ def test_sanitize_for_typst_preserves_norwegian():
 
 def test_safe_level_escaping_in_template():
     """Level with special Typst chars should not crash template generation."""
-    from pdf_service import create_typst_template
+    from VGS_KI.backend.pdf_service import create_typst_template
     # This should not raise even with a weird level string
     result = create_typst_template(
         topic="Test",

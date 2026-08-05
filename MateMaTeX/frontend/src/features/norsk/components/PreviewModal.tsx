@@ -5,11 +5,14 @@ import {
   CheckCircle2,
   FileText,
   GraduationCap,
+  Image as ImageIcon,
   Languages,
   Loader2,
+  ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import type { LessonResponse } from "../lib/fovTypes";
+import type { CommonsImageCandidate, LessonResponse } from "../lib/fovTypes";
+import { TruthPassport } from "@/components/truth-passport";
 
 interface Props {
   previewData: LessonResponse;
@@ -17,6 +20,7 @@ interface Props {
   isGenerating: boolean;
   onClose: () => void;
   onGeneratePdf: () => void;
+  onSelectImage: (candidate: CommonsImageCandidate | null) => void;
 }
 
 export function PreviewModal({
@@ -25,8 +29,11 @@ export function PreviewModal({
   isGenerating,
   onClose,
   onGeneratePdf,
+  onSelectImage,
 }: Props) {
   const ex = previewData.language_exercises;
+  const imageCandidates = previewData.image_candidates ?? [];
+  const selectedImageUrl = previewData.image_url ?? null;
   const hasGrammar = (ex?.grammar_tasks?.length ?? 0) > 0;
   const hasVocab = (ex?.vocabulary_tasks?.length ?? 0) > 0;
   const hasSyntax = (ex?.syntax_tasks?.length ?? 0) > 0;
@@ -58,9 +65,118 @@ export function PreviewModal({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-8">
+          {previewData.truth_passport && (
+            <TruthPassport passport={previewData.truth_passport} />
+          )}
+
+          {imageCandidates.length > 0 && (
+            <section className="rounded-xl border border-stone-200 bg-stone-50 p-4 sm:p-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="flex items-center gap-2 font-semibold text-stone-900">
+                    <ImageIcon className="h-4 w-4 text-accent-700" aria-hidden="true" />
+                    Velg bilde til PDF-en
+                  </h3>
+                  <p className="mt-1 max-w-2xl text-sm text-stone-600">
+                    Alle forslagene har fri lisens og tilfredsstiller tekniske minstekrav.
+                    Bildekritikerens anbefaling er forhåndsvalgt; øvrige forslag må du
+                    vurdere faglig før bruk.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800">
+                  <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                  Lisens kontrollert
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {imageCandidates.map((candidate) => {
+                  const selected = selectedImageUrl === candidate.image_url;
+                  return (
+                    <article
+                      key={candidate.image_url}
+                      className={`overflow-hidden rounded-lg border bg-white transition ${
+                        selected
+                          ? "border-accent-600 ring-2 ring-accent-600/20"
+                          : "border-stone-200 hover:border-stone-400"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onSelectImage(candidate)}
+                        aria-pressed={selected}
+                        className="block w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-600"
+                      >
+                        <div className="relative h-32 bg-stone-100">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={candidate.thumbnail_url || candidate.image_url}
+                            alt={candidate.alt_text || candidate.title}
+                            loading="lazy"
+                            className="h-full w-full object-cover"
+                          />
+                          <span
+                            className={`absolute left-2 top-2 rounded-full px-2 py-1 text-[11px] font-semibold shadow-sm ${
+                              candidate.recommended
+                                ? "bg-emerald-700 text-white"
+                                : "bg-white/95 text-stone-700"
+                            }`}
+                          >
+                            {candidate.recommended
+                              ? "Anbefalt av bildekritikeren"
+                              : "Mulig alternativ"}
+                          </span>
+                          {selected && (
+                            <span className="absolute bottom-2 right-2 rounded-full bg-accent-700 px-2 py-1 text-[11px] font-semibold text-white shadow-sm">
+                              Valgt
+                            </span>
+                          )}
+                        </div>
+                        <div className="p-3">
+                          <p className="line-clamp-2 text-sm font-medium text-stone-900">
+                            {candidate.title}
+                          </p>
+                          <p className="mt-1 text-xs text-stone-500">
+                            {candidate.license}
+                            {candidate.creator ? ` · ${candidate.creator}` : ""}
+                          </p>
+                        </div>
+                      </button>
+                      <div className="border-t border-stone-100 px-3 py-2">
+                        <a
+                          href={candidate.source_page_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs text-stone-500 underline hover:text-stone-800"
+                        >
+                          Åpne kildesiden
+                        </a>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onSelectImage(null)}
+                className={`mt-4 rounded-lg border px-4 py-2 text-sm font-medium transition ${
+                  !selectedImageUrl
+                    ? "border-stone-700 bg-stone-800 text-white"
+                    : "border-stone-300 bg-white text-stone-700 hover:bg-stone-100"
+                }`}
+              >
+                Lag PDF uten bilde
+              </button>
+            </section>
+          )}
+
           {/* Image */}
           {previewData.image_url && previewData.image_url !== "none" && (
-            <div className="flex flex-col items-center">
+            <div className="flex flex-col items-center" aria-live="polite">
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-stone-500">
+                Valgt bilde
+              </p>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={previewData.image_url}

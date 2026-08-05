@@ -1,0 +1,11 @@
+{
+  "subject": "Historie",
+  "level": "VG2",
+  "topic": "Imperialisme og kolonialisme",
+  "chapter_count": 3,
+  "target_pages": 6,
+  "competency_goals": ["analysere maktforhold", "vurdere ulike perspektiver"],
+  "source_brief": "https://snl.no/imperialisme\nhttps://www.britannica.com/topic/imperialism",
+  "differentiation": {"support": "ordliste og delspørsmål", "extension": "perspektivmangfold"},
+  "anonymized": true
+}

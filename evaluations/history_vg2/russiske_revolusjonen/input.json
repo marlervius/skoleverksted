@@ -1,0 +1,11 @@
+{
+  "subject": "Historie",
+  "level": "VG2",
+  "topic": "Den russiske revolusjonen",
+  "chapter_count": 3,
+  "target_pages": 6,
+  "competency_goals": ["utforske politiske endringer", "vurdere kilders perspektiv"],
+  "source_brief": "https://snl.no/den_russiske_revolusjon\nhttps://www.loc.gov/collections/meeting-of-frontiers/about-this-collection/",
+  "differentiation": {"support": "begrepskart", "extension": "sammenligne tolkninger"},
+  "anonymized": true
+}

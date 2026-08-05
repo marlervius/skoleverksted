@@ -2499,6 +2499,78 @@ Hold fasiten praktisk og under 450 ord."""
         structured = strip_ungrounded_k_markers(structured)
         text_output = structured_to_plain_text(structured)
 
+    # The internal fact reviewer improves the draft, but model-on-model review
+    # is not evidence. The shared truth layer performs an independent grounded
+    # search and only accepts citations observed outside the model response.
+    if progress_callback:
+        progress_callback(
+            "Sannhetslaget: dokumenterer påstander og avviser usikre kilder…"
+        )
+    from Skoleverksted.backend.platform.truth import audit_truth
+
+    truth_input = json.dumps(
+        {
+            "structured": structured,
+            "text": None if structured else text_output,
+            "worksheet": worksheet_output,
+            "language_exercises": language_exercises,
+            "differensiering": differensiering,
+        },
+        ensure_ascii=False,
+    )
+    truth_audit = audit_truth(
+        content=truth_input,
+        topic=topic,
+        subject=subject,
+        level=level,
+    )
+    try:
+        truth_payload = json.loads(truth_audit.content)
+    except (TypeError, json.JSONDecodeError):
+        truth_payload = None
+        truth_audit.passport.status = "needs_review"
+        truth_audit.passport.limitations.append(
+            "Den sikre rettelsen kunne ikke overføres til dokumentformatet."
+        )
+    if isinstance(truth_payload, dict):
+        if structured:
+            truth_structured = coerce_structured_lesson(truth_payload.get("structured"))
+            if truth_structured:
+                structured = truth_structured
+                text_output = structured_to_plain_text(structured)
+            elif truth_audit.content != truth_input:
+                truth_audit.passport.status = "needs_review"
+                truth_audit.passport.limitations.append(
+                    "Den kontrollerte strukturteksten kunne ikke valideres etter retting."
+                )
+        elif isinstance(truth_payload.get("text"), str):
+            text_output = truth_payload["text"]
+        if isinstance(truth_payload.get("worksheet"), str):
+            worksheet_output = truth_payload["worksheet"]
+        revised_language = truth_payload.get("language_exercises")
+        if revised_language is None or isinstance(revised_language, dict):
+            language_exercises = revised_language
+        else:
+            truth_audit.passport.status = "needs_review"
+            truth_audit.passport.limitations.append(
+                "Kontrollerte språkoppgaver kunne ikke valideres etter retting."
+            )
+        revised_differentiation = truth_payload.get("differensiering")
+        if revised_differentiation is None or isinstance(revised_differentiation, dict):
+            differensiering = revised_differentiation
+        else:
+            truth_audit.passport.status = "needs_review"
+            truth_audit.passport.limitations.append(
+                "Kontrollert differensiering kunne ikke valideres etter retting."
+            )
+    if truth_audit.passport.status != "verified":
+        warning = (
+            "Faktapasset er ikke grønt. Materialet inneholder opplysninger som "
+            "må kontrolleres av lærer før bruk."
+        )
+        warnings.append(warning)
+        text_output = f"FAKTASTATUS: {warning}\n\n{text_output}"
+
     deliver_fact_report = bool(options.get("faktarapport", True))
 
     return {
@@ -2516,6 +2588,7 @@ Hold fasiten praktisk og under 450 ord."""
         "differensiering": differensiering,
         "warnings": warnings,
         "source_grounded": source_grounded,
+        "truth_passport": truth_audit.passport.model_dump(mode="json"),
         "prompt_version": PROMPT_VERSION,
     }
 

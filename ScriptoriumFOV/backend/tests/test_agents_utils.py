@@ -145,3 +145,29 @@ def test_thumbnail_url_builds_thumb():
 def test_thumbnail_url_passthrough_non_wikimedia():
     url = "https://example.com/image.jpg"
     assert _get_thumbnail_url(url) == url
+
+
+def test_package_import_can_initialize_agents_in_superapp(monkeypatch):
+    """Regression: Render imports FOV as ScriptoriumFOV.backend, not as loose files."""
+    from ScriptoriumFOV.backend import agents as package_agents
+
+    created_agents = []
+    monkeypatch.setattr(package_agents, "_initialized", False)
+    monkeypatch.setattr(package_agents, "_llm", None)
+    monkeypatch.setattr(package_agents, "GOOGLE_API_KEY", "package-test-key")
+    monkeypatch.setattr(package_agents, "GOOGLE_MODEL", "gemini-test")
+    monkeypatch.setenv("GOOGLE_API_KEY", "package-test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "package-test-key")
+    monkeypatch.setattr(package_agents.genai, "configure", lambda **_kwargs: None)
+    monkeypatch.setattr(package_agents, "LLM", lambda **kwargs: {"llm": kwargs})
+    monkeypatch.setattr(
+        package_agents,
+        "Agent",
+        lambda **kwargs: created_agents.append(kwargs) or {"agent": kwargs},
+    )
+
+    package_agents._init_agents()
+
+    assert package_agents._initialized is True
+    assert len(created_agents) == 3
+    assert package_agents._llm["llm"]["model"] == "gemini/gemini-test"

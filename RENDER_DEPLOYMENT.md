@@ -47,9 +47,14 @@ unavailable. It never returns API keys or Redis credentials.
 - The Blueprint deploys only after GitHub checks pass.
 - A persistent disk limits this SQLite version to one service instance and
   causes a short interruption during deploys.
-- Set `REDIS_URL` later if job progress must survive process restarts. For higher
-  traffic, migrate the platform store to Postgres and generation to a dedicated
-  queue/worker before scaling beyond one instance.
+- The platform store uses SQLite on the mounted disk by default. Set
+  `DATABASE_URL=postgresql://...` to use PostgreSQL instead; the same schema is
+  created automatically on startup and generated files still use `OUTPUT_DIR`.
+- Set `REDIS_URL` when running more than one backend instance. It enables a
+  distributed job-capacity lease while the durable job ledger remains in the
+  platform store. `REDIS_JOB_LEASE_SECONDS` defaults to one hour.
+- For higher traffic, move generated files and images to object storage and run
+  generation in a dedicated worker before scaling beyond a single web service.
 - Generated files and the SQLite database live below `/var/data`.
 - The Docker image pins Typst CLI 0.14.2 and installs TeX Live with the
   language, science and font packages used by the templates, plus `pdftotext`.

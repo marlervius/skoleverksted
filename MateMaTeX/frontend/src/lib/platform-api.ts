@@ -38,6 +38,54 @@ export interface QualityPassport {
   prompt_version: string;
 }
 
+export type TruthClaimStatus =
+  | "verified"
+  | "interpretation"
+  | "disputed"
+  | "time_sensitive"
+  | "unsupported"
+  | "verification_failed"
+  | "source_unavailable"
+  | "not_evaluated";
+
+export interface TruthSource {
+  title: string;
+  url: string;
+  publisher: string;
+  source_tier: "primary" | "authoritative" | "editorial" | "other";
+  retrieved_at: string;
+  origin: "teacher" | "grounding" | "model";
+  fetch_status: "provided" | "grounded" | "model_reported" | "fetched" | "source_unavailable";
+}
+
+export interface TruthClaim {
+  id: string;
+  claim: string;
+  exact_text: string;
+  status: TruthClaimStatus;
+  action: "keep" | "qualify" | "remove";
+  replacement: string;
+  source_urls: string[];
+  evidence: string;
+  confidence: number;
+}
+
+export interface TruthPassport {
+  version: string;
+  generated_at: string;
+  status: "verified" | "needs_review" | "blocked" | "verification_failed" | "source_unavailable" | "not_evaluated";
+  topic: string;
+  subject: string;
+  coverage_percent: number;
+  verified_claims: number;
+  total_claims: number;
+  claims: TruthClaim[];
+  sources: TruthSource[];
+  removed_claims: string[];
+  limitations: string[];
+  summary: string;
+}
+
 export interface ThemePackTask {
   id: string;
   module: "fag" | "norsk" | "matematikk";
@@ -99,6 +147,7 @@ export type MaterialKind =
   | "presentation"
   | "source_task"
   | "differentiated"
+  | "compendium"
   | "other";
 
 export interface YearPlanMaterial {
@@ -167,16 +216,187 @@ export interface YearPlanGenerateInput {
   use_ai: boolean;
 }
 
+export type CompendiumKind =
+  | "thematic"
+  | "chronological"
+  | "reference"
+  | "comparative"
+  | "source_collection"
+  | "appendix";
+export type CompendiumStatus = "outline" | "writing" | "review" | "approved" | "archived";
+export type CompendiumChapterStatus =
+  | "planned"
+  | "generated"
+  | "approved"
+  | "needs_revision"
+  | "generation_incomplete"
+  | "parse_failure"
+  | "language_quality_failed"
+  | "source_grounding_failed"
+  | "verification_failed";
+export type CompendiumImageMode = "none" | "commons" | "ai";
+
+export interface CompendiumSource {
+  title: string;
+  url: string;
+  publisher: string;
+  origin: "teacher" | "grounding" | "model";
+  fetch_status: "provided" | "grounded" | "model_reported" | "fetched" | "source_unavailable";
+}
+
+export interface ScopeContract {
+  reference_date: string;
+  geography: string;
+  inclusion_criteria: string[];
+  exclusions: string[];
+  completeness_label: "complete" | "documented" | "selected";
+  completeness_note: string;
+}
+
+export interface CompendiumChapter {
+  id: string;
+  order: number;
+  title: string;
+  purpose: string;
+  guiding_questions: string[];
+  content_markdown: string;
+  key_facts: string[];
+  glossary: string[];
+  sources: CompendiumSource[];
+  verification_notes: string[];
+  truth_passport: TruthPassport | null;
+  revision_summary: string[];
+  previous_content_markdown: string;
+  revision_count: number;
+  status: CompendiumChapterStatus;
+  updated_at: string;
+}
+
+export interface Compendium {
+  id: string;
+  title: string;
+  topic: string;
+  subject: string;
+  level: string;
+  kind: CompendiumKind;
+  purpose: string;
+  audience: string;
+  target_pages: number;
+  competency_goals: string[];
+  source_brief: string;
+  scope_contract: ScopeContract;
+  chapters: CompendiumChapter[];
+  include_timeline: boolean;
+  include_tables: boolean;
+  include_glossary: boolean;
+  include_reflection_tasks: boolean;
+  image_mode: CompendiumImageMode;
+  year_plan_id: string | null;
+  period_ids: string[];
+  planning_source: "ai" | "fallback" | "manual";
+  status: CompendiumStatus;
+  pdf_filename: string;
+  pdf_size_bytes: number;
+  docx_filename: string;
+  docx_size_bytes: number;
+  artifact_version: number;
+  approved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompendiumPlanInput {
+  title?: string;
+  topic: string;
+  subject: string;
+  level: string;
+  kind: CompendiumKind;
+  purpose: string;
+  audience: string;
+  target_pages: number;
+  chapter_count: number;
+  competency_goals: string[];
+  source_brief: string;
+  include_timeline: boolean;
+  include_tables: boolean;
+  include_glossary: boolean;
+  include_reflection_tasks: boolean;
+  image_mode: CompendiumImageMode;
+  year_plan_id?: string | null;
+  period_ids: string[];
+  use_ai: boolean;
+}
+
 const baseUrl = () => serviceBackendUrl(undefined, "api/platform");
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl()}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
+export class PlatformApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly requestId: string;
+  readonly retryable: boolean;
+
+  constructor(message: string, details: { status: number; code?: string; requestId?: string; retryable?: boolean }) {
+    super(message);
+    this.name = "PlatformApiError";
+    this.status = details.status;
+    this.code = details.code || "platform_error";
+    this.requestId = details.requestId || "";
+    this.retryable = Boolean(details.retryable);
+  }
+}
+
+function validationDetail(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => (item && typeof item === "object" && "msg" in item ? String(item.msg) : ""))
+      .filter(Boolean)
+      .join("; ");
+  }
+  return "";
+}
+
+function friendlyPlatformError(status: number, detail: string): { message: string; code: string; retryable: boolean } {
+  if (detail && status !== 500) return { message: detail, code: `http_${status}`, retryable: status === 429 || status >= 500 };
+  if (status === 401 || status === 403) return { message: "Du mangler tilgang til denne funksjonen. Kontroller innlogging eller API-oppsett.", code: "access_denied", retryable: false };
+  if (status === 404) return { message: "Fant ikke innholdet. Last siden på nytt og prøv igjen.", code: "not_found", retryable: false };
+  if (status === 409) return { message: detail || "Handlingen kan ikke utføres ennå. Følg kontrollpunktene på siden først.", code: "conflict", retryable: false };
+  if (status === 422) return { message: "Noen felt er ugyldige eller mangler. Kontroller skjemaet og prøv igjen.", code: "validation", retryable: false };
+  if (status === 429) return { message: "Tjenesten har mange forespørsler akkurat nå. Vent litt og prøv igjen.", code: "rate_limited", retryable: true };
+  if (status >= 500) return { message: "Serveren klarte ikke å fullføre handlingen. Prøv igjen om litt.", code: "server_error", retryable: true };
+  return { message: detail || `Plattformfeil (${status})`, code: `http_${status}`, retryable: false };
+}
+
+async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 150_000): Promise<T> {
+  let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    response = await fetch(`${baseUrl()}${path}`, {
+      ...init,
+      signal: init?.signal || controller.signal,
+      headers: { "Content-Type": "application/json", ...init?.headers },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new PlatformApiError(
+        "Handlingen tok for lang tid og ble avbrutt. Kapittelet er ikke endret; prøv igjen.",
+        { status: 408, code: "request_timeout", retryable: true },
+      );
+    }
+    throw new PlatformApiError("Fikk ikke kontakt med serveren. Kontroller nettverket og prøv igjen.", {
+      status: 0,
+      code: "network_error",
+      retryable: true,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(typeof body.detail === "string" ? body.detail : `Plattformfeil (${response.status})`);
+    const friendly = friendlyPlatformError(response.status, validationDetail(body.detail));
+    const requestId = response.headers.get("x-request-id") || (typeof body.request_id === "string" ? body.request_id : "");
+    const suffix = requestId ? ` (sporings-ID: ${requestId})` : "";
+    throw new PlatformApiError(`${friendly.message}${suffix}`, { status: response.status, code: friendly.code, requestId, retryable: friendly.retryable });
   }
   return response.json() as Promise<T>;
 }
@@ -267,6 +487,50 @@ export const updateYearPlanMaterial = (
 
 export const yearPlanMaterialDownloadUrl = (planId: string, materialId: string) =>
   `${baseUrl()}/year-plans/${encodeURIComponent(planId)}/materials/${encodeURIComponent(materialId)}/download`;
+
+export const listCompendia = (limit = 50) =>
+  requestJson<Compendium[]>(`/compendia?limit=${limit}`);
+export const getCompendium = (id: string) =>
+  requestJson<Compendium>(`/compendia/${encodeURIComponent(id)}`);
+export const createCompendiumOutline = (input: CompendiumPlanInput) =>
+  requestJson<Compendium>("/compendia/outline", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+export const updateCompendium = (id: string, input: Partial<Compendium>) =>
+  requestJson<Compendium>(`/compendia/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+export const updateCompendiumChapter = (
+  compendiumId: string,
+  chapterId: string,
+  input: Partial<CompendiumChapter>,
+) =>
+  requestJson<Compendium>(
+    `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+export const generateCompendiumChapter = (compendiumId: string, chapterId: string) =>
+  requestJson<Compendium>(
+    `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}/generate`,
+    { method: "POST" },
+  );
+export const repairCompendiumChapter = (compendiumId: string, chapterId: string) =>
+  requestJson<Compendium>(
+    `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}/repair`,
+    { method: "POST" },
+  );
+export const compileCompendium = (compendiumId: string) =>
+  requestJson<Compendium>(`/compendia/${encodeURIComponent(compendiumId)}/compile`, {
+    method: "POST",
+  });
+export const approveCompendium = (compendiumId: string) =>
+  requestJson<Compendium>(`/compendia/${encodeURIComponent(compendiumId)}/approve`, {
+    method: "POST",
+  });
+export const compendiumDownloadUrl = (compendiumId: string, artifactType: "pdf" | "docx") =>
+  `${baseUrl()}/compendia/${encodeURIComponent(compendiumId)}/download/${artifactType}`;
 
 export async function downloadThemePackGuide(projectId: string): Promise<void> {
   const response = await fetch(`${baseUrl()}/theme-packs/${encodeURIComponent(projectId)}/teacher-guide`);

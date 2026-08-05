@@ -32,7 +32,11 @@ import structlog
 from langgraph.graph import END, StateGraph
 
 from app.config import get_config
-from app.latex.preamble import inject_verification_banner, wrap_with_style
+from app.latex.preamble import (
+    TEXTBOOK_MATERIAL_TYPES,
+    inject_verification_banner,
+    wrap_with_style,
+)
 from app.models.state import (
     GenerationRequest,
     PipelineState,
@@ -152,9 +156,9 @@ def should_retry_content(
     state: PipelineState,
 ) -> Literal["author", "tikz_validator"]:
     """
-    After content quality gate: retry author if kapittel fails standards.
+    After content quality gate: retry author if a textbook product fails standards.
     """
-    if state.request.material_type != "kapittel":
+    if state.request.material_type not in TEXTBOOK_MATERIAL_TYPES:
         if not state.content_quality.passed:
             state.warning_reason = (
                 f"{state.warning_reason},content_quality"

@@ -1,0 +1,15 @@
+{
+  "chapters": [
+    {"order": 1, "focus": "årsaker og samfunnsforhold"},
+    {"order": 2, "focus": "forløp, aktører og vendepunkter"},
+    {"order": 3, "focus": "konsekvenser, perspektiver og arv"}
+  ],
+  "required_sections": ["innledning", "hovedframstilling", "styrende spørsmål", "kilder"],
+  "required_source_status": "teacher URLs must be surfaced as provided and separately verified",
+  "minimum_language": [
+    "no incomplete sentences",
+    "no empty headings",
+    "no placeholder fragments",
+    "no HTML markup"
+  ]
+}

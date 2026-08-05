@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, BookOpenText, Calculator, CalendarRange, Languages, PackagePlus, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowRight, BookCopy, BookOpenText, Calculator, CalendarRange, Languages, PackagePlus, ShieldCheck, Sparkles } from "lucide-react";
 import { platformTools } from "@/components/platform-switcher";
 
 const cardStyles = [
@@ -52,6 +52,21 @@ export default function HomePage() {
           <div><div className="text-xs font-medium uppercase tracking-wide text-accent-orange">Ny superapp-funksjon</div><h2 className="mt-1 text-lg font-semibold">Lag én sammenhengende temapakke</h2><p className="mt-1 text-sm text-text-secondary">Planlegg fagtekst, norsktilpasning og verifiserte matematikkoppgaver som ett prosjekt.</p></div>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium">Start temapakke <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" /></span>
+      </Link>
+
+      <Link
+        href="/compendia"
+        className="group mt-4 flex flex-col items-start justify-between gap-5 overflow-hidden rounded-2xl border border-accent-teal/25 bg-gradient-to-r from-accent-teal/10 via-surface to-accent-blue/10 p-6 shadow-soft-sm transition hover:border-accent-teal/50 sm:flex-row sm:items-center"
+      >
+        <div className="flex items-start gap-4">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-teal/15 text-accent-teal"><BookCopy className="h-5 w-5" /></div>
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wide text-accent-teal">Bygg lærerens fagbibliotek</div>
+            <h2 className="mt-1 text-lg font-semibold">Kompendier og fordypning</h2>
+            <p className="mt-1 text-sm text-text-secondary">Godkjenn disposisjonen først, produser ett kontrollert kapittel om gangen og eksporter PDF og Word.</p>
+          </div>
+        </div>
+        <span className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium">Åpne fagbiblioteket <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" /></span>
       </Link>
 
       <section className="mt-6 grid gap-4 md:grid-cols-3" aria-label="Arbeidsverktøy">

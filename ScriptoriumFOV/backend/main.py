@@ -20,7 +20,13 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from Skoleverksted.backend.platform.images import ImageResult, normalize_image_mode, resolve_image
+from Skoleverksted.backend.platform.images import (
+    ImageResult,
+    discover_commons_images,
+    is_trusted_commons_image_url,
+    normalize_image_mode,
+    resolve_image,
+)
 from Skoleverksted.backend.platform.queue import get_durable_job_queue
 
 if __package__:
@@ -418,6 +424,24 @@ class PreviewPDFRequest(BaseModel):
     options: dict[str, bool]
     accessibility: Optional[dict] = None
 
+
+class ImageCandidateResponse(BaseModel):
+    """A licence-checked Commons candidate shown for teacher review."""
+    image_url: str
+    thumbnail_url: str
+    source_page_url: str
+    title: str
+    description: str = ""
+    creator: str = ""
+    license: str
+    credit: str
+    caption: str = ""
+    alt_text: str = ""
+    rationale: str = ""
+    recommended: bool = False
+    review_status: Literal["recommended", "teacher_review"] = "teacher_review"
+
+
 class LessonResponse(BaseModel):
     """Response model for lesson content (JSON format)."""
     topic: str
@@ -430,9 +454,11 @@ class LessonResponse(BaseModel):
     image_caption: str = ""
     image_credit: str = ""
     image_source_page: Optional[str] = None
+    image_candidates: list[ImageCandidateResponse] = Field(default_factory=list)
     language_exercises: Optional[dict] = None
     source_grounded: bool = False
     source_name: Optional[str] = None
+    truth_passport: Optional[dict] = None
     prompt_version: Optional[str] = None
 
 
@@ -615,7 +641,7 @@ def generate_lesson_json_background(
 ):
     """Background task to generate JSON preview."""
     try:
-        update_progress(generation_id, 1, 2, "Skriver pedagogisk tekst...")
+        update_progress(generation_id, 1, 3, "Skriver pedagogisk tekst...")
         
         content = generate_lesson_content(
             topic=lesson_request.topic,
@@ -629,18 +655,30 @@ def generate_lesson_json_background(
             source_name=lesson_request.source_name,
         )
         
-        image_asset: Optional[ImageResult] = None
+        image_candidates: list[dict] = []
+        selected_candidate: Optional[dict] = None
         if normalize_image_mode(lesson_request.image_mode) == "commons":
-            update_progress(generation_id, 2, 3, "Bildecrewet kvalitetssikrer et fritt bilde...")
-            image_asset = resolve_image(
-                "commons",
+            update_progress(
+                generation_id,
+                2,
+                3,
+                "Bildecrewet finner og rangerer frie bildeforslag...",
+            )
+            image_candidates = discover_commons_images(
                 topic=lesson_request.topic,
                 subject=lesson_request.subject,
                 level=lesson_request.level,
                 text=content.get("text", ""),
             )
+            selected_candidate = next(
+                (
+                    candidate
+                    for candidate in image_candidates
+                    if candidate.get("recommended") is True
+                ),
+                None,
+            )
 
-        update_progress(generation_id, 2, 2, "Forhåndsvisning er klar!")
         merge_progress(
             generation_id,
             json_data={
@@ -649,20 +687,36 @@ def generate_lesson_json_background(
                 "level": content["level"],
                 "text": content["text"],
                 "worksheet": content["worksheet"],
-                "image_url": image_asset.image_url if image_asset else None,
-                "image_mode": lesson_request.image_mode,
-                "image_caption": image_asset.caption if image_asset else "",
-                "image_credit": image_asset.credit if image_asset else "",
-                "image_source_page": image_asset.source_page_url if image_asset else None,
+                "image_url": selected_candidate.get("image_url") if selected_candidate else None,
+                # If the critic recommends nothing, the PDF must remain without
+                # an image until the teacher deliberately selects a candidate.
+                "image_mode": (
+                    "commons"
+                    if selected_candidate
+                    else "none"
+                    if normalize_image_mode(lesson_request.image_mode) == "commons"
+                    else lesson_request.image_mode
+                ),
+                "image_caption": selected_candidate.get("caption", "") if selected_candidate else "",
+                "image_credit": selected_candidate.get("credit", "") if selected_candidate else "",
+                "image_source_page": (
+                    selected_candidate.get("source_page_url") if selected_candidate else None
+                ),
+                "image_candidates": image_candidates,
                 "language_exercises": content.get("language_exercises"),
                 "source_grounded": content.get("source_grounded", False),
                 "source_name": content.get("source_name"),
+                "truth_passport": content.get("truth_passport"),
                 "prompt_version": content.get("prompt_version"),
             },
         )
+        # Publish the completed step only after json_data is persisted. This
+        # prevents clients from observing "ready" in the tiny interval before
+        # the preview payload exists.
+        update_progress(generation_id, 3, 3, "Forhåndsvisning er klar!")
 
     except Exception as e:
-        update_progress(generation_id, -1, 2, _public_progress_error(e))
+        update_progress(generation_id, -1, 3, _public_progress_error(e))
 
 @app.post("/generate-lesson-json")
 @limiter.limit("5/minute")
@@ -679,7 +733,7 @@ async def generate_lesson_json(
         JSON with generation_id for tracking progress via /generation-status/{id}
     """
     generation_id = str(uuid.uuid4())
-    update_progress(generation_id, 0, 2, "Starter forhåndsvisning...")
+    update_progress(generation_id, 0, 3, "Starter forhåndsvisning...")
     background_tasks.add_task(
         _run_durable_fov_job,
         generation_id, "preview", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_json_background,
@@ -720,8 +774,11 @@ def generate_pdf_from_json_background(
 
         # A Commons image may already have been selected during preview.
         if not processed_image_path and request.image_url:
-            content_dict = {"image_url": request.image_url}
-            processed_image_path = _process_image_for_content(content_dict)
+            if not is_trusted_commons_image_url(request.image_url):
+                logger.warning("Avviser ikke-verifisert Commons-URL fra forhåndsvisningen")
+            else:
+                content_dict = {"image_url": request.image_url}
+                processed_image_path = _process_image_for_content(content_dict)
         elif not processed_image_path and normalize_image_mode(request.image_mode) != "none":
             processed_image_path, image_asset, image_caption, image_credit = _materialize_pedagogical_image(
                 request,

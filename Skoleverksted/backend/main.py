@@ -8,10 +8,12 @@ checks and documentation one public backend address.
 from __future__ import annotations
 
 import sys
+import logging
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -33,6 +35,7 @@ from app.main import app as matematikk_app  # noqa: E402
 
 
 DOMAIN_APPS = (fag_app, norsk_app, matematikk_app)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -60,6 +63,28 @@ app.add_middleware(
 )
 app.add_middleware(JobTelemetryMiddleware)
 app.include_router(platform_router, prefix="/api/platform")
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Give every teacher-facing request a safe correlation id."""
+    request_id = request.headers.get("x-request-id", "").strip() or uuid4().hex[:12]
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unhandled request failure request_id=%s path=%s", request_id, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Serveren fikk en uventet feil. Prøv igjen om litt.",
+                "code": "internal_error",
+                "request_id": request_id,
+                "retryable": True,
+            },
+            headers={"X-Request-ID": request_id},
+        )
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
 @app.get("/", tags=["platform"])

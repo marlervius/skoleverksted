@@ -1,5 +1,5 @@
 """
-Content quality gate — validates kapittel completeness before LaTeX compile.
+Content quality gate — validates textbook completeness before LaTeX compile.
 
 Retries the author when coverage, examples, graphs, or off-topic guards fail.
 """
@@ -10,6 +10,7 @@ from datetime import datetime
 
 import structlog
 
+from app.latex.preamble import TEXTBOOK_MATERIAL_TYPES
 from app.models.state import AgentRole, AgentStep, PipelineState
 from app.pipeline.routing_helpers import can_retry_content_quality
 from app.verification.content_quality import evaluate_content_quality
@@ -39,7 +40,7 @@ def run_content_quality(state: PipelineState) -> PipelineState:
     try:
         report = evaluate_content_quality(body, state.request)
 
-        if state.request.material_type == "kapittel":
+        if state.request.material_type in TEXTBOOK_MATERIAL_TYPES:
             from app.verification.semantic_quality import evaluate_semantic_quality
 
             sem_score, sem_issues = evaluate_semantic_quality(body, state.request)

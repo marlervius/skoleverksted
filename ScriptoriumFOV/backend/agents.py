@@ -11,10 +11,10 @@ from crewai import Agent, Task, Crew, Process, LLM
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt
 
 if __package__:
-    from .config import CACHE_TTL_SECONDS, GOOGLE_MODEL
+    from .config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
     from .errors import GeminiQuotaExceededError
 else:
-    from config import CACHE_TTL_SECONDS, GOOGLE_MODEL
+    from config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
     from errors import GeminiQuotaExceededError
 
 logger = logging.getLogger(__name__)
@@ -527,9 +527,8 @@ def _init_agents() -> None:
     if _initialized:
         return
 
-    from config import GOOGLE_API_KEY, GOOGLE_MODEL as _model_default
     google_api_key = GOOGLE_API_KEY
-    model_name = _model_default
+    model_name = GOOGLE_MODEL
 
     if not google_api_key:
         raise RuntimeError(
@@ -1519,6 +1518,48 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
     if series and series.get("series_theme"):
         series_header = f"Leksjon {series.get('lesson_number', 1)} av {series.get('total_lessons', 1)} · {series.get('series_theme', '')}"
 
+    # Shared evidence-first audit. Text and worksheet are checked together so
+    # an unsupported claim cannot survive merely because it appears in a task.
+    from Skoleverksted.backend.platform.truth import audit_truth
+
+    truth_separator = "\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n"
+    language_separator = "\n\n<<<SKOLEVERKSTED_SPRÅKOPPGAVER>>>\n\n"
+    language_payload = json.dumps(language_exercises, ensure_ascii=False)
+    truth_audit = audit_truth(
+        content=(
+            f"{text_output}{truth_separator}{worksheet_output}"
+            f"{language_separator}{language_payload}"
+        ),
+        topic=topic,
+        subject=subject,
+        level=level,
+    )
+    if truth_separator in truth_audit.content and language_separator in truth_audit.content:
+        text_output, remainder = truth_audit.content.split(truth_separator, 1)
+        worksheet_output, revised_language = remainder.split(language_separator, 1)
+        try:
+            parsed_language = json.loads(revised_language)
+            if parsed_language is None or isinstance(parsed_language, dict):
+                language_exercises = parsed_language
+            else:
+                raise ValueError("språkoppgavene er ikke et objekt")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            truth_audit.passport.status = "needs_review"
+            truth_audit.passport.limitations.append(
+                "Kontrollerte språkoppgaver kunne ikke valideres etter retting."
+            )
+    else:
+        truth_audit.passport.status = "needs_review"
+        truth_audit.passport.limitations.append(
+            "Kontrollert innhold kunne ikke deles trygt tilbake i dokumentfeltene."
+        )
+    if truth_audit.passport.status != "verified":
+        text_output = (
+            "FAKTASTATUS: Faktapasset er ikke grønt. Innholdet må kontrolleres "
+            "av lærer før det deles med elever.\n\n"
+            f"{text_output}"
+        )
+
     result_content = {
         "topic": topic,
         "subject": subject,
@@ -1531,6 +1572,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
         "series_header": series_header,
         "source_grounded": bool(source_text and source_text.strip()),
         "source_name": source_name if source_text else None,
+        "truth_passport": truth_audit.passport.model_dump(mode="json"),
         "prompt_version": os.getenv("PROMPT_VERSION", "norsk-v2-grounded"),
     }
 

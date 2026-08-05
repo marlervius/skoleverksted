@@ -24,6 +24,7 @@ MaterialKind = Literal[
     "presentation",
     "source_task",
     "differentiated",
+    "compendium",
     "other",
 ]
 
@@ -107,6 +108,64 @@ class QualityPassportRequest(BaseModel):
     math_incorrect: int | None = Field(default=None, ge=0)
     math_unparseable: int | None = Field(default=None, ge=0)
     prompt_version: str = Field(default="unknown", max_length=80)
+
+
+TruthClaimStatus = Literal[
+    "verified",
+    "interpretation",
+    "disputed",
+    "time_sensitive",
+    "unsupported",
+    "verification_failed",
+    "source_unavailable",
+    "not_evaluated",
+]
+TruthAction = Literal["keep", "qualify", "remove"]
+
+
+class TruthSource(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    url: str = Field(min_length=8, max_length=1000)
+    publisher: str = Field(default="", max_length=180)
+    source_tier: Literal["primary", "authoritative", "editorial", "other"] = "other"
+    retrieved_at: str = Field(default_factory=utc_now)
+    origin: Literal["teacher", "grounding", "model"] = "model"
+    fetch_status: Literal["provided", "grounded", "model_reported", "fetched", "source_unavailable"] = "model_reported"
+
+
+class TruthClaim(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex[:12])
+    claim: str = Field(min_length=1, max_length=1200)
+    exact_text: str = Field(default="", max_length=1200)
+    status: TruthClaimStatus
+    action: TruthAction = "keep"
+    replacement: str = Field(default="", max_length=1600)
+    source_urls: list[str] = Field(default_factory=list, max_length=8)
+    evidence: str = Field(default="", max_length=1200)
+    confidence: float = Field(default=0, ge=0, le=1)
+
+
+class TruthPassport(BaseModel):
+    version: str = "1.0"
+    generated_at: str = Field(default_factory=utc_now)
+    status: Literal[
+        "verified",
+        "needs_review",
+        "blocked",
+        "verification_failed",
+        "source_unavailable",
+        "not_evaluated",
+    ]
+    topic: str = Field(default="", max_length=300)
+    subject: str = Field(default="", max_length=120)
+    coverage_percent: int = Field(default=0, ge=0, le=100)
+    verified_claims: int = Field(default=0, ge=0)
+    total_claims: int = Field(default=0, ge=0)
+    claims: list[TruthClaim] = Field(default_factory=list, max_length=120)
+    sources: list[TruthSource] = Field(default_factory=list, max_length=50)
+    removed_claims: list[str] = Field(default_factory=list, max_length=50)
+    limitations: list[str] = Field(default_factory=list, max_length=30)
+    summary: str = Field(default="", max_length=1200)
 
 
 class ThemePackRequest(BaseModel):
@@ -264,3 +323,156 @@ class YearPlanMaterialUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=2, max_length=180)
     status: MaterialStatus | None = None
     notes: str | None = Field(default=None, max_length=1200)
+
+
+CompendiumType = Literal[
+    "thematic",
+    "chronological",
+    "reference",
+    "comparative",
+    "source_collection",
+    "appendix",
+]
+CompendiumStatus = Literal["outline", "writing", "review", "approved", "archived"]
+CompendiumChapterStatus = Literal[
+    "planned",
+    "generated",
+    "approved",
+    "needs_revision",
+    "generation_incomplete",
+    "parse_failure",
+    "language_quality_failed",
+    "source_grounding_failed",
+    "verification_failed",
+]
+CompendiumImageMode = Literal["none", "commons", "ai"]
+
+
+class CompendiumSource(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    url: str = Field(default="", max_length=1000)
+    publisher: str = Field(default="", max_length=180)
+    origin: Literal["teacher", "grounding", "model"] = "model"
+    fetch_status: Literal["provided", "grounded", "model_reported", "fetched", "source_unavailable"] = "model_reported"
+
+
+class ScopeContract(BaseModel):
+    reference_date: str = Field(default="", max_length=160)
+    geography: str = Field(default="", max_length=300)
+    inclusion_criteria: list[str] = Field(default_factory=list, max_length=20)
+    exclusions: list[str] = Field(default_factory=list, max_length=20)
+    completeness_label: Literal["complete", "documented", "selected"] = "selected"
+    completeness_note: str = Field(default="", max_length=1500)
+
+
+class CompendiumChapter(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    order: int = Field(default=0, ge=0, le=100)
+    title: str = Field(min_length=2, max_length=180)
+    purpose: str = Field(default="", max_length=1200)
+    guiding_questions: list[str] = Field(default_factory=list, max_length=12)
+    content_markdown: str = Field(default="", max_length=80_000)
+    key_facts: list[str] = Field(default_factory=list, max_length=30)
+    glossary: list[str] = Field(default_factory=list, max_length=30)
+    sources: list[CompendiumSource] = Field(default_factory=list, max_length=50)
+    verification_notes: list[str] = Field(default_factory=list, max_length=30)
+    truth_passport: TruthPassport | None = None
+    revision_summary: list[str] = Field(default_factory=list, max_length=30)
+    previous_content_markdown: str = Field(default="", max_length=80_000)
+    revision_count: int = Field(default=0, ge=0, le=1000)
+    status: CompendiumChapterStatus = "planned"
+    updated_at: str = Field(default_factory=utc_now)
+
+
+class CompendiumPlanRequest(BaseModel):
+    title: str = Field(default="", max_length=180)
+    topic: str = Field(min_length=2, max_length=300)
+    subject: str = Field(default="Historie", min_length=2, max_length=120)
+    level: str = Field(default="VG2", min_length=1, max_length=80)
+    kind: CompendiumType = "thematic"
+    purpose: str = Field(default="", max_length=4000)
+    audience: str = Field(default="Elever", max_length=180)
+    target_pages: int = Field(default=16, ge=4, le=60)
+    chapter_count: int = Field(default=6, ge=2, le=14)
+    competency_goals: list[str] = Field(default_factory=list, max_length=40)
+    source_brief: str = Field(default="", max_length=40_000)
+    include_timeline: bool = True
+    include_tables: bool = True
+    include_glossary: bool = True
+    include_reflection_tasks: bool = True
+    image_mode: CompendiumImageMode = "none"
+    year_plan_id: str | None = Field(default=None, max_length=64)
+    period_ids: list[str] = Field(default_factory=list, max_length=10)
+    use_ai: bool = True
+
+
+class CompendiumCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=180)
+    topic: str = Field(min_length=2, max_length=300)
+    subject: str = Field(default="Historie", max_length=120)
+    level: str = Field(default="VG2", max_length=80)
+    kind: CompendiumType = "thematic"
+    purpose: str = Field(default="", max_length=4000)
+    audience: str = Field(default="Elever", max_length=180)
+    target_pages: int = Field(default=16, ge=4, le=60)
+    competency_goals: list[str] = Field(default_factory=list, max_length=40)
+    source_brief: str = Field(default="", max_length=40_000)
+    scope_contract: ScopeContract = Field(default_factory=ScopeContract)
+    chapters: list[CompendiumChapter] = Field(default_factory=list, max_length=20)
+    include_timeline: bool = True
+    include_tables: bool = True
+    include_glossary: bool = True
+    include_reflection_tasks: bool = True
+    image_mode: CompendiumImageMode = "none"
+    year_plan_id: str | None = Field(default=None, max_length=64)
+    period_ids: list[str] = Field(default_factory=list, max_length=10)
+    planning_source: Literal["ai", "fallback", "manual"] = "manual"
+
+
+class Compendium(CompendiumCreate):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    status: CompendiumStatus = "outline"
+    pdf_filename: str = Field(default="", max_length=240)
+    pdf_size_bytes: int = Field(default=0, ge=0, le=100_000_000)
+    docx_filename: str = Field(default="", max_length=240)
+    docx_size_bytes: int = Field(default=0, ge=0, le=100_000_000)
+    artifact_version: int = Field(default=0, ge=0)
+    approved_at: str | None = None
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
+
+
+class CompendiumUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=180)
+    purpose: str | None = Field(default=None, max_length=4000)
+    audience: str | None = Field(default=None, max_length=180)
+    target_pages: int | None = Field(default=None, ge=4, le=60)
+    competency_goals: list[str] | None = Field(default=None, max_length=40)
+    source_brief: str | None = Field(default=None, max_length=40_000)
+    scope_contract: ScopeContract | None = None
+    include_timeline: bool | None = None
+    include_tables: bool | None = None
+    include_glossary: bool | None = None
+    include_reflection_tasks: bool | None = None
+    image_mode: CompendiumImageMode | None = None
+    year_plan_id: str | None = Field(default=None, max_length=64)
+    period_ids: list[str] | None = Field(default=None, max_length=10)
+    status: CompendiumStatus | None = None
+
+
+class CompendiumChapterUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=180)
+    purpose: str | None = Field(default=None, max_length=1200)
+    guiding_questions: list[str] | None = Field(default=None, max_length=12)
+    content_markdown: str | None = Field(default=None, max_length=80_000)
+    key_facts: list[str] | None = Field(default=None, max_length=30)
+    glossary: list[str] | None = Field(default=None, max_length=30)
+    sources: list[CompendiumSource] | None = Field(default=None, max_length=50)
+    verification_notes: list[str] | None = Field(default=None, max_length=30)
+    status: CompendiumChapterStatus | None = None
+
+
+class CompendiumCompileResult(BaseModel):
+    compendium: Compendium
+    pdf_download_url: str
+    docx_download_url: str

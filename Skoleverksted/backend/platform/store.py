@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from .models import (
+    Compendium,
+    CompendiumChapter,
+    CompendiumCreate,
+    CompendiumUpdate,
     Feedback,
     FeedbackCreate,
     Job,
@@ -35,6 +39,30 @@ def _default_db_path() -> Path:
     return (output_dir / "platform" / "skoleverksted.sqlite3").resolve()
 
 
+class _PostgresConnection:
+    """Small compatibility wrapper so the store keeps one SQL surface."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def execute(self, query: str, params: Any = ()):
+        return self._connection.execute(query.replace("?", "%s"), params)
+
+    def executescript(self, script: str) -> None:
+        for statement in script.split(";"):
+            if statement.strip():
+                self.execute(statement)
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
+    def close(self) -> None:
+        self._connection.close()
+
+
 class PlatformStore:
     """Small durable platform store, deliberately independent of authentication.
 
@@ -44,6 +72,8 @@ class PlatformStore:
     """
 
     def __init__(self, path: str | Path | None = None, files_dir: str | Path | None = None):
+        self.database_url = os.getenv("DATABASE_URL", "").strip() if path is None else ""
+        self.uses_postgres = self.database_url.startswith(("postgres://", "postgresql://"))
         self.path = Path(path) if path is not None else _default_db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if files_dir is not None:
@@ -53,13 +83,29 @@ class PlatformStore:
         else:
             self.files_dir = Path(os.getenv("OUTPUT_DIR", "./output")) / "year-plans"
         self.files_dir.mkdir(parents=True, exist_ok=True)
+        self.compendia_dir = (
+            self.path.parent / "compendium-files"
+            if path is not None
+            else Path(os.getenv("OUTPUT_DIR", "./output")) / "compendia"
+        )
+        self.compendia_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=5)
+        if self.uses_postgres:
+            try:
+                import psycopg  # type: ignore
+                from psycopg.rows import dict_row  # type: ignore
+            except ImportError as exc:  # pragma: no cover - deployment configuration
+                raise RuntimeError("DATABASE_URL er satt, men psycopg er ikke installert.") from exc
+            connection = psycopg.connect(self.database_url, connect_timeout=8, row_factory=dict_row)
+            return _PostgresConnection(connection)  # type: ignore[return-value]
+        conn = sqlite3.connect(self.path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
@@ -119,6 +165,18 @@ class PlatformStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_year_plans_updated ON year_plans(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_year_plans_subject ON year_plans(subject,level,school_year);
+                CREATE TABLE IF NOT EXISTS compendia (
+                    id TEXT PRIMARY KEY,
+                    subject TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_compendia_updated ON compendia(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_compendia_subject ON compendia(subject,level,kind);
                 """
             )
 
@@ -129,7 +187,11 @@ class PlatformStore:
     def health(self) -> dict[str, Any]:
         with self._connection() as conn:
             conn.execute("SELECT 1").fetchone()
-        return {"status": "healthy", "backend": "sqlite", "path": str(self.path)}
+        return {
+            "status": "healthy",
+            "backend": "postgres" if self.uses_postgres else "sqlite",
+            "path": "DATABASE_URL" if self.uses_postgres else str(self.path),
+        }
 
     def create_project(self, request: ProjectCreate, *, status: str = "draft") -> Project:
         project = Project(**request.model_dump(), status=status)
@@ -472,6 +534,174 @@ class PlatformStore:
         payload = plan.model_dump()
         payload["updated_at"] = utc_now()
         return self._save_year_plan(YearPlan.model_validate(payload)), updated
+
+    def create_compendium(self, request: CompendiumCreate) -> Compendium:
+        compendium = Compendium(**request.model_dump())
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """INSERT INTO compendia(
+                       id,subject,level,kind,status,payload,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    compendium.id,
+                    compendium.subject,
+                    compendium.level,
+                    compendium.kind,
+                    compendium.status,
+                    self._json(compendium.model_dump()),
+                    compendium.created_at,
+                    compendium.updated_at,
+                ),
+            )
+        return compendium
+
+    def get_compendium(self, compendium_id: str) -> Compendium | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT payload FROM compendia WHERE id=?",
+                (compendium_id,),
+            ).fetchone()
+        return Compendium.model_validate_json(row["payload"]) if row else None
+
+    def list_compendia(
+        self,
+        *,
+        limit: int = 50,
+        status: str | None = None,
+    ) -> list[Compendium]:
+        query = "SELECT payload FROM compendia"
+        params: list[Any] = []
+        if status:
+            query += " WHERE status=?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [Compendium.model_validate_json(row["payload"]) for row in rows]
+
+    def _save_compendium(self, compendium: Compendium) -> Compendium:
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """UPDATE compendia
+                   SET subject=?,level=?,kind=?,status=?,payload=?,updated_at=?
+                   WHERE id=?""",
+                (
+                    compendium.subject,
+                    compendium.level,
+                    compendium.kind,
+                    compendium.status,
+                    self._json(compendium.model_dump()),
+                    compendium.updated_at,
+                    compendium.id,
+                ),
+            )
+        return compendium
+
+    def update_compendium(
+        self,
+        compendium_id: str,
+        request: CompendiumUpdate,
+    ) -> Compendium | None:
+        current = self.get_compendium(compendium_id)
+        if current is None:
+            return None
+        payload = current.model_dump()
+        payload.update(request.model_dump(exclude_none=True))
+        payload["updated_at"] = utc_now()
+        return self._save_compendium(Compendium.model_validate(payload))
+
+    def replace_compendium_chapter(
+        self,
+        compendium_id: str,
+        chapter: CompendiumChapter,
+    ) -> Compendium | None:
+        compendium = self.get_compendium(compendium_id)
+        if compendium is None:
+            return None
+        found = False
+        for index, current in enumerate(compendium.chapters):
+            if current.id == chapter.id:
+                if (
+                    current.content_markdown.strip()
+                    and current.content_markdown != chapter.content_markdown
+                ):
+                    chapter.previous_content_markdown = current.content_markdown
+                    chapter.revision_count = current.revision_count + 1
+                else:
+                    chapter.previous_content_markdown = current.previous_content_markdown
+                    chapter.revision_count = current.revision_count
+                compendium.chapters[index] = chapter
+                found = True
+                break
+        if not found:
+            return None
+        if chapter.content_markdown and compendium.status in {"outline", "review", "approved"}:
+            compendium.status = "writing"
+            compendium.approved_at = None
+        compendium.updated_at = utc_now()
+        return self._save_compendium(compendium)
+
+    def store_compendium_artifacts(
+        self,
+        compendium_id: str,
+        *,
+        pdf: bytes,
+        docx: bytes,
+        pdf_filename: str,
+        docx_filename: str,
+    ) -> Compendium | None:
+        if not pdf.startswith(b"%PDF") or not docx.startswith(b"PK"):
+            raise ValueError("Dokumentbyggeren returnerte ugyldige filer.")
+        compendium = self.get_compendium(compendium_id)
+        if compendium is None:
+            return None
+        version = compendium.artifact_version + 1
+        target_dir = self.compendia_dir / compendium.id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        final_pdf = target_dir / f"v{version}.pdf"
+        final_docx = target_dir / f"v{version}.docx"
+        temp_pdf = target_dir / f".v{version}.pdf.tmp"
+        temp_docx = target_dir / f".v{version}.docx.tmp"
+        temp_pdf.write_bytes(pdf)
+        temp_docx.write_bytes(docx)
+        temp_pdf.replace(final_pdf)
+        temp_docx.replace(final_docx)
+        try:
+            compendium.pdf_filename = pdf_filename
+            compendium.pdf_size_bytes = len(pdf)
+            compendium.docx_filename = docx_filename
+            compendium.docx_size_bytes = len(docx)
+            compendium.artifact_version = version
+            compendium.status = "review"
+            compendium.approved_at = None
+            compendium.updated_at = utc_now()
+            return self._save_compendium(compendium)
+        except Exception:
+            final_pdf.unlink(missing_ok=True)
+            final_docx.unlink(missing_ok=True)
+            raise
+
+    def get_compendium_artifact(
+        self,
+        compendium_id: str,
+        artifact_type: str,
+    ) -> tuple[Compendium, Path] | None:
+        compendium = self.get_compendium(compendium_id)
+        if compendium is None or compendium.artifact_version < 1:
+            return None
+        suffix = "pdf" if artifact_type == "pdf" else "docx"
+        path = self.compendia_dir / compendium.id / f"v{compendium.artifact_version}.{suffix}"
+        return (compendium, path) if path.is_file() else None
+
+    def approve_compendium(self, compendium_id: str) -> Compendium | None:
+        compendium = self.get_compendium(compendium_id)
+        if compendium is None:
+            return None
+        compendium.status = "approved"
+        compendium.approved_at = utc_now()
+        compendium.updated_at = compendium.approved_at
+        return self._save_compendium(compendium)
 
 
 _store: PlatformStore | None = None

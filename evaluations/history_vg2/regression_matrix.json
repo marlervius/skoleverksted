@@ -1,0 +1,11 @@
+{
+  "fixtures": [
+    "industrialiseringen_norge",
+    "imperialisme_kolonialisme",
+    "forste_verdenskrig_arsaker",
+    "russiske_revolusjonen",
+    "historisk_kontrovers"
+  ],
+  "not_model_snapshots": true,
+  "checks": ["input_contract", "teacher_url_provenance", "structural_language_gate"]
+}

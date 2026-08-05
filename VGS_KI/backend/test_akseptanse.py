@@ -19,15 +19,15 @@ import sys
 # Windows-konsoller kan stå i cp1252; testnavnene inneholder emoji/spesialtegn.
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from laeringsark_renderer import (
+from VGS_KI.backend.laeringsark_renderer import (
     build_faktarapport_doc,
     build_laeringsark_doc,
     coerce_structured_lesson,
     coerce_structured_rapport,
     parse_oppgaver,
 )
-from pdf_service import compile_typst
-from text_pipeline import (
+from VGS_KI.backend.pdf_service import compile_typst
+from VGS_KI.backend.text_pipeline import (
     extract_pdf_pages,
     find_english_leaks,
     lint_pdf,
