@@ -49,6 +49,17 @@ class Settings(BaseSettings):
     )
     temperature: float = Field(default=0.15, ge=0.0, le=2.0)
     max_retries: int = Field(default=3, ge=1, le=10)
+    max_output_tokens: int = Field(
+        default=32768,
+        ge=1024,
+        le=131072,
+        description=(
+            "Output cap per LLM call. Must clear the largest document we make: a "
+            "kapittel is budgeted at 6000 output tokens and a hefte at 8000, and "
+            "the editor pass re-emits the whole body on top of that. The old 8192 "
+            "sat below that ceiling, so long chapters were cut mid-sentence."
+        ),
+    )
 
     # ---- App ----
     environment: str = Field(
@@ -183,6 +194,7 @@ class LLMProviderConfig:
         self.ollama_base_url = s.ollama_base_url
         self.temperature = s.temperature
         self.max_retries = s.max_retries
+        self.max_output_tokens = s.max_output_tokens
 
 
 class AppConfig:
