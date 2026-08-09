@@ -50,7 +50,11 @@ function repairJob(overrides: Partial<RepairJob> = {}): RepairJob {
     message: "",
     chapter_token: "aaa",
     result_token: "",
+    source_revision: "rev-1",
+    output_revision: "",
     chapter_status: null,
+    repair_summary: null,
+    failure_reason: "",
     attempt: 1,
     cancel_requested: false,
     lease_expires_at: "",
@@ -95,6 +99,12 @@ describe("repair job status", () => {
     expect(view.tone).toBe("busy");
     expect(view.detail).toContain("forlate siden");
     expect(view.canRetry).toBe(false);
+  });
+
+  it("names the concrete repair stages instead of showing only a spinner", () => {
+    expect(repairStatusView(repairJob({ status: "queued" })).label).toBe("Sjekker fakta og kilder");
+    expect(repairStatusView(repairJob({ status: "running" })).label).toContain("plan");
+    expect(repairStatusView(repairJob({ status: "succeeded" })).label).toContain("revisjon");
   });
 
   it("explains that a superseded repair preserved the newer teacher edit", () => {

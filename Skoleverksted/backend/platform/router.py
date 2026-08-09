@@ -114,6 +114,7 @@ def update_compendium_chapter(
         and changes["content_markdown"] != chapter.content_markdown
     ):
         payload["revision_summary"] = []
+        payload["repair_summary"] = None
         payload["truth_passport"] = None
     requested_status = changes.get("status")
     passport = payload.get("truth_passport")
@@ -124,7 +125,17 @@ def update_compendium_chapter(
         if isinstance(passport, dict)
         else None
     )
-    if requested_status == "approved" and passport_status != "verified":
+    passport_revision = (
+        passport.content_revision
+        if hasattr(passport, "content_revision")
+        else passport.get("content_revision")
+        if isinstance(passport, dict)
+        else ""
+    )
+    if requested_status == "approved" and (
+        passport_status != "verified"
+        or passport_revision != chapter.content_revision
+    ):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -243,6 +254,7 @@ def compile_compendium(compendium_id: str):
             or chapter.status != "approved"
             or not chapter.truth_passport
             or chapter.truth_passport.status != "verified"
+            or chapter.truth_passport.content_revision != chapter.content_revision
         )
     ]
     if incomplete:

@@ -717,6 +717,16 @@ class PlatformStore:
                 else:
                     chapter.previous_content_markdown = current.previous_content_markdown
                     chapter.revision_count = current.revision_count
+                chapter.content_revision = hashlib.sha256(
+                    chapter.content_markdown.replace("\r\n", "\n").strip().encode("utf-8")
+                ).hexdigest()
+                if (
+                    chapter.truth_passport is not None
+                    and chapter.truth_passport.content_revision != chapter.content_revision
+                ):
+                    # A passport for another text revision is never carried
+                    # forward. The next audit must earn a new passport.
+                    chapter.truth_passport = None
                 compendium.chapters[index] = chapter
                 found = True
                 break
@@ -868,7 +878,10 @@ class PlatformStore:
         status: str,
         message: str = "",
         result_token: str = "",
+        output_revision: str = "",
         chapter_status: str | None = None,
+        repair_summary: Any | None = None,
+        failure_reason: str = "",
         expected_statuses: tuple[str, ...] = ACTIVE_REPAIR_STATUSES,
     ) -> RepairJob | None:
         """Write a terminal status and release the chapter lock."""
@@ -879,7 +892,11 @@ class PlatformStore:
             job.status = status  # type: ignore[assignment]
             job.message = message[:400]
             job.result_token = result_token or job.result_token
+            job.output_revision = output_revision or job.output_revision
             job.chapter_status = chapter_status  # type: ignore[assignment]
+            if repair_summary is not None:
+                job.repair_summary = repair_summary
+            job.failure_reason = failure_reason[:400]
             job.lease_expires_at = ""
             job.finished_at = utc_now()
             job.updated_at = job.finished_at
