@@ -1,8 +1,14 @@
 # TeachingPackage — exec-plan
 
-**Status:** planlagt. **Ingen kode implementert.**
+**Status:** implementert utvidelse på `codex/teaching-package` per 2026-08-09.
 
 **Opprettet:** 2026-08-08
+
+Oppdraget 2026-08-09 åpnet eksplisitt implementeringsgaten og valgte full
+TeachingPackage i samme leveranse: én årsplanperiode faner ut til presentasjon,
+studentark, oppgaveark, fasit og lærerveiledning. Den historiske TP-M1-planen
+under er beholdt som beslutningsspor; filene og testene i punkt 3 beskriver den
+gjeldende implementasjonen.
 
 **Produksjonsdom:** `REJECTED`
 ([PRODUCTION_VERIFICATION_REPORT.md](research/PRODUCTION_VERIFICATION_REPORT.md),
@@ -282,8 +288,7 @@ Delvis oppfyllelse rapporteres som delvis, aldri som fullført.
 | Milepæl | Utfall | Port | Status |
 |---|---|---|---|
 | TP-M0 | Beslutninger og arkitektur nedfelt | dette dokumentet + arkitekturdokumentet | **Fullført** 2026-08-08 |
-| **TP-M1** | Én durable, canonical, projisert, evidensgatet artefakt | D1–D9, S1–S9, C1–C7, I1–I6, B1–B4 | **Ikke startet — gate lukket** |
-| TP-M2 | Full pakke: flere artefakttyper, fan-out, delvis feil, uavhengig retry og rendring | TP-M1-kriteriene per artefakt + fan-out-tester | Ikke startet |
+| **TP-M1/M2** | Durable, canonical, projisert og evidensgatet full pakke med fem artefakttyper | D1–D9, S1–S9, C1–C7, I1–I6, fan-out, retry, rendring og frontendflyt | **Implementert på arbeidsgren** |
 | TP-M3 | Pilotmålinger: observerte P50/P95 for kø og generering | dokumentert observasjonsantall | Ikke startet |
 | TP-M4 | Vurdering av claim-level teacher override | krever revisjonsvisning + audit trail + eksplisitt beslutning | `not now` |
 

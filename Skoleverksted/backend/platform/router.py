@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import io
+import zipfile
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
@@ -34,6 +36,12 @@ from .models import (
     YearPlanMaterialUpdate,
     YearPlanPeriodUpdate,
     YearPlanUpdate,
+    TeachingApprovalRequest,
+    TeachingArtifactUpdate,
+    TeachingPackage,
+    TeachingPackageCreate,
+    TeachingPackageJobAccepted,
+    TeachingArtifactJobAccepted,
     utc_now,
 )
 from .compendium import (
@@ -48,6 +56,22 @@ from .repair import RepairConflictError, get_repair_service
 from .store import get_platform_store
 from .queue import get_durable_job_queue
 from .year_planner import build_year_plan
+from .teaching_package import (
+    ARTIFACT_TITLES,
+    aggregate_package_status,
+    build_package_from_period,
+    can_approve_artifact,
+    can_approve_package,
+    content_digest,
+    with_revision_digest,
+)
+from .teaching_package_jobs import (
+    cancel_teaching_job,
+    start_artifact_worker,
+    start_package_worker,
+)
+from .teaching_package_projection import project_package_materials, retract_package_materials
+from .store import ProjectedMaterialError
 
 
 router = APIRouter(tags=["platform"])
@@ -390,6 +414,344 @@ def download_compendium(compendium_id: str, artifact_type: str):
     )
 
 
+# ---------------------------------------------------------------------------
+# TeachingPackage
+# ---------------------------------------------------------------------------
+
+
+def _teaching_job_status_url(job_id: str) -> str:
+    return f"/api/platform/jobs/{job_id}"
+
+
+@router.post("/teaching-packages", response_model=TeachingPackage, status_code=201)
+def create_teaching_package(request: TeachingPackageCreate):
+    store = get_platform_store()
+    plan = store.get_year_plan(request.year_plan_id)
+    if plan is None:
+        raise HTTPException(status_code=409, detail="Årsplanen finnes ikke.")
+    period = next((item for item in plan.periods if item.id == request.period_id), None)
+    if period is None:
+        raise HTTPException(status_code=409, detail="Årsplanperioden finnes ikke.")
+    existing = store.list_teaching_packages(
+        year_plan_id=request.year_plan_id,
+        period_id=request.period_id,
+        limit=1,
+    )
+    if existing and existing[0].status != "archived":
+        return existing[0]
+    package = build_package_from_period(
+        plan,
+        period,
+        artifact_types=request.artifact_types,
+        audience=request.audience,
+        source_brief=request.source_brief,
+        sources=request.sources,
+        title=request.title,
+        project_id=request.project_id,
+    )
+    return store.create_teaching_package(package)
+
+
+@router.get("/teaching-packages", response_model=list[TeachingPackage])
+def list_teaching_packages(
+    limit: int = Query(default=50, ge=1, le=200),
+    year_plan_id: str | None = None,
+    period_id: str | None = None,
+    project_id: str | None = None,
+):
+    return get_platform_store().list_teaching_packages(
+        limit=limit,
+        year_plan_id=year_plan_id,
+        period_id=period_id,
+        project_id=project_id,
+    )
+
+
+@router.get("/teaching-packages/{package_id}", response_model=TeachingPackage)
+def get_teaching_package(package_id: str):
+    package = get_platform_store().get_teaching_package(package_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="Undervisningspakken finnes ikke.")
+    return package
+
+
+@router.post(
+    "/teaching-packages/{package_id}/generate",
+    response_model=TeachingPackageJobAccepted,
+    status_code=202,
+)
+def generate_teaching_package(package_id: str):
+    store = get_platform_store()
+    package = store.get_teaching_package(package_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="Undervisningspakken finnes ikke.")
+    if package.package_job_id:
+        parent = store.get_job(package.package_job_id)
+        if parent and parent.status in {"queued", "planning", "generating", "verifying", "rendering"}:
+            raise HTTPException(status_code=409, detail="Pakken genereres allerede. Du kan følge statusen her.")
+    parent_id = f"pkg:{package.id}:r{package.package_revision}"
+    queue = get_durable_job_queue()
+    parent = queue.enqueue(
+        parent_id,
+        module="platform",
+        kind="teaching_package",
+        payload={"package_id": package.id, "package_revision": package.package_revision},
+    )
+    child_ids: list[str] = []
+    for artifact in package.artifacts:
+        child_id = f"art:{package.id}:r{package.package_revision}:{artifact.id}"
+        child = queue.enqueue(
+            child_id,
+            module="platform",
+            kind="teaching_artifact",
+            payload={
+                "package_id": package.id,
+                "artifact_id": artifact.id,
+                "artifact_type": artifact.artifact_type,
+                "package_revision": package.package_revision,
+            },
+        )
+        artifact.status = "generating"
+        artifact.artifact_job_id = child.id
+        artifact.generation_token = f"{child.id}:{child.attempt}"
+        artifact.package_revision = package.package_revision
+        child_ids.append(child.id)
+    package.package_job_id = parent.id
+    package.status = "generating"
+    package.approved_at = None
+    package.approved_by = ""
+    package.approved_revision = 0
+    package.approved_digest = ""
+    store.save_teaching_package(with_revision_digest(package))
+    start_package_worker(package.id, parent.id, child_ids)
+    return TeachingPackageJobAccepted(
+        package_job_id=parent.id,
+        artifact_job_ids=child_ids,
+        status=parent.status,
+        status_url=_teaching_job_status_url(parent.id),
+    )
+
+
+@router.post(
+    "/teaching-packages/{package_id}/artifacts/{artifact_id}/regenerate",
+    response_model=TeachingArtifactJobAccepted,
+    status_code=202,
+)
+def regenerate_teaching_artifact(package_id: str, artifact_id: str):
+    store = get_platform_store()
+    result = store.teaching_artifact(package_id, artifact_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Artefaktet finnes ikke.")
+    package, artifact = result
+    if artifact.generation_token:
+        active = store.get_job(artifact.artifact_job_id or "")
+        if active and active.status in {"queued", "planning", "generating", "verifying", "rendering"}:
+            raise HTTPException(status_code=409, detail="Dette artefaktet genereres allerede.")
+    job_id = f"art:{package.id}:r{package.package_revision}:{artifact.id}"
+    job = get_durable_job_queue().enqueue(
+        job_id,
+        module="platform",
+        kind="teaching_artifact",
+        payload={"package_id": package.id, "artifact_id": artifact.id, "artifact_type": artifact.artifact_type, "package_revision": package.package_revision},
+    )
+    artifact.status = "generating"
+    artifact.artifact_job_id = job.id
+    artifact.generation_token = f"{job.id}:{job.attempt}"
+    package.status = "generating"
+    package.approved_at = None
+    package.approved_by = ""
+    package.approved_revision = 0
+    package.approved_digest = ""
+    store.save_teaching_package(with_revision_digest(package))
+    start_artifact_worker(package.id, artifact.id, job.id)
+    return TeachingArtifactJobAccepted(job_id=job.id, artifact_id=artifact.id, status=job.status, status_url=_teaching_job_status_url(job.id))
+
+
+@router.patch("/teaching-packages/{package_id}/artifacts/{artifact_id}", response_model=TeachingPackage)
+def update_teaching_artifact(package_id: str, artifact_id: str, request: TeachingArtifactUpdate):
+    store = get_platform_store()
+    result = store.teaching_artifact(package_id, artifact_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Artefaktet finnes ikke.")
+    package, artifact = result
+    changes = request.model_dump(exclude_none=True)
+    if not changes:
+        return package
+    if changes.get("status") == "approved":
+        raise HTTPException(status_code=409, detail="Godkjenning må gjøres med den eksplisitte godkjenn-handlingen.")
+    was_approved = artifact.status == "approved"
+    content_changed = "content_markdown" in changes and changes["content_markdown"] != artifact.content_markdown
+    if content_changed:
+        artifact.previous_content_markdown = artifact.content_markdown
+        artifact.revision_count += 1
+        artifact.content_markdown = changes["content_markdown"]
+        artifact.content_revision = content_digest(artifact.content_markdown)
+        artifact.truth_passport = None
+        artifact.quality_passport = None
+        artifact.files = []
+        artifact.approved_at = None
+        artifact.approved_by = ""
+        artifact.approved_revision = ""
+        artifact.approved_digest = ""
+    artifact.status = changes.get("status") or "needs_review"
+    if not content_changed and (was_approved or "status" in changes):
+        artifact.approved_at = None
+        artifact.approved_by = ""
+        artifact.approved_revision = ""
+        artifact.approved_digest = ""
+    artifact.generation_token = None
+    if content_changed:
+        package.package_revision += 1
+        for item in package.artifacts:
+            item.package_revision = package.package_revision
+            if item.id != artifact.id and item.status == "approved":
+                item.status = "needs_revision"
+                item.approved_at = None
+                item.approved_by = ""
+                item.approved_revision = ""
+                item.approved_digest = ""
+    package.status = "needs_revision"
+    package.approved_at = None
+    package.approved_by = ""
+    package.approved_revision = 0
+    package.approved_digest = ""
+    updated = store.save_teaching_package(with_revision_digest(package))
+    try:
+        retract_package_materials(store, updated)
+    except ValueError:
+        pass
+    return updated
+
+
+@router.post(
+    "/teaching-packages/{package_id}/artifacts/{artifact_id}/verify",
+    response_model=TeachingArtifactJobAccepted,
+    status_code=202,
+)
+def verify_teaching_artifact(package_id: str, artifact_id: str):
+    store = get_platform_store()
+    result = store.teaching_artifact(package_id, artifact_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Artefaktet finnes ikke.")
+    package, artifact = result
+    if not artifact.content_markdown.strip():
+        raise HTTPException(status_code=409, detail="Artefaktet har ikke innhold som kan kontrolleres.")
+    job_id = f"verify:{package.id}:r{package.package_revision}:{artifact.id}:{artifact.content_revision[:16]}"
+    existing = store.get_job(job_id)
+    if existing and existing.status in {"queued", "planning", "generating", "verifying", "rendering"}:
+        raise HTTPException(status_code=409, detail="Faktapasset kjører allerede.")
+    job = get_durable_job_queue().enqueue(
+        job_id,
+        module="platform",
+        kind="teaching_artifact_verify",
+        payload={"package_id": package.id, "artifact_id": artifact.id, "artifact_type": artifact.artifact_type, "package_revision": package.package_revision},
+    )
+    artifact.status = "generating"
+    artifact.artifact_job_id = job.id
+    artifact.generation_token = f"{job.id}:{job.attempt}"
+    package.status = "generating"
+    package.approved_at = None
+    package.approved_by = ""
+    package.approved_revision = 0
+    package.approved_digest = ""
+    store.save_teaching_package(with_revision_digest(package))
+    start_artifact_worker(package.id, artifact.id, job.id, verify_only=True)
+    return TeachingArtifactJobAccepted(job_id=job.id, artifact_id=artifact.id, status=job.status, status_url=_teaching_job_status_url(job.id))
+
+
+@router.post("/teaching-packages/{package_id}/artifacts/{artifact_id}/approve", response_model=TeachingPackage)
+def approve_teaching_artifact(package_id: str, request: TeachingApprovalRequest, artifact_id: str):
+    store = get_platform_store()
+    result = store.teaching_artifact(package_id, artifact_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Artefaktet finnes ikke.")
+    package, artifact = result
+    reasons = can_approve_artifact(artifact)
+    if reasons:
+        raise HTTPException(status_code=409, detail="Artefaktet kan ikke godkjennes ennå: " + " ".join(reasons[:6]))
+    artifact.status = "approved"
+    artifact.approved_by = request.teacher
+    artifact.approved_at = utc_now()
+    artifact.approved_revision = artifact.content_revision
+    artifact.approved_digest = content_digest(artifact.content_markdown)
+    package.status = aggregate_package_status(package)
+    return store.save_teaching_package(with_revision_digest(package))
+
+
+@router.post("/teaching-packages/{package_id}/approve", response_model=TeachingPackage)
+def approve_teaching_package(package_id: str, request: TeachingApprovalRequest):
+    store = get_platform_store()
+    package = store.get_teaching_package(package_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="Undervisningspakken finnes ikke.")
+    reasons = can_approve_package(package)
+    if reasons:
+        raise HTTPException(status_code=409, detail="Pakken kan ikke godkjennes ennå: " + " ".join(reasons[:8]))
+    package.approved_by = request.teacher
+    package.approved_at = utc_now()
+    try:
+        approved, _ = project_package_materials(store, package)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return approved
+
+
+def _require_teaching_file(package_id: str, artifact_id: str, artifact_format: str):
+    if artifact_format not in {"pdf", "docx", "pptx"}:
+        raise HTTPException(status_code=404, detail="Ukjent filtype.")
+    result = get_platform_store().get_teaching_artifact_file(package_id, artifact_id, artifact_format)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Filen finnes ikke for denne pakkerevisjonen.")
+    package, artifact, file, path = result
+    if package.status != "approved" or file.package_revision != package.package_revision:
+        raise HTTPException(status_code=409, detail="Filen kan lastes ned etter at riktig pakkerevisjon er godkjent.")
+    return package, artifact, file, path
+
+
+@router.get("/teaching-packages/{package_id}/artifacts/{artifact_id}/download/{artifact_format}")
+def download_teaching_artifact(package_id: str, artifact_id: str, artifact_format: str):
+    package, artifact, file, path = _require_teaching_file(package_id, artifact_id, artifact_format)
+    return Response(
+        content=path.read_bytes(),
+        media_type=file.mime_type,
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{file.filename}\"; filename*=UTF-8''{quote(file.filename)}",
+            "X-Artifact-Digest": file.digest,
+            "X-Package-Revision": str(package.package_revision),
+        },
+    )
+
+
+@router.get("/teaching-packages/{package_id}/download/zip")
+def download_teaching_package_zip(package_id: str):
+    package = get_platform_store().get_teaching_package(package_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="Undervisningspakken finnes ikke.")
+    if package.status != "approved":
+        raise HTTPException(status_code=409, detail="Godkjenn pakken før samlet nedlasting.")
+    store = get_platform_store()
+    output = io.BytesIO()
+    included = 0
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for artifact in package.artifacts:
+            for file in artifact.files:
+                if file.package_revision != package.package_revision:
+                    continue
+                path = store.teaching_packages_dir / file.storage_key
+                if not path.is_file():
+                    continue
+                archive.writestr(file.filename, path.read_bytes())
+                included += 1
+    if not included:
+        raise HTTPException(status_code=404, detail="Ingen filer finnes for den godkjente pakkerevisjonen.")
+    filename = f"undervisningspakke-{package.id[:8]}-r{package.package_revision}.zip"
+    return Response(
+        content=output.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/year-plans", response_model=list[YearPlan])
 def list_year_plans(
     limit: int = Query(default=50, ge=1, le=200),
@@ -480,12 +842,15 @@ def update_year_plan_material(
     material_id: str,
     request: YearPlanMaterialUpdate,
 ):
-    result = get_platform_store().update_year_plan_material(
-        plan_id,
-        period_id,
-        material_id,
-        request,
-    )
+    try:
+        result = get_platform_store().update_year_plan_material(
+            plan_id,
+            period_id,
+            material_id,
+            request,
+        )
+    except ProjectedMaterialError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Læremiddelet finnes ikke.")
     plan, material = result
@@ -572,7 +937,11 @@ def cancel_job(job_id: str):
         # lifecycle rather than only flipping the shared ledger row.
         get_repair_service().cancel(job_id)
     else:
-        get_durable_job_queue().cancel(job_id)
+        job = store.get_job(job_id)
+        if job and job.kind.startswith("teaching_"):
+            cancel_teaching_job(job_id)
+        else:
+            get_durable_job_queue().cancel(job_id)
     job = store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Jobben finnes ikke i plattformhistorikken.")

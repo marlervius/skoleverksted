@@ -84,12 +84,17 @@ class _RedisJobLease:
 
 def _safe_summary(payload: Any) -> dict[str, Any]:
     """Keep useful queue context without persisting sources or free text."""
-    fields = ("topic", "theme", "subject", "level", "grade", "material_type")
-    return {
-        field: str(getattr(payload, field, ""))[:160]
-        for field in fields
-        if getattr(payload, field, None)
-    }
+    fields = (
+        "topic", "theme", "subject", "level", "grade", "material_type",
+        "package_id", "artifact_id", "artifact_type", "package_revision",
+    )
+
+    def value(field: str) -> Any:
+        if isinstance(payload, dict):
+            return payload.get(field)
+        return getattr(payload, field, None)
+
+    return {field: str(value(field))[:160] for field in fields if value(field) is not None}
 
 
 class DurableJobGate:

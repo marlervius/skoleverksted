@@ -22,6 +22,7 @@ from .platform.cors import allowed_origins
 from .platform.router import router as platform_router
 from .platform.store import get_platform_store
 from .platform.telemetry import JobTelemetryMiddleware
+from .platform.teaching_package_jobs import recover_teaching_package_jobs
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Run startup and shutdown hooks belonging to every mounted app."""
+    recover_teaching_package_jobs()
     async with AsyncExitStack() as stack:
         for domain_app in DOMAIN_APPS:
             await stack.enter_async_context(domain_app.router.lifespan_context(domain_app))

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ArrowLeft, ArrowRight, BookOpenText, Calculator, Languages, Loader2 } from "lucide-react";
-import { formatProjectDate, getProject, listPlatformJobs, projectTasks, type PlatformJob, type Project } from "@/lib/platform-api";
+import { formatProjectDate, getProject, listPlatformJobs, listTeachingPackages, projectTasks, type PlatformJob, type Project, type TeachingPackage } from "@/lib/platform-api";
 
 const moduleIcon = { fag: BookOpenText, norsk: Languages, matematikk: Calculator };
 
@@ -11,9 +11,10 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
   const [project, setProject] = useState<Project | null>(null);
   const [error, setError] = useState("");
   const [jobs, setJobs] = useState<PlatformJob[]>([]);
+  const [packages, setPackages] = useState<TeachingPackage[]>([]);
   useEffect(() => {
-    Promise.all([getProject(params.id), listPlatformJobs(100, params.id)])
-      .then(([loadedProject, loadedJobs]) => { setProject(loadedProject); setJobs(loadedJobs); })
+    Promise.all([getProject(params.id), listPlatformJobs(100, params.id), listTeachingPackages({ projectId: params.id })])
+      .then(([loadedProject, loadedJobs, loadedPackages]) => { setProject(loadedProject); setJobs(loadedJobs); setPackages(loadedPackages); })
       .catch((err) => setError(err instanceof Error ? err.message : "Kunne ikke laste prosjektet."));
   }, [params.id]);
   if (error) return <div role="alert" className="card text-accent-red">{error}</div>;
@@ -27,6 +28,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
       <div className="grid gap-4 md:grid-cols-3">
         {tasks.map((task) => { const Icon = moduleIcon[task.module]; const job = jobs.find((item) => item.module === task.module); return <article key={task.id} className="card flex flex-col"><div className="flex items-center justify-between"><Icon className="h-5 w-5 text-accent-blue" />{job && <span className="badge bg-accent-teal/10 text-accent-teal">{job.status} · {job.progress}%</span>}</div><h2 className="mt-4 font-semibold">{task.title}</h2><p className="mt-2 flex-1 text-sm text-text-secondary">{task.brief}</p>{typeof job?.quality_passport?.score === "number" && <p className="mt-3 text-xs text-text-muted">Kvalitet {job.quality_passport.score}/100</p>}<Link className="btn-secondary mt-5" href={task.href}>Åpne <ArrowRight className="h-4 w-4" /></Link></article>; })}
       </div>
+      {packages.length > 0 && <section className="card"><div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold">Undervisningspakker</h2><p className="mt-1 text-sm text-text-secondary">Pakker koblet til dette prosjektet.</p></div><Link href="/history" className="text-xs text-text-secondary underline">Se historikk</Link></div><div className="mt-4 grid gap-3 md:grid-cols-2">{packages.map((pkg) => <Link key={pkg.id} href={`/teaching-packages/${pkg.id}`} className="rounded-lg border border-border p-3 transition hover:border-accent-blue"><div className="flex items-center justify-between gap-3"><span className="text-sm font-medium">{pkg.title}</span><span className="badge bg-accent-blue/10 text-accent-blue">{pkg.status}</span></div><p className="mt-1 text-xs text-text-muted">{pkg.plan.period_title} · {pkg.artifacts.length} artefakter · revisjon {pkg.package_revision}</p></Link>)}</div></section>}
     </div>
   );
 }
