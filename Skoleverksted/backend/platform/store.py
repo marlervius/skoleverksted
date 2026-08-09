@@ -32,6 +32,10 @@ from .models import (
     YearPlanPeriod,
     YearPlanPeriodUpdate,
     YearPlanUpdate,
+    TeachingArtifact,
+    TeachingArtifactFile,
+    TeachingPackage,
+    TeachingPackageUpdate,
     utc_now,
 )
 
@@ -101,6 +105,19 @@ class StaleChapterWriteError(RuntimeError):
         self.actual = actual
 
 
+class StaleTeachingArtifactError(RuntimeError):
+    """Raised when a worker tries to write over newer teacher/package state."""
+
+    def __init__(self, expected: str, actual: str) -> None:
+        super().__init__("Artefaktet ble endret mens jobben kjørte.")
+        self.expected = expected
+        self.actual = actual
+
+
+class ProjectedMaterialError(RuntimeError):
+    """A derived teaching-package material cannot be edited as source data."""
+
+
 class _PostgresConnection:
     """Small compatibility wrapper so the store keeps one SQL surface."""
 
@@ -151,6 +168,12 @@ class PlatformStore:
             else Path(os.getenv("OUTPUT_DIR", "./output")) / "compendia"
         )
         self.compendia_dir.mkdir(parents=True, exist_ok=True)
+        self.teaching_packages_dir = (
+            self.path.parent / "teaching-packages"
+            if path is not None
+            else Path(os.getenv("OUTPUT_DIR", "./output")) / "teaching-packages"
+        )
+        self.teaching_packages_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._init_schema()
 
@@ -227,6 +250,21 @@ class PlatformStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_year_plans_updated ON year_plans(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_year_plans_subject ON year_plans(subject,level,school_year);
+                CREATE TABLE IF NOT EXISTS teaching_packages (
+                    id TEXT PRIMARY KEY,
+                    year_plan_id TEXT NOT NULL,
+                    period_id TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_teaching_packages_period
+                    ON teaching_packages(year_plan_id,period_id,updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_teaching_packages_updated
+                    ON teaching_packages(updated_at DESC);
                 CREATE TABLE IF NOT EXISTS compendia (
                     id TEXT PRIMARY KEY,
                     subject TEXT NOT NULL,
@@ -356,6 +394,22 @@ class PlatformStore:
         if status != "queued":
             payload["queue_position"] = None
         return self.upsert_job(Job.model_validate(payload))
+
+    def update_job_result_summary(
+        self,
+        job_id: str,
+        summary: dict[str, Any],
+        *,
+        quality_passport: dict[str, Any] | None = None,
+    ) -> Job | None:
+        current = self.get_job(job_id)
+        if current is None:
+            return None
+        current.result_summary = dict(summary)
+        if quality_passport is not None:
+            current.quality_passport = dict(quality_passport)
+        current.updated_at = utc_now()
+        return self.upsert_job(current)
 
     def queue_position(self, job_id: str) -> int | None:
         with self._connection() as conn:
@@ -588,7 +642,21 @@ class PlatformStore:
         for period in plan.periods:
             for material in period.materials:
                 if material.id == material_id:
-                    path = self.files_dir / plan_id / f"{material.id}.bin"
+                    if (
+                        material.source_kind == "teaching_package"
+                        and material.teaching_package_id
+                        and material.artifact_id
+                    ):
+                        package_result = self.teaching_artifact(material.teaching_package_id, material.artifact_id)
+                        if package_result is None:
+                            return None
+                        _, artifact = package_result
+                        primary = next((file for file in artifact.files if file.format == "pdf"), None) or (artifact.files[0] if artifact.files else None)
+                        if primary is None:
+                            return None
+                        path = self.teaching_packages_dir / primary.storage_key
+                    else:
+                        path = self.files_dir / plan_id / f"{material.id}.bin"
                     return (material, path) if path.is_file() else None
         return None
 
@@ -609,6 +677,13 @@ class PlatformStore:
                 continue
             for index, material in enumerate(period.materials):
                 if material.id == material_id:
+                    if material.source_kind == "teaching_package":
+                        requested_status = changes.get("status")
+                        if set(changes) - {"status"} or requested_status not in {None, "used"}:
+                            raise ProjectedMaterialError(
+                                "Dette læremiddelet styres av undervisningspakken. "
+                                "Rediger pakken i stedet; bare «Brukt» kan markeres her."
+                            )
                     payload = material.model_dump()
                     payload.update(changes)
                     payload["updated_at"] = utc_now()
@@ -620,6 +695,241 @@ class PlatformStore:
         payload = plan.model_dump()
         payload["updated_at"] = utc_now()
         return self._save_year_plan(YearPlan.model_validate(payload)), updated
+
+    # ------------------------------------------------------------------
+    # TeachingPackage canonical store
+    # ------------------------------------------------------------------
+
+    def create_teaching_package(self, package: TeachingPackage) -> TeachingPackage:
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """INSERT INTO teaching_packages(
+                       id,year_plan_id,period_id,subject,level,status,payload,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    package.id,
+                    package.year_plan_id,
+                    package.period_id,
+                    package.subject,
+                    package.level,
+                    package.status,
+                    self._json(package.model_dump(mode="json")),
+                    package.created_at,
+                    package.updated_at,
+                ),
+            )
+        return package
+
+    def get_teaching_package(self, package_id: str) -> TeachingPackage | None:
+        with self._connection() as conn:
+            row = conn.execute("SELECT payload FROM teaching_packages WHERE id=?", (package_id,)).fetchone()
+        return TeachingPackage.model_validate_json(row["payload"]) if row else None
+
+    def list_teaching_packages(
+        self,
+        *,
+        limit: int = 50,
+        year_plan_id: str | None = None,
+        period_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[TeachingPackage]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if year_plan_id:
+            clauses.append("year_plan_id=?")
+            params.append(year_plan_id)
+        if period_id:
+            clauses.append("period_id=?")
+            params.append(period_id)
+        query = "SELECT payload FROM teaching_packages"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        packages = [TeachingPackage.model_validate_json(row["payload"]) for row in rows]
+        if project_id is not None:
+            packages = [package for package in packages if package.project_id == project_id]
+        return packages
+
+    def save_teaching_package(self, package: TeachingPackage) -> TeachingPackage:
+        package.updated_at = utc_now()
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """UPDATE teaching_packages
+                   SET year_plan_id=?,period_id=?,subject=?,level=?,status=?,payload=?,updated_at=?
+                   WHERE id=?""",
+                (
+                    package.year_plan_id,
+                    package.period_id,
+                    package.subject,
+                    package.level,
+                    package.status,
+                    self._json(package.model_dump(mode="json")),
+                    package.updated_at,
+                    package.id,
+                ),
+            )
+        return package
+
+    def teaching_artifact(
+        self,
+        package_id: str,
+        artifact_id: str,
+    ) -> tuple[TeachingPackage, TeachingArtifact] | None:
+        package = self.get_teaching_package(package_id)
+        if package is None:
+            return None
+        artifact = next((item for item in package.artifacts if item.id == artifact_id), None)
+        return (package, artifact) if artifact is not None else None
+
+    def cas_update_teaching_artifact(
+        self,
+        package_id: str,
+        artifact_id: str,
+        *,
+        expected_generation_token: str,
+        artifact: TeachingArtifact,
+        rendered: dict[str, bytes],
+        package_status: str,
+    ) -> TeachingPackage:
+        """Persist files and content only if the worker still owns the artifact."""
+        from .teaching_package import with_revision_digest
+
+        written: list[Path] = []
+        with self._exclusive() as conn:
+            row = conn.execute("SELECT payload FROM teaching_packages WHERE id=?", (package_id,)).fetchone()
+            if row is None:
+                raise KeyError("Undervisningspakken finnes ikke.")
+            package = TeachingPackage.model_validate_json(row["payload"])
+            current = next((item for item in package.artifacts if item.id == artifact_id), None)
+            if current is None:
+                raise KeyError("Artefaktet finnes ikke.")
+            if current.generation_token != expected_generation_token:
+                raise StaleTeachingArtifactError(expected_generation_token, current.generation_token or "")
+            for file in artifact.files:
+                content = rendered.get(file.format)
+                if content is None:
+                    raise ValueError(f"Rendret innhold mangler for {file.format}.")
+                path = self.teaching_packages_dir / file.storage_key
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temp = path.with_name(f".{path.name}.tmp")
+                temp.write_bytes(content)
+                temp.replace(path)
+                written.append(path)
+            index = package.artifacts.index(current)
+            package.artifacts[index] = artifact
+            package.status = package_status  # type: ignore[assignment]
+            package.updated_at = utc_now()
+            package = with_revision_digest(package)
+            conn.execute(
+                "UPDATE teaching_packages SET status=?,payload=?,updated_at=? WHERE id=?",
+                (package.status, self._json(package.model_dump(mode="json")), package.updated_at, package.id),
+            )
+        return package
+
+    def apply_teaching_package_projection(
+        self,
+        package: TeachingPackage,
+        plan: YearPlan,
+    ) -> tuple[TeachingPackage, YearPlan]:
+        """Atomic package approval + derived period material projection."""
+        with self._exclusive() as conn:
+            package_row = conn.execute("SELECT payload FROM teaching_packages WHERE id=?", (package.id,)).fetchone()
+            plan_row = conn.execute("SELECT payload FROM year_plans WHERE id=?", (plan.id,)).fetchone()
+            if package_row is None or plan_row is None:
+                raise KeyError("Pakken eller årsplanen finnes ikke.")
+            stored_package = TeachingPackage.model_validate_json(package_row["payload"])
+            stored_plan = YearPlan.model_validate_json(plan_row["payload"])
+            target_period = next((period for period in stored_plan.periods if period.id == stored_package.period_id), None)
+            if target_period is None:
+                raise KeyError("Årsplanperioden finnes ikke.")
+            artifact_ids = {artifact.id for artifact in stored_package.artifacts}
+            for material in target_period.materials:
+                if material.source_kind == "teaching_package" and material.teaching_package_id == stored_package.id:
+                    if material.artifact_id not in artifact_ids:
+                        material.artifact_status = "needs_revision"
+                        material.status = "needs_revision"
+                        material.updated_at = utc_now()
+            for artifact in stored_package.artifacts:
+                primary = next((file for file in artifact.files if file.format == "pdf"), None) or (artifact.files[0] if artifact.files else None)
+                if artifact.status != "approved" or primary is None:
+                    continue
+                existing = next(
+                    (
+                        item for item in target_period.materials
+                        if item.source_kind == "teaching_package"
+                        and item.teaching_package_id == stored_package.id
+                        and item.artifact_id == artifact.id
+                    ),
+                    None,
+                )
+                payload = {
+                    "title": artifact.title,
+                    "kind": artifact.artifact_type,
+                    "status": "approved",
+                    "version": existing.version if existing else 1,
+                    "filename": primary.filename,
+                    "mime_type": primary.mime_type,
+                    "size_bytes": primary.size_bytes,
+                    "notes": f"Undervisningspakke {stored_package.package_revision}. revisjon.",
+                    "source_kind": "teaching_package",
+                    "teaching_package_id": stored_package.id,
+                    "artifact_id": artifact.id,
+                    "artifact_type": artifact.artifact_type,
+                    "artifact_version": artifact.artifact_version,
+                    "artifact_status": "approved",
+                    "projected_at": utc_now(),
+                    "created_at": existing.created_at if existing else utc_now(),
+                    "updated_at": utc_now(),
+                }
+                if existing:
+                    payload["id"] = existing.id
+                material = YearPlanMaterial.model_validate(payload)
+                if existing:
+                    target_period.materials[target_period.materials.index(existing)] = material
+                else:
+                    target_period.materials.append(material)
+            stored_package.status = "approved"
+            stored_package.approved_at = package.approved_at or utc_now()
+            stored_package.approved_by = package.approved_by
+            stored_package.updated_at = stored_package.approved_at
+            stored_package.approved_revision = stored_package.package_revision
+            stored_package.approved_digest = stored_package.revision_digest
+            stored_package = self._with_package_digest(stored_package)
+            stored_plan.updated_at = utc_now()
+            conn.execute(
+                "UPDATE teaching_packages SET status=?,payload=?,updated_at=? WHERE id=?",
+                (stored_package.status, self._json(stored_package.model_dump(mode="json")), stored_package.updated_at, stored_package.id),
+            )
+            conn.execute(
+                "UPDATE year_plans SET payload=?,updated_at=? WHERE id=?",
+                (self._json(stored_plan.model_dump(mode="json")), stored_plan.updated_at, stored_plan.id),
+            )
+        return stored_package, stored_plan
+
+    @staticmethod
+    def _with_package_digest(package: TeachingPackage) -> TeachingPackage:
+        from .teaching_package import with_revision_digest
+
+        return with_revision_digest(package)
+
+    def get_teaching_artifact_file(
+        self,
+        package_id: str,
+        artifact_id: str,
+        artifact_format: str,
+    ) -> tuple[TeachingPackage, TeachingArtifact, TeachingArtifactFile, Path] | None:
+        result = self.teaching_artifact(package_id, artifact_id)
+        if result is None:
+            return None
+        package, artifact = result
+        file = next((item for item in artifact.files if item.format == artifact_format), None)
+        if file is None:
+            return None
+        path = self.teaching_packages_dir / file.storage_key
+        return (package, artifact, file, path) if path.is_file() else None
 
     def create_compendium(self, request: CompendiumCreate) -> Compendium:
         compendium = Compendium(**request.model_dump())
@@ -717,6 +1027,16 @@ class PlatformStore:
                 else:
                     chapter.previous_content_markdown = current.previous_content_markdown
                     chapter.revision_count = current.revision_count
+                chapter.content_revision = hashlib.sha256(
+                    chapter.content_markdown.replace("\r\n", "\n").strip().encode("utf-8")
+                ).hexdigest()
+                if (
+                    chapter.truth_passport is not None
+                    and chapter.truth_passport.content_revision != chapter.content_revision
+                ):
+                    # A passport for another text revision is never carried
+                    # forward. The next audit must earn a new passport.
+                    chapter.truth_passport = None
                 compendium.chapters[index] = chapter
                 found = True
                 break
@@ -868,8 +1188,12 @@ class PlatformStore:
         status: str,
         message: str = "",
         result_token: str = "",
+        output_revision: str = "",
         chapter_status: str | None = None,
+        repair_summary: Any | None = None,
+        failure_reason: str = "",
         expected_statuses: tuple[str, ...] = ACTIVE_REPAIR_STATUSES,
+        terminal_event: tuple[str, dict[str, Any]] | None = None,
     ) -> RepairJob | None:
         """Write a terminal status and release the chapter lock."""
         with self._exclusive() as conn:
@@ -879,11 +1203,35 @@ class PlatformStore:
             job.status = status  # type: ignore[assignment]
             job.message = message[:400]
             job.result_token = result_token or job.result_token
+            job.output_revision = output_revision or job.output_revision
             job.chapter_status = chapter_status  # type: ignore[assignment]
+            if repair_summary is not None:
+                job.repair_summary = repair_summary
+            job.failure_reason = failure_reason[:400]
             job.lease_expires_at = ""
             job.finished_at = utc_now()
             job.updated_at = job.finished_at
-            return self._save_repair_job(conn, job)
+            finished = self._save_repair_job(conn, job)
+            if terminal_event is not None:
+                stage, payload = terminal_event
+                entry = RepairLedgerEntry(
+                    job_id=job.id,
+                    operation_id=job.operation_id,
+                    stage=stage,
+                    payload=_ledger_safe(payload),
+                )
+                conn.execute(
+                    "INSERT INTO repair_events(id,job_id,operation_id,stage,payload,created_at) VALUES(?,?,?,?,?,?)",
+                    (
+                        entry.id,
+                        entry.job_id,
+                        entry.operation_id,
+                        entry.stage,
+                        self._json(entry.payload),
+                        entry.created_at,
+                    ),
+                )
+            return finished
 
     def request_repair_cancel(self, job_id: str) -> RepairJob | None:
         """Record the teacher's intent durably, whatever the model is doing."""
@@ -919,6 +1267,7 @@ class PlatformStore:
         placeholders = ",".join("?" for _ in ACTIVE_REPAIR_STATUSES)
         now = utc_now()
         released = 0
+        recovered: list[RepairJob] = []
         with self._exclusive() as conn:
             rows = conn.execute(
                 f"SELECT payload FROM repair_jobs WHERE status IN ({placeholders})",
@@ -934,7 +1283,18 @@ class PlatformStore:
                 job.finished_at = now
                 job.updated_at = now
                 self._save_repair_job(conn, job)
+                recovered.append(job)
                 released += 1
+        for job in recovered:
+            # Recovery happens before a RepairService instance may exist, so
+            # write the durable event directly here rather than leaving a
+            # status transition with no explanation in the ledger.
+            self.append_repair_event(
+                job.id,
+                job.operation_id,
+                "recovered",
+                {"status": job.status, "message": message},
+            )
         return released
 
     def append_repair_event(

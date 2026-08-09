@@ -17,7 +17,9 @@ import {
   Layers3,
   Loader2,
   NotebookPen,
+  PackageOpen,
   Pencil,
+  Presentation,
   RefreshCw,
   Save,
   Sparkles,
@@ -47,7 +49,11 @@ const periodLabels: Record<YearPlanPeriodStatus, string> = {
 
 const materialLabels: Record<MaterialKind, string> = {
   learning_sheet: "Læringsark",
+  student_sheet: "Læringsark og elevtekst",
   worksheet: "Oppgaveark",
+  exercise_sheet: "Oppgaveark",
+  answer_key: "Fasit",
+  teacher_guide: "Lærerveiledning",
   lesson_sequence: "Undervisningssekvens",
   assessment: "Vurdering/prøve",
   presentation: "Presentasjon",
@@ -137,6 +143,12 @@ function MaterialRow({
         <div className="mt-0.5 text-xs text-text-muted">
           {materialLabels[material.kind]} · versjon {material.version} · {Math.max(1, Math.round(material.size_bytes / 1024))} kB
         </div>
+        {material.source_kind === "teaching_package" && (
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-accent-purple">
+            <span className="badge bg-accent-purple/10 text-accent-purple">Fra undervisningspakke</span>
+            {material.teaching_package_id && <Link href={`/teaching-packages/${material.teaching_package_id}`} className="underline">Åpne pakken</Link>}
+          </div>
+        )}
         {rowError && <div className="mt-1 text-xs text-accent-red">{rowError}</div>}
       </div>
       <div className="flex items-center gap-2">
@@ -144,7 +156,7 @@ function MaterialRow({
           aria-label={`Status for ${material.title}`}
           className="rounded-lg border border-border bg-bg px-2 py-1.5 text-xs"
           value={material.status}
-          disabled={saving}
+          disabled={saving || material.source_kind === "teaching_package"}
           onChange={(event) => void changeStatus(event.target.value as MaterialStatus)}
         >
           <option value="draft">Utkast</option>
@@ -424,6 +436,12 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
                           : <span className="text-xs text-text-muted">Mangler: {missing.map((kind) => materialLabels[kind]).join(", ")}</span>}
                       </div>
                       <div className="mt-4 flex flex-wrap gap-2">
+                        <Link
+                          className="btn-primary"
+                          href={`/teaching-packages/new?${new URLSearchParams({ yearPlan: plan.id, period: period.id })}`}
+                        >
+                          <Presentation className="h-4 w-4" /> PowerPoint + undervisningspakke
+                        </Link>
                         <Link className="btn-primary" href={generationHref(plan, period, "laeringsark", "learning_sheet")}><FileText className="h-4 w-4" /> Læringsark</Link>
                         <Link className="btn-secondary" href={generationHref(plan, period, "laeringsark", "worksheet")}><NotebookPen className="h-4 w-4" /> Oppgaveark</Link>
                         <Link className="btn-secondary" href={generationHref(plan, period, "prove", "assessment")}><ClipboardCheck className="h-4 w-4" /> Prøve</Link>

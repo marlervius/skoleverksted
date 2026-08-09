@@ -50,7 +50,11 @@ function repairJob(overrides: Partial<RepairJob> = {}): RepairJob {
     message: "",
     chapter_token: "aaa",
     result_token: "",
+    source_revision: "rev-1",
+    output_revision: "",
     chapter_status: null,
+    repair_summary: null,
+    failure_reason: "",
     attempt: 1,
     cancel_requested: false,
     lease_expires_at: "",
@@ -97,6 +101,12 @@ describe("repair job status", () => {
     expect(view.canRetry).toBe(false);
   });
 
+  it("names the concrete repair stages instead of showing only a spinner", () => {
+    expect(repairStatusView(repairJob({ status: "queued" })).label).toBe("Sjekker fakta og kilder");
+    expect(repairStatusView(repairJob({ status: "running" })).label).toContain("plan");
+    expect(repairStatusView(repairJob({ status: "succeeded" })).label).toContain("revisjon");
+  });
+
   it("explains that a superseded repair preserved the newer teacher edit", () => {
     const view = repairStatusView(repairJob({ status: "superseded" }));
     expect(view.detail).toContain("nyere teksten din er bevart");
@@ -107,6 +117,28 @@ describe("repair job status", () => {
     expect(repairStatusView(repairJob({ status: "failed_retryable" })).canRetry).toBe(true);
     expect(repairStatusView(repairJob({ status: "failed_terminal" })).canRetry).toBe(false);
     expect(repairStatusView(repairJob({ status: "succeeded" })).canRetry).toBe(false);
+  });
+
+  it("does not describe a zero-change result as a completed repair", () => {
+    const view = repairStatusView(repairJob({
+      status: "succeeded",
+      repair_summary: {
+        before: { verified_claims: 1, total_claims: 2, coverage: 50, unresolved: 1, source_grounding_failures: 1, language_failures: 0 },
+        after: { verified_claims: 1, total_claims: 2, coverage: 50, unresolved: 1, source_grounding_failures: 1, language_failures: 0 },
+        changes: [],
+        found_count: 1,
+        repaired_count: 0,
+        qualified_count: 0,
+        replaced_count: 0,
+        removed_count: 0,
+        unresolved_count: 1,
+        manual_review_count: 0,
+        pass_count: 1,
+        stop_reason: "no-safe-repair",
+      },
+    }));
+    expect(view.label).toContain("ingen sikre rettelser");
+    expect(view.tone).toBe("warn");
   });
 });
 

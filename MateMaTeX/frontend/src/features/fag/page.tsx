@@ -67,7 +67,11 @@ type YearPlanContext = {
 
 const MATERIAL_LABELS: Record<MaterialKind, string> = {
   learning_sheet: "Læringsark",
+  student_sheet: "Læringsark og elevtekst",
   worksheet: "Oppgaveark",
+  exercise_sheet: "Oppgaveark",
+  answer_key: "Fasit",
+  teacher_guide: "Lærerveiledning",
   lesson_sequence: "Undervisningssekvens",
   assessment: "Vurdering",
   presentation: "Presentasjon",

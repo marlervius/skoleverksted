@@ -1,0 +1,36 @@
+{
+  "year_plan": {
+    "title": "Historie VG2",
+    "subject": "Historie",
+    "level": "VG2",
+    "school_year": "2026-2027",
+    "lesson_minutes": 45,
+    "competency_goals": [
+      "utforske hvordan mennesker har brukt kilder til å forstå fortiden"
+    ]
+  },
+  "period": {
+    "title": "Historiebruk og kilder",
+    "theme": "Historiebruk og kilder",
+    "lesson_count": 6,
+    "duration_weeks": 3,
+    "overview": "Elevene undersøker hvordan kilder brukes til å tolke fortiden.",
+    "learning_goals": [
+      "forklare forskjellen på primærkilder og sekundærkilder",
+      "vurdere hva en kilde kan og ikke kan dokumentere"
+    ],
+    "key_concepts": ["primærkilde", "sekundærkilde", "historiebruk"],
+    "suggested_activities": ["kildestasjon", "samtale", "exit ticket"],
+    "assessment": "Kort kildeanalyse med begrunnelse."
+  },
+  "sources": [
+    {
+      "title": "Store norske leksikon – kilde",
+      "url": "https://snl.no/historisk_kilde",
+      "publisher": "Store norske leksikon",
+      "source_tier": "authoritative",
+      "origin": "teacher",
+      "fetch_status": "provided"
+    }
+  ]
+}

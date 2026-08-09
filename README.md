@@ -18,8 +18,10 @@ kvalitetspass, drift og offentlig API-adresse er felles.
   kan knyttes til én eller flere perioder i en årsplan.
 - **Årsplaner** lager et redigerbart årshjul for fag, nivå, timetall og
   kompetansemål. Hver periode kan sende en ferdig utfylt bestilling til
-  fagverkstedet, og læreren godkjenner eksplisitt PDF-en før den lagres og
-  versjoneres under riktig tema.
+  fagverkstedet. En periode kan opprette en varig undervisningspakke med
+  redigerbar PowerPoint, læringsark, oppgaveark, fasit og lærerveiledning.
+  Læreren godkjenner eksplisitt hvert artefakt og pakken før godkjente
+  primærfiler projiseres til materiallisten.
 - **Temapakke** oppretter ett prosjekt med koordinerte arbeidsflater for fagtekst,
   CEFR-tilpasset norsk og matematikk.
 - **Prosjekter** lagres varig i SQLite og kan senere flyttes til PostgreSQL uten
@@ -28,6 +30,10 @@ kvalitetspass, drift og offentlig API-adresse er felles.
   jobbmotorer er fortsatt autoritative for filer og strømmer.
 - **Kvalitetspass** viser deterministiske kontroller, kilder, kompetansemål,
   matematikkstatus, kompilering og begrensninger.
+- **TeachingPackage** har canonical pakke-/artefakttilstand, durable parent/child-
+  jobber, innholdsrevisjoner, faktapass, kvalitetspass, lærerreview, atomisk
+  årsplanprojeksjon og ZIP-eksport etter godkjenning. Ikke-godkjente artefakter
+  blir aldri vist som ferdige læremidler i årsplanen.
 - Skjemaene autosaves lokalt slik at læreren kan bytte arbeidsflate uten å miste utkast.
 - Skolepålogging og organisasjonstilknytning er bevisst utsatt til produktet er
   ferdig validert. Dagens modulspesifikke sikkerhet er beholdt.
@@ -167,6 +173,13 @@ Plattformtestene kan kjøres uten eksterne AI-kall:
 
 ```powershell
 python -m unittest discover -s .\Skoleverksted\backend\tests -v
+```
+
+TeachingPackage-fixturen kan renderes til `output/teaching-package-fixture` for
+visuell QA:
+
+```powershell
+python scripts/render_teaching_package_fixture.py
 ```
 
 GitHub Actions kjører frontendtester, TypeScript, produksjonsbygg,

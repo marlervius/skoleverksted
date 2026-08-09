@@ -179,7 +179,7 @@ function ChapterCard({
           if (!active) return;
           setRepairJob(job);
           if (!isActiveRepairStatus(job.status)) {
-            if (job.status === "succeeded" || job.status === "superseded") void onRefresh();
+            void onRefresh();
           }
         })
         .catch(() => undefined);
@@ -247,6 +247,23 @@ function ChapterCard({
 
   const repairActive = Boolean(repairJob && isActiveRepairStatus(repairJob.status));
   const repairView = repairJob ? repairStatusView(repairJob) : null;
+  const repairTone = repairView?.tone ?? "busy";
+  const repairStep = localBusy === "repair"
+    ? 0
+    : repairJob?.status === "queued"
+      ? 0
+      : repairJob?.status === "running"
+        ? 2
+        : repairJob
+          ? 3
+          : -1;
+  const repairSteps = [
+    "Sjekker fakta og kilder",
+    "Lager reparasjonsplan",
+    "Retter dokumenterte problemer",
+    "Kontrollerer den nye teksten",
+  ];
+  const repairSummary = chapter.repair_summary;
   const working = busy || Boolean(localBusy);
   const truthVerified = chapter.truth_passport?.status === "verified";
   const statusClass = chapter.status === "approved"
@@ -288,7 +305,7 @@ function ChapterCard({
               {localBusy === "generate" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {chapter.content_markdown ? "Lag ny versjon" : "Produser kapittel"}
             </button>
-            {chapter.content_markdown && (chapter.verification_notes.length > 0 || weakSourceCount > 0) && (
+            {chapter.content_markdown && (chapter.verification_notes.length > 0 || weakSourceCount > 0 || isChapterFailureStatus(chapter.status)) && (
               <button
                 className="btn-primary !bg-accent-teal hover:!bg-accent-teal/90"
                 disabled={working || repairActive || compendium.status === "outline"}
@@ -307,40 +324,119 @@ function ChapterCard({
             )}
           </div>
 
-          {repairView && (
+          {(repairView || localBusy === "repair") && (
             <div
               role="status"
               className={`mt-4 rounded-xl border p-4 text-sm ${
-                repairView.tone === "busy"
+                repairTone === "busy"
                   ? "border-accent-teal/30 bg-accent-teal/5 text-text-primary"
-                  : repairView.tone === "ok"
+                  : repairTone === "ok"
                     ? "border-accent-green/30 bg-accent-green/5 text-text-primary"
-                    : repairView.tone === "warn"
+                    : repairTone === "warn"
                       ? "border-accent-orange/30 bg-accent-orange/5 text-text-primary"
                       : "border-border bg-surface text-text-primary"
               }`}
             >
+              <ol className="grid gap-2 sm:grid-cols-4">
+                {repairSteps.map((step, index) => (
+                  <li key={step} className={index <= repairStep ? "flex items-center gap-2 text-xs font-semibold text-text-primary" : "flex items-center gap-2 text-xs text-text-muted"}>
+                    <span className={index < repairStep ? "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-accent-green/40 bg-accent-green/10 text-accent-green" : index === repairStep ? "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-accent-teal/40 bg-accent-teal/10 text-accent-teal" : "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border"}>
+                      {index < repairStep ? "✓" : index + 1}
+                    </span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
               <div className="flex flex-wrap items-center gap-2">
-                {repairActive && <Loader2 className="h-4 w-4 animate-spin text-accent-teal" />}
-                <strong>{repairView.label}</strong>
+                {repairActive || localBusy === "repair" ? <Loader2 className="h-4 w-4 animate-spin text-accent-teal" /> : null}
+                <strong>{repairView?.label ?? "Sjekker fakta og kilder"}</strong>
                 <span className="text-xs text-text-muted">Jobb-ID: {repairJob?.id.slice(0, 12)}</span>
                 {repairJob && repairJob.attempt > 1 && (
                   <span className="text-xs text-text-muted">Forsøk {repairJob.attempt}</span>
                 )}
               </div>
-              <p className="mt-1 text-text-secondary">{repairView.detail}</p>
+              <p className="mt-1 text-text-secondary">{repairView?.detail ?? "Reparasjonsjobben registreres på serveren."}</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {repairActive && (
                   <button className="btn-ghost" disabled={localBusy === "cancel-repair"} onClick={() => void stopRepair()}>
                     {localBusy === "cancel-repair" ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />} Avbryt reparasjonen
                   </button>
                 )}
-                {repairView.canRetry && (
+                {repairView?.canRetry && (
                   <button className="btn-secondary" disabled={working} onClick={() => void startRepair()}>
                     <RefreshCw className="h-4 w-4" /> Prøv reparasjonen på nytt
                   </button>
                 )}
               </div>
+            </div>
+          )}
+
+          {repairSummary && (
+            <div className="mt-4 rounded-xl border border-accent-teal/25 bg-accent-teal/5 p-4 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="font-semibold">Automatisk revisjon</h4>
+                <span className="text-xs text-text-muted">Pass {repairSummary.pass_count}</span>
+              </div>
+              <p className="mt-1 text-text-secondary">
+                {repairSummary.found_count} problemer funnet
+                {repairSummary.repaired_count > 0
+                  ? " · " + repairSummary.repaired_count + " sikre rettelser gjennomført"
+                  : " · ingen sikre rettelser kunne gjennomføres"}
+              </p>
+              <p className="mt-2 text-xs text-text-secondary">
+                ✓ {repairSummary.qualified_count} presisert · {repairSummary.replaced_count} erstattet · {repairSummary.removed_count} fjernet
+                {repairSummary.unresolved_count + repairSummary.manual_review_count > 0
+                  ? ` · ! ${repairSummary.unresolved_count + repairSummary.manual_review_count} krever lærerens vurdering`
+                  : ""}
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div className="rounded-lg border border-border bg-surface px-3 py-2">
+                  <span className="block text-xs text-text-muted">Faktadekning</span>
+                  <strong>{repairSummary.before.coverage}% → {repairSummary.after.coverage}%</strong>
+                </div>
+                <div className="rounded-lg border border-border bg-surface px-3 py-2">
+                  <span className="block text-xs text-text-muted">Status etter ny kontroll</span>
+                  <strong>{chapterStatusLabels[chapter.status]}</strong>
+                </div>
+              </div>
+              <details className="mt-3 rounded-lg border border-border bg-surface">
+                <summary className="cursor-pointer px-3 py-2 font-medium">Se endringer</summary>
+                <div className="space-y-3 border-t border-border p-3">
+                  {repairSummary.changes.map((change, index) => (
+                    <div key={`${change.issue_id}-${index}`} className="rounded-lg border border-border bg-bg p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={change.result === "applied" ? "text-accent-green" : "text-accent-orange"}>
+                          {change.result === "applied" ? "✓" : "!"}
+                        </span>
+                        <strong className="capitalize">{change.action.replace("_", " ")}</strong>
+                        <span className="text-xs text-text-muted">{change.result.replace("_", " ")}</span>
+                      </div>
+                      {change.before && (
+                        <div className="mt-2 grid gap-2 md:grid-cols-2">
+                          <div><span className="text-xs font-semibold uppercase tracking-wide text-text-muted">Før</span><p className="mt-1 text-text-secondary">{change.before}</p></div>
+                          <div><span className="text-xs font-semibold uppercase tracking-wide text-text-muted">Etter</span><p className="mt-1 text-text-secondary">{change.after || "—"}</p></div>
+                        </div>
+                      )}
+                      <p className="mt-2 text-text-secondary"><span className="font-medium">Årsak:</span> {change.reason}</p>
+                      {change.source_refs.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {change.source_refs.map((source) => <a key={source} href={source} target="_blank" rel="noreferrer" className="text-xs text-accent-blue underline">{source}</a>)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </details>
+              {repairSummary.unresolved_count + repairSummary.manual_review_count > 0 && (
+                <details className="mt-3 rounded-lg border border-accent-orange/25 bg-accent-orange/5">
+                  <summary className="cursor-pointer px-3 py-2 font-medium">Se problemer som gjenstår</summary>
+                  <ul className="space-y-1 border-t border-accent-orange/25 p-3 text-text-secondary">
+                    {repairSummary.changes.filter((change) => change.result === "unresolved" || change.result === "manual_review").map((change, index) => (
+                      <li key={`${change.issue_id}-${index}`}>• {change.reason}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </div>
           )}
 

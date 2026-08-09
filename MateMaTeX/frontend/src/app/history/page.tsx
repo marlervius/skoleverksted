@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Clock, Sparkles, Star, Trash2, Copy, FolderOpen } from "lucide-react";
 import { listHistory, removeHistoryEntry, updateHistoryFavorite, type HistoryEntry } from "@/lib/generation-history";
 import { warningReasonLabel } from "@/lib/map-api-result";
 import { useAppStore } from "@/lib/store";
 import { getResult } from "@/lib/api";
 import { mapApiResultToGenerationResult } from "@/lib/map-api-result";
-import { listPlatformJobs, type PlatformJob } from "@/lib/platform-api";
+import { listPlatformJobs, listTeachingPackages, type PlatformJob, type TeachingPackage } from "@/lib/platform-api";
 
 export default function HistoryPage() {
   const router = useRouter();
@@ -18,10 +19,12 @@ export default function HistoryPage() {
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [openError, setOpenError] = useState("");
   const [platformJobs, setPlatformJobs] = useState<PlatformJob[]>([]);
+  const [teachingPackages, setTeachingPackages] = useState<TeachingPackage[]>([]);
 
   useEffect(() => {
     setEntries(listHistory());
     listPlatformJobs().then(setPlatformJobs).catch(() => undefined);
+    listTeachingPackages().then(setTeachingPackages).catch(() => undefined);
   }, []);
 
   const refresh = () => setEntries(listHistory());
@@ -44,7 +47,7 @@ export default function HistoryPage() {
     }
   };
 
-  if (entries.length > 0 || platformJobs.length > 0) {
+  if (entries.length > 0 || platformJobs.length > 0 || teachingPackages.length > 0) {
     return (
       <div className="max-w-content mx-auto">
         <div className="mb-6">
@@ -59,6 +62,7 @@ export default function HistoryPage() {
           )}
         </div>
         <div className="space-y-3">
+          {teachingPackages.length > 0 && <section className="card"><div className="flex items-center gap-2"><Clock size={16} className="text-accent-blue" /><h2 className="font-semibold">Undervisningspakker</h2></div><p className="mt-1 text-xs text-text-secondary">Varige pakker kan åpnes igjen selv etter at genereringen er ferdig.</p><div className="mt-3 space-y-2">{teachingPackages.map((pkg) => <div key={pkg.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5"><div><p className="text-sm font-medium">{pkg.title}</p><p className="text-xs text-text-muted">{pkg.plan.period_title} · {pkg.artifacts.length} artefakter · revisjon {pkg.package_revision}</p></div><Link href={`/teaching-packages/${pkg.id}`} className="btn-secondary">Åpne pakke</Link></div>)}</div></section>}
           {platformJobs.filter((job) => !entries.some((entry) => entry.jobId === job.id)).map((job) => (
             <div key={`platform-${job.id}`} className="card flex items-center justify-between gap-4">
               <div>

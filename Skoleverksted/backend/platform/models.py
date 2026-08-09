@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
@@ -29,7 +30,11 @@ YearPlanPeriodStatus = Literal["not_started", "in_progress", "ready", "completed
 MaterialStatus = Literal["draft", "approved", "used", "needs_revision"]
 MaterialKind = Literal[
     "learning_sheet",
+    "student_sheet",
     "worksheet",
+    "exercise_sheet",
+    "answer_key",
+    "teacher_guide",
     "lesson_sequence",
     "assessment",
     "presentation",
@@ -37,6 +42,40 @@ MaterialKind = Literal[
     "differentiated",
     "compendium",
     "other",
+]
+
+TeachingArtifactType = Literal[
+    "presentation",
+    "student_sheet",
+    "exercise_sheet",
+    "answer_key",
+    "teacher_guide",
+]
+TeachingArtifactStatus = Literal[
+    "planned",
+    "generating",
+    "generated",
+    "needs_review",
+    "needs_revision",
+    "reviewed_with_issues",
+    "approved",
+    "generation_incomplete",
+    "parse_failure",
+    "language_quality_failed",
+    "source_grounding_failed",
+    "verification_failed",
+    "superseded",
+    "cancelled",
+]
+TeachingPackageStatus = Literal[
+    "draft",
+    "planning",
+    "generating",
+    "needs_review",
+    "needs_revision",
+    "reviewed_with_issues",
+    "approved",
+    "archived",
 ]
 
 
@@ -159,6 +198,10 @@ class TruthClaim(BaseModel):
 class TruthPassport(BaseModel):
     version: str = "1.0"
     generated_at: str = Field(default_factory=utc_now)
+    # A passport is only valid for the exact text revision it audited.  The
+    # empty default keeps old persisted compendia readable; new audits always
+    # populate this value before they can be considered green.
+    content_revision: str = Field(default="", max_length=128)
     status: Literal[
         "verified",
         "needs_review",
@@ -177,6 +220,78 @@ class TruthPassport(BaseModel):
     removed_claims: list[str] = Field(default_factory=list, max_length=50)
     limitations: list[str] = Field(default_factory=list, max_length=30)
     summary: str = Field(default="", max_length=1200)
+
+
+RepairActionKind = Literal[
+    "keep",
+    "qualify",
+    "replace",
+    "remove",
+    "source_required",
+    "manual_review",
+]
+
+
+class RepairIssue(BaseModel):
+    issue_id: str = Field(min_length=1, max_length=80)
+    claim_id: str = Field(default="", max_length=80)
+    category: str = Field(default="factual", max_length=80)
+    severity: Literal["low", "medium", "high", "critical"] = "medium"
+    original_text: str = Field(default="", max_length=1600)
+    evidence: str = Field(default="", max_length=1600)
+    source_refs: list[str] = Field(default_factory=list, max_length=12)
+    recommended_action: RepairActionKind = "manual_review"
+
+
+class RepairAction(BaseModel):
+    issue_id: str = Field(min_length=1, max_length=80)
+    action: RepairActionKind
+    target_text: str = Field(default="", max_length=1600)
+    replacement_text: str = Field(default="", max_length=1600)
+    justification: str = Field(default="", max_length=1600)
+    source_refs: list[str] = Field(default_factory=list, max_length=12)
+
+
+class RepairPlan(BaseModel):
+    chapter_id: str = Field(min_length=1, max_length=80)
+    source_revision: str = Field(min_length=1, max_length=128)
+    issues: list[RepairIssue] = Field(default_factory=list, max_length=80)
+    proposed_actions: list[RepairAction] = Field(default_factory=list, max_length=80)
+    expected_result: str = Field(default="", max_length=1600)
+
+
+class RepairChange(BaseModel):
+    issue_id: str = Field(min_length=1, max_length=80)
+    action: RepairActionKind
+    result: Literal["applied", "unresolved", "manual_review", "skipped"]
+    before: str = Field(default="", max_length=1600)
+    after: str = Field(default="", max_length=1600)
+    reason: str = Field(default="", max_length=1600)
+    source_refs: list[str] = Field(default_factory=list, max_length=12)
+
+
+class RepairMetrics(BaseModel):
+    verified_claims: int = Field(default=0, ge=0)
+    total_claims: int = Field(default=0, ge=0)
+    coverage: int = Field(default=0, ge=0, le=100)
+    unresolved: int = Field(default=0, ge=0)
+    source_grounding_failures: int = Field(default=0, ge=0)
+    language_failures: int = Field(default=0, ge=0)
+
+
+class RepairSummary(BaseModel):
+    before: RepairMetrics = Field(default_factory=RepairMetrics)
+    after: RepairMetrics = Field(default_factory=RepairMetrics)
+    changes: list[RepairChange] = Field(default_factory=list, max_length=80)
+    found_count: int = Field(default=0, ge=0)
+    repaired_count: int = Field(default=0, ge=0)
+    qualified_count: int = Field(default=0, ge=0)
+    replaced_count: int = Field(default=0, ge=0)
+    removed_count: int = Field(default=0, ge=0)
+    unresolved_count: int = Field(default=0, ge=0)
+    manual_review_count: int = Field(default=0, ge=0)
+    pass_count: int = Field(default=1, ge=1, le=3)
+    stop_reason: str = Field(default="", max_length=240)
 
 
 class ThemePackRequest(BaseModel):
@@ -234,6 +349,13 @@ class YearPlanMaterial(BaseModel):
     mime_type: str = Field(default="application/pdf", max_length=120)
     size_bytes: int = Field(default=0, ge=0, le=30_000_000)
     notes: str = Field(default="", max_length=1200)
+    source_kind: Literal["manual", "teaching_package"] = "manual"
+    teaching_package_id: str | None = Field(default=None, max_length=64)
+    artifact_id: str | None = Field(default=None, max_length=64)
+    artifact_type: MaterialKind | None = None
+    artifact_version: int = Field(default=0, ge=0)
+    artifact_status: str = Field(default="approved", max_length=40)
+    projected_at: str = ""
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
 
@@ -336,6 +458,143 @@ class YearPlanMaterialUpdate(BaseModel):
     notes: str | None = Field(default=None, max_length=1200)
 
 
+class ArtifactSpec(BaseModel):
+    artifact_type: TeachingArtifactType
+    title: str = Field(min_length=2, max_length=180)
+    required: bool = True
+    order: int = Field(default=0, ge=0, le=20)
+
+
+class TeachingPackagePlan(BaseModel):
+    theme: str = Field(min_length=2, max_length=240)
+    period_title: str = Field(min_length=2, max_length=180)
+    subject: str = Field(min_length=2, max_length=120)
+    level: str = Field(min_length=1, max_length=80)
+    audience: str = Field(default="Elever", max_length=180)
+    lesson_count: int = Field(default=1, ge=1, le=120)
+    lesson_minutes: int = Field(default=45, ge=1, le=240)
+    duration_weeks: int = Field(default=1, ge=1, le=12)
+    competency_goals: list[str] = Field(default_factory=list, max_length=30)
+    learning_goals: list[str] = Field(default_factory=list, max_length=20)
+    key_concepts: list[str] = Field(default_factory=list, max_length=30)
+    suggested_activities: list[str] = Field(default_factory=list, max_length=20)
+    assessment: str = Field(default="", max_length=1600)
+    teacher_notes: str = Field(default="", max_length=3000)
+    overview: str = Field(default="", max_length=4000)
+    source_brief: str = Field(default="", max_length=40_000)
+    sources: list[TruthSource] = Field(default_factory=list, max_length=50)
+    artifact_specs: list[ArtifactSpec] = Field(min_length=1, max_length=10)
+    period_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
+class TeachingArtifactFile(BaseModel):
+    format: Literal["pdf", "docx", "pptx"]
+    filename: str = Field(min_length=1, max_length=240)
+    mime_type: str = Field(min_length=3, max_length=180)
+    size_bytes: int = Field(default=0, ge=0, le=100_000_000)
+    digest: str = Field(min_length=32, max_length=128)
+    storage_key: str = Field(min_length=1, max_length=240)
+    package_revision: int = Field(default=1, ge=1)
+
+
+class TeachingArtifact(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    package_id: str
+    artifact_type: TeachingArtifactType
+    required: bool = True
+    title: str = Field(min_length=2, max_length=180)
+    order: int = Field(default=0, ge=0, le=20)
+    content_markdown: str = Field(default="", max_length=120_000)
+    content_revision: str = Field(default="", max_length=128)
+    package_revision: int = Field(default=1, ge=1)
+    sources: list[TruthSource] = Field(default_factory=list, max_length=50)
+    truth_passport: TruthPassport | None = None
+    quality_passport: QualityPassport | None = None
+    verification_notes: list[str] = Field(default_factory=list, max_length=40)
+    source_quality_notes: list[str] = Field(default_factory=list, max_length=30)
+    status: TeachingArtifactStatus = "planned"
+    generation_token: str | None = Field(default=None, max_length=160)
+    artifact_job_id: str | None = Field(default=None, max_length=160)
+    revision_count: int = Field(default=0, ge=0, le=1000)
+    previous_content_markdown: str = Field(default="", max_length=120_000)
+    files: list[TeachingArtifactFile] = Field(default_factory=list, max_length=10)
+    artifact_version: int = Field(default=0, ge=0)
+    approved_at: str | None = None
+    approved_by: str = Field(default="", max_length=180)
+    approved_revision: str = Field(default="", max_length=128)
+    approved_digest: str = Field(default="", max_length=128)
+    updated_at: str = Field(default_factory=utc_now)
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.content_revision:
+            self.content_revision = hashlib.sha256(
+                self.content_markdown.replace("\r\n", "\n").strip().encode("utf-8")
+            ).hexdigest()
+
+
+class TeachingPackageCreate(BaseModel):
+    year_plan_id: str = Field(min_length=1, max_length=64)
+    period_id: str = Field(min_length=1, max_length=64)
+    artifact_types: list[TeachingArtifactType] = Field(default_factory=lambda: [
+        "presentation", "student_sheet", "exercise_sheet", "answer_key", "teacher_guide",
+    ], min_length=1, max_length=10)
+    audience: str = Field(default="Elever", max_length=180)
+    source_brief: str = Field(default="", max_length=40_000)
+    sources: list[TruthSource] = Field(default_factory=list, max_length=50)
+    title: str | None = Field(default=None, min_length=2, max_length=180)
+    project_id: str | None = Field(default=None, max_length=64)
+
+
+class TeachingPackageUpdate(BaseModel):
+    artifact_types: list[TeachingArtifactType] | None = Field(default=None, min_length=1, max_length=10)
+    audience: str | None = Field(default=None, max_length=180)
+    source_brief: str | None = Field(default=None, max_length=40_000)
+    sources: list[TruthSource] | None = Field(default=None, max_length=50)
+
+
+class TeachingArtifactUpdate(BaseModel):
+    content_markdown: str | None = Field(default=None, max_length=120_000)
+    status: Literal["needs_revision", "reviewed_with_issues"] | None = None
+
+
+class TeachingPackage(TeachingPackageCreate):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    title: str = Field(default="Undervisningspakke", min_length=2, max_length=180)
+    subject: str = Field(default="", max_length=120)
+    level: str = Field(default="", max_length=80)
+    status: TeachingPackageStatus = "draft"
+    plan: TeachingPackagePlan
+    artifacts: list[TeachingArtifact] = Field(default_factory=list, max_length=10)
+    package_job_id: str | None = Field(default=None, max_length=160)
+    package_revision: int = Field(default=1, ge=1)
+    revision_digest: str = Field(default="", max_length=128)
+    planning_source: Literal["ai", "fallback", "manual"] = "manual"
+    approved_at: str | None = None
+    approved_by: str = Field(default="", max_length=180)
+    approved_revision: int = 0
+    approved_digest: str = Field(default="", max_length=128)
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
+
+
+class TeachingApprovalRequest(BaseModel):
+    teacher: str = Field(default="local-teacher", min_length=1, max_length=180)
+
+
+class TeachingPackageJobAccepted(BaseModel):
+    package_job_id: str
+    artifact_job_ids: list[str]
+    status: str
+    status_url: str
+
+
+class TeachingArtifactJobAccepted(BaseModel):
+    job_id: str
+    artifact_id: str
+    status: str
+    status_url: str
+
+
 CompendiumType = Literal[
     "thematic",
     "chronological",
@@ -388,11 +647,19 @@ class CompendiumChapter(BaseModel):
     sources: list[CompendiumSource] = Field(default_factory=list, max_length=50)
     verification_notes: list[str] = Field(default_factory=list, max_length=30)
     truth_passport: TruthPassport | None = None
+    content_revision: str = Field(default="", max_length=128)
     revision_summary: list[str] = Field(default_factory=list, max_length=30)
+    repair_summary: RepairSummary | None = None
     previous_content_markdown: str = Field(default="", max_length=80_000)
     revision_count: int = Field(default=0, ge=0, le=1000)
     status: CompendiumChapterStatus = "planned"
     updated_at: str = Field(default_factory=utc_now)
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.content_revision:
+            self.content_revision = hashlib.sha256(
+                self.content_markdown.replace("\r\n", "\n").strip().encode("utf-8")
+            ).hexdigest()
 
 
 class CompendiumPlanRequest(BaseModel):
@@ -521,7 +788,11 @@ class RepairJob(BaseModel):
     message: str = Field(default="", max_length=400)
     chapter_token: str = Field(default="", max_length=80)
     result_token: str = Field(default="", max_length=80)
+    source_revision: str = Field(default="", max_length=128)
+    output_revision: str = Field(default="", max_length=128)
     chapter_status: CompendiumChapterStatus | None = None
+    repair_summary: RepairSummary | None = None
+    failure_reason: str = Field(default="", max_length=400)
     attempt: int = Field(default=1, ge=1)
     cancel_requested: bool = False
     lease_expires_at: str = ""

@@ -9,6 +9,26 @@
 
 Dette dokumentet beskriver hva Skoleverksted er, hva som er implementert, hvordan løsningene henger sammen, hva som er testet, og hva som bør gjøres før produktet kan brukes bredt i skolen.
 
+## 0. TeachingPackage — implementert arbeidsflyt
+
+Per 9. august 2026 er TeachingPackage implementert på arbeidsgrenen
+`codex/teaching-package` som en additiv plattformflyt. Fra én årsplanperiode kan
+læreren opprette fem sammenhengende artefakter: redigerbar PPTX-presentasjon,
+studentark, oppgaveark, fasit og lærerveiledning. Pakken har canonical SOT i
+`TeachingPackage`/`TeachingArtifact`; `period.materials` inneholder bare godkjente,
+avledede filreferanser.
+
+Genereringen registrerer varige parent/child-jobber før arbeid starter. Serveren
+støtter per-artefakt retry, lærerredigering med ny revisjon, faktapass på eksakt
+innholdsrevisjon, CAS-beskyttet skriving, restart recovery, cancel og atomisk
+godkjenning/projeksjon. Nedlasting av PDF/DOCX/PPTX og ZIP er blokkert til riktig
+pakkerevisjon er godkjent.
+
+Verifisert i Docker: `132 passed` backend-tester, pluss ekte fixture-rendering
+av fire PDF-er, fire DOCX-filer og én redigerbar PPTX med 11 slides. Frontendens
+produksjonsbygg må fortsatt kjøres i et rent installert Node-miljø; den lokale
+`node_modules`-mappen i denne arbeidskopien er ufullstendig.
+
 ## 1. Produktet kort fortalt
 
 Skoleverksted er en samlet lærerplattform som erstatter tre separate arbeidsflyter med én felles app. Læreren velger arbeidsflate øverst i grensesnittet og kan lage, kvalitetssikre, lagre og gjenbruke undervisningsmateriell.

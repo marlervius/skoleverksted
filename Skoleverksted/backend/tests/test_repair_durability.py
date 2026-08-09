@@ -17,7 +17,7 @@ from Skoleverksted.backend.platform import queue as queue_module
 from Skoleverksted.backend.platform import repair as repair_module
 from Skoleverksted.backend.platform import router as router_module
 from Skoleverksted.backend.platform import store as store_module
-from Skoleverksted.backend.platform.compendium import plan_compendium
+from Skoleverksted.backend.platform.compendium import REPAIR_PROMPT_VERSION, plan_compendium
 from Skoleverksted.backend.platform.models import (
     CompendiumChapter,
     CompendiumPlanRequest,
@@ -29,8 +29,14 @@ from Skoleverksted.backend.platform.store import PlatformStore
 from Skoleverksted.backend.platform.truth import TruthAudit
 
 
-REPAIRED_TEXT = "## Aktører\n\n" + ("Rettet og dokumentert setning om perioden. " * 30)
-ORIGINAL_TEXT = "## Aktører\n\n" + ("Uklar påstand om perioden uten dekning. " * 30)
+REPAIRED_TEXT = "## Aktører\n\n" + " ".join(
+    f"Rettet og dokumentert setning om perioden {index}."
+    for index in range(30)
+)
+ORIGINAL_TEXT = "## Aktører\n\n" + " ".join(
+    f"Uklar påstand om perioden uten dekning {index}."
+    for index in range(30)
+)
 
 
 class _Harness:
@@ -574,7 +580,7 @@ def test_the_ledger_reconstructs_the_repair(harness, monkeypatch):
         assert stage in stages
     request = next(entry for entry in entries if entry.stage == "model_request")
     assert request.payload["model"]
-    assert request.payload["prompt_version"] == "compendium-repair-v1"
+    assert request.payload["prompt_version"] == REPAIR_PROMPT_VERSION
     assert request.payload["prompt_chars"] > 0
     assert len(request.payload["prompt_hash"]) == 64
     response = next(entry for entry in entries if entry.stage == "model_response")

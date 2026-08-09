@@ -73,6 +73,7 @@ export interface TruthClaim {
 export interface TruthPassport {
   version: string;
   generated_at: string;
+  content_revision: string;
   status: "verified" | "needs_review" | "blocked" | "verification_failed" | "source_unavailable" | "not_evaluated";
   topic: string;
   subject: string;
@@ -155,7 +156,11 @@ export interface RepairJob {
   message: string;
   chapter_token: string;
   result_token: string;
+  source_revision: string;
+  output_revision: string;
   chapter_status: string | null;
+  repair_summary: RepairSummary | null;
+  failure_reason: string;
   attempt: number;
   cancel_requested: boolean;
   lease_expires_at: string;
@@ -183,6 +188,48 @@ export interface RepairLedgerEntry {
   payload: Record<string, unknown>;
 }
 
+export type RepairActionKind =
+  | "keep"
+  | "qualify"
+  | "replace"
+  | "remove"
+  | "source_required"
+  | "manual_review";
+
+export interface RepairChange {
+  issue_id: string;
+  action: RepairActionKind;
+  result: "applied" | "unresolved" | "manual_review" | "skipped";
+  before: string;
+  after: string;
+  reason: string;
+  source_refs: string[];
+}
+
+export interface RepairMetrics {
+  verified_claims: number;
+  total_claims: number;
+  coverage: number;
+  unresolved: number;
+  source_grounding_failures: number;
+  language_failures: number;
+}
+
+export interface RepairSummary {
+  before: RepairMetrics;
+  after: RepairMetrics;
+  changes: RepairChange[];
+  found_count: number;
+  repaired_count: number;
+  qualified_count: number;
+  replaced_count: number;
+  removed_count: number;
+  unresolved_count: number;
+  manual_review_count: number;
+  pass_count: number;
+  stop_reason: string;
+}
+
 export const REPAIR_POLL_INTERVAL_MS = 3000;
 
 const ACTIVE_REPAIR_STATUSES: RepairJobStatus[] = ["queued", "running"];
@@ -203,7 +250,7 @@ export function repairStatusView(job: RepairJob): {
   switch (job.status) {
     case "queued":
       return {
-        label: "Reparasjon i kø",
+        label: "Sjekker fakta og kilder",
         detail:
           "Reparasjonen er lagret på serveren. Du kan forlate siden og komme tilbake senere.",
         tone: "busy",
@@ -211,16 +258,33 @@ export function repairStatusView(job: RepairJob): {
       };
     case "running":
       return {
-        label: "Sjekker og retter …",
+        label: "Lager plan og retter dokumenterte problemer",
         detail:
           "Serveren undersøker kildene og retter teksten. Du kan forlate siden; arbeidet fortsetter.",
         tone: "busy",
         canRetry: false,
       };
     case "succeeded":
+      if (job.repair_summary?.repaired_count === 0 || job.repair_summary?.stop_reason === "no-safe-repair") {
+        return {
+          label: "Kontroll fullført – ingen sikre rettelser",
+          detail:
+            job.message || "Ingen trygg automatisk endring kunne gjennomføres. Se gjenstående problemer og vurder teksten manuelt.",
+          tone: "warn",
+          canRetry: false,
+        };
+      }
+      if (job.chapter_status && job.chapter_status !== "generated" && job.chapter_status !== "approved") {
+        return {
+          label: "Revisjon lagret – krever lærerens vurdering",
+          detail: job.message || "Rettelser er lagret, men den nye kontrollen fant fortsatt problemer.",
+          tone: "warn",
+          canRetry: false,
+        };
+      }
       return {
-        label: "Reparasjonen er fullført",
-        detail: job.message || "Kapittelet er oppdatert. Kontroller endringene før du godkjenner.",
+        label: "Automatisk revisjon ferdig",
+        detail: job.message || "Ny tekst og nytt faktapass er lagret. Kontroller endringene før du godkjenner.",
         tone: "ok",
         canRetry: false,
       };
@@ -262,7 +326,11 @@ export type YearPlanPeriodStatus = "not_started" | "in_progress" | "ready" | "co
 export type MaterialStatus = "draft" | "approved" | "used" | "needs_revision";
 export type MaterialKind =
   | "learning_sheet"
+  | "student_sheet"
   | "worksheet"
+  | "exercise_sheet"
+  | "answer_key"
+  | "teacher_guide"
   | "lesson_sequence"
   | "assessment"
   | "presentation"
@@ -281,8 +349,134 @@ export interface YearPlanMaterial {
   mime_type: string;
   size_bytes: number;
   notes: string;
+  source_kind: "manual" | "teaching_package";
+  teaching_package_id: string | null;
+  artifact_id: string | null;
+  artifact_type: MaterialKind | null;
+  artifact_version: number;
+  artifact_status: string;
+  projected_at: string;
   created_at: string;
   updated_at: string;
+}
+
+export type TeachingArtifactType = "presentation" | "student_sheet" | "exercise_sheet" | "answer_key" | "teacher_guide";
+export type TeachingArtifactStatus =
+  | "planned" | "generating" | "generated" | "needs_review" | "needs_revision"
+  | "reviewed_with_issues" | "approved" | "generation_incomplete" | "parse_failure"
+  | "language_quality_failed" | "source_grounding_failed" | "verification_failed"
+  | "superseded" | "cancelled";
+export type TeachingPackageStatus =
+  | "draft" | "planning" | "generating" | "needs_review" | "needs_revision"
+  | "reviewed_with_issues" | "approved" | "archived";
+
+export interface TeachingArtifactFile {
+  format: "pdf" | "docx" | "pptx";
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  digest: string;
+  storage_key: string;
+  package_revision: number;
+}
+
+export interface ArtifactSpec {
+  artifact_type: TeachingArtifactType;
+  title: string;
+  required: boolean;
+  order: number;
+}
+
+export interface TeachingPackagePlan {
+  theme: string;
+  period_title: string;
+  subject: string;
+  level: string;
+  audience: string;
+  lesson_count: number;
+  lesson_minutes: number;
+  duration_weeks: number;
+  competency_goals: string[];
+  learning_goals: string[];
+  key_concepts: string[];
+  suggested_activities: string[];
+  assessment: string;
+  teacher_notes: string;
+  overview: string;
+  source_brief: string;
+  sources: TruthSource[];
+  artifact_specs: ArtifactSpec[];
+  period_snapshot: Record<string, unknown>;
+}
+
+export interface TeachingArtifact {
+  id: string;
+  package_id: string;
+  artifact_type: TeachingArtifactType;
+  required: boolean;
+  title: string;
+  order: number;
+  content_markdown: string;
+  content_revision: string;
+  package_revision: number;
+  sources: TruthSource[];
+  truth_passport: TruthPassport | null;
+  quality_passport: QualityPassport | null;
+  verification_notes: string[];
+  source_quality_notes: string[];
+  status: TeachingArtifactStatus;
+  generation_token: string | null;
+  artifact_job_id: string | null;
+  revision_count: number;
+  previous_content_markdown: string;
+  files: TeachingArtifactFile[];
+  artifact_version: number;
+  approved_at: string | null;
+  approved_by: string;
+  approved_revision: string;
+  approved_digest: string;
+  updated_at: string;
+}
+
+export interface TeachingPackage {
+  id: string;
+  year_plan_id: string;
+  period_id: string;
+  subject: string;
+  level: string;
+  title: string;
+  artifact_types: TeachingArtifactType[];
+  audience: string;
+  source_brief: string;
+  sources: TruthSource[];
+  project_id: string | null;
+  status: TeachingPackageStatus;
+  plan: TeachingPackagePlan;
+  artifacts: TeachingArtifact[];
+  package_job_id: string | null;
+  package_revision: number;
+  revision_digest: string;
+  planning_source: "ai" | "fallback" | "manual";
+  approved_at: string | null;
+  approved_by: string;
+  approved_revision: number;
+  approved_digest: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeachingPackageJobAccepted {
+  package_job_id: string;
+  artifact_job_ids: string[];
+  status: string;
+  status_url: string;
+}
+
+export interface TeachingArtifactJobAccepted {
+  job_id: string;
+  artifact_id: string;
+  status: string;
+  status_url: string;
 }
 
 export interface YearPlanPeriod {
@@ -386,7 +580,9 @@ export interface CompendiumChapter {
   sources: CompendiumSource[];
   verification_notes: string[];
   truth_passport: TruthPassport | null;
+  content_revision: string;
   revision_summary: string[];
+  repair_summary: RepairSummary | null;
   previous_content_markdown: string;
   revision_count: number;
   status: CompendiumChapterStatus;
@@ -608,6 +804,67 @@ export const updateYearPlanMaterial = (
 
 export const yearPlanMaterialDownloadUrl = (planId: string, materialId: string) =>
   `${baseUrl()}/year-plans/${encodeURIComponent(planId)}/materials/${encodeURIComponent(materialId)}/download`;
+
+export const listTeachingPackages = (input: { yearPlanId?: string; periodId?: string; projectId?: string; limit?: number } = {}) => {
+  const query = new URLSearchParams({ limit: String(input.limit ?? 50) });
+  if (input.yearPlanId) query.set("year_plan_id", input.yearPlanId);
+  if (input.periodId) query.set("period_id", input.periodId);
+  if (input.projectId) query.set("project_id", input.projectId);
+  return requestJson<TeachingPackage[]>(`/teaching-packages?${query.toString()}`);
+};
+
+export const createTeachingPackage = (input: {
+  year_plan_id: string;
+  period_id: string;
+  artifact_types: TeachingArtifactType[];
+  audience: string;
+  source_brief: string;
+  sources: TruthSource[];
+  title?: string;
+  project_id?: string;
+}) => requestJson<TeachingPackage>("/teaching-packages", { method: "POST", body: JSON.stringify(input) });
+
+export const getTeachingPackage = (id: string) =>
+  requestJson<TeachingPackage>(`/teaching-packages/${encodeURIComponent(id)}`);
+
+export const generateTeachingPackage = (id: string) =>
+  requestJson<TeachingPackageJobAccepted>(`/teaching-packages/${encodeURIComponent(id)}/generate`, { method: "POST" });
+
+export const regenerateTeachingArtifact = (packageId: string, artifactId: string) =>
+  requestJson<TeachingArtifactJobAccepted>(
+    `/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}/regenerate`,
+    { method: "POST" },
+  );
+
+export const updateTeachingArtifact = (packageId: string, artifactId: string, content_markdown: string, status?: "needs_revision" | "reviewed_with_issues") =>
+  requestJson<TeachingPackage>(
+    `/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}`,
+    { method: "PATCH", body: JSON.stringify({ content_markdown, ...(status ? { status } : {}) }) },
+  );
+
+export const verifyTeachingArtifact = (packageId: string, artifactId: string) =>
+  requestJson<TeachingArtifactJobAccepted>(
+    `/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}/verify`,
+    { method: "POST" },
+  );
+
+export const approveTeachingArtifact = (packageId: string, artifactId: string, teacher = "local-teacher") =>
+  requestJson<TeachingPackage>(
+    `/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}/approve`,
+    { method: "POST", body: JSON.stringify({ teacher }) },
+  );
+
+export const approveTeachingPackage = (packageId: string, teacher = "local-teacher") =>
+  requestJson<TeachingPackage>(
+    `/teaching-packages/${encodeURIComponent(packageId)}/approve`,
+    { method: "POST", body: JSON.stringify({ teacher }) },
+  );
+
+export const teachingArtifactDownloadUrl = (packageId: string, artifactId: string, format: "pdf" | "docx" | "pptx") =>
+  `${baseUrl()}/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}/download/${format}`;
+
+export const teachingPackageZipDownloadUrl = (packageId: string) =>
+  `${baseUrl()}/teaching-packages/${encodeURIComponent(packageId)}/download/zip`;
 
 export const listCompendia = (limit = 50) =>
   requestJson<Compendium[]>(`/compendia?limit=${limit}`);

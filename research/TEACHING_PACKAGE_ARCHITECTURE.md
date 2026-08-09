@@ -1,18 +1,19 @@
 # TeachingPackage — arkitektur
 
-**Status:** designdokument. Ingen kode er implementert.
+**Status:** designbaseline med implementert utvidelse per 2026-08-09.
 
 **Opprettet:** 2026-08-08
 
 **Produksjonsdom for plattformen:** `REJECTED` (`PILOT_GO_NO_GO.md`,
 `PRODUCTION_VERIFICATION_REPORT.md`). Implementeringsgaten for M1 er **lukket**
-og åpnes bare ved eksplisitt beslutning.
+og ble eksplisitt åpnet av oppdraget 2026-08-09 for en full, flerartefakt
+TeachingPackage-implementasjon. Dette dokumentet beholder beslutningshistorikken;
+gjeldende kode og akseptansebevis ligger i exec-planen og testfixturen.
 
 Evidensmerking følger hierarkiet i `PRODUCT_EXCELLENCE_EXECPLAN.md` punkt 1.
-Alt i dette dokumentet som beskriver *eksisterende* kode er `KODEBEVIST`. Alt
-som beskriver TeachingPackage er `DESIGN` — det finnes ikke ennå. Søk i repoet
-2026-08-08 ga null treff på `TeachingPackage`, `teaching_package` og
-`TeachingArtifact`.
+Alt i dette dokumentet som beskriver *eksisterende* kode er `KODEBEVIST`. Nye
+implementasjonsbeskrivelser er `IMPLEMENTERT` når de er verifisert i kode.
+Historiske designpåstander fra 2026-08-08 er beholdt for sporbarhet.
 
 ---
 
@@ -26,7 +27,7 @@ Disse er besluttet og er ikke åpne for reforhandling i TP-M1-design.
 | B2 | TeachingPackage er canonical source of truth. `period.materials` beholdes for MVP/bakoverkompatibilitet, men kun som avledet projeksjon. | Undervisningsinnhold dobbeltlagres ikke. Én eksplisitt projeksjonsfunksjon. |
 | B3 | 3–8 minutter er akseptabelt i kontrollert pilot, forutsatt asynkron og durable generering, gjenopptakbar status, synlig progresjon og per-artefakt retry. `MAX_CONCURRENT_JOBS` økes ikke før produksjons-/pilotdata finnes. | Obligatorisk instrumentering av kø- og genereringstid. |
 | B4 | TeachingPackage-generering skal bruke `DurableJobGate` fra første implementerte versjon. | Ingen ny langvarig synkron HTTP-flyt. |
-| B5 | **TP-M1 er frosset** som definert: én Historie VG2-periode, én `required` artefakt, `artifact_type = learning_sheet`, DurableJobGate, canonical TeachingPackage-state, truth/quality-gate, lærerreview, projeksjon til `period.materials` først etter godkjenning. | Ingen PowerPoint, ingen ekstra artefakttyper i TP-M1. Utvidelse krever ny beslutning, ikke skjønn under implementering. |
+| B5 | Historisk TP-M1 var frosset til én Historie VG2-artefakt. Oppdraget 2026-08-09 åpnet eksplisitt gaten og utvidet leveransen til fem artefakttyper: `presentation`, `student_sheet`, `exercise_sheet`, `answer_key`, `teacher_guide`. | Gjeldende implementasjon har full parent/child-fan-out, redigerbar PPTX, PDF/DOCX, per-artefakt review og samlet pakkeprojeksjon. |
 | B6 | **80 %-kravet beholdes.** Dagens truth threshold senkes ikke for å gjøre undervisningspakker mulige. | Hvis en pakke ikke kan godkjennes fordi sannhetsmotoren ikke når kravet, skal systemet rapportere det ærlig. Ikke-godkjenning er et gyldig utfall. |
 | B7 | Truth-invarianten generaliseres i *designet* med `truth_requirement ∈ {required, not_applicable}`, deterministisk bestemt av `artifact_type`/policy. **Ikke implementert nå.** | Punkt 1.5. For TP-M1: `learning_sheet → required`, altså identisk oppførsel med B1. |
 | B8 | Truth coverage registreres som strategisk risiko `TRUTH-COVERAGE-01`, og skal **ikke** løses inne i TeachingPackage. | Punkt 6.1 og [TRUTH_COVERAGE_RESEARCH_PLAN.md](research/TRUTH_COVERAGE_RESEARCH_PLAN.md), som er `BLOCKED`. |
