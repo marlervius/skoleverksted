@@ -289,16 +289,39 @@ class RepairService:
                 repair_summary=stored.repair_summary,
                 failure_reason=recorder.failure_reason,
             )
-        recorder.write("succeeded", chapter_status=stored.status)
-        return self._finish(
+        summary = stored.repair_summary
+        if summary is not None and summary.repaired_count == 0:
+            message = (
+                "Automatisk kontroll er fullført, men ingen sikre rettelser kunne "
+                "gjennomføres. Se gjenstående problemer og vurder teksten manuelt."
+            )
+        elif stored.status == "generated":
+            message = (
+                "Automatisk revisjon er fullført, og den nye teksten er kontrollert "
+                "på nytt. Se før/etter-endringene før godkjenning."
+            )
+        else:
+            message = (
+                "Automatisk kontroll er fullført. Nye rettelser er lagret, men "
+                f"kapittelet står fortsatt som {stored.status} etter ny kontroll."
+            )
+        finished = self._finish(
             job,
             "succeeded",
-            "Reparasjonen er fullført og kapittelet er oppdatert.",
+            message,
             result_token=result_token,
             chapter_status=stored.status,
             output_revision=stored.content_revision,
             repair_summary=stored.repair_summary,
+            terminal_event=(
+                "succeeded",
+                {
+                    "chapter_status": stored.status,
+                    "repaired_count": summary.repaired_count if summary is not None else 0,
+                },
+            ),
         )
+        return finished
 
     # -- cancellation --------------------------------------------------
 
@@ -324,6 +347,7 @@ class RepairService:
         repair_summary: Any | None = None,
         failure_reason: str = "",
         expected_statuses: tuple[str, ...] = ("queued", "running"),
+        terminal_event: tuple[str, dict[str, Any]] | None = None,
     ) -> RepairJob | None:
         finished = self._store.finish_repair_job(
             job.id,
@@ -335,6 +359,7 @@ class RepairService:
             repair_summary=repair_summary,
             failure_reason=failure_reason,
             expected_statuses=expected_statuses,
+            terminal_event=terminal_event,
         )
         if finished is None:
             # Cancelled or recovered while we worked; that record wins.

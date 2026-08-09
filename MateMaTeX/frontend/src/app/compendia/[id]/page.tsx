@@ -383,6 +383,12 @@ function ChapterCard({
                   ? " · " + repairSummary.repaired_count + " sikre rettelser gjennomført"
                   : " · ingen sikre rettelser kunne gjennomføres"}
               </p>
+              <p className="mt-2 text-xs text-text-secondary">
+                ✓ {repairSummary.qualified_count} presisert · {repairSummary.replaced_count} erstattet · {repairSummary.removed_count} fjernet
+                {repairSummary.unresolved_count + repairSummary.manual_review_count > 0
+                  ? ` · ! ${repairSummary.unresolved_count + repairSummary.manual_review_count} krever lærerens vurdering`
+                  : ""}
+              </p>
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 <div className="rounded-lg border border-border bg-surface px-3 py-2">
                   <span className="block text-xs text-text-muted">Faktadekning</span>
@@ -396,8 +402,8 @@ function ChapterCard({
               <details className="mt-3 rounded-lg border border-border bg-surface">
                 <summary className="cursor-pointer px-3 py-2 font-medium">Se endringer</summary>
                 <div className="space-y-3 border-t border-border p-3">
-                  {repairSummary.changes.map((change) => (
-                    <div key={change.issue_id} className="rounded-lg border border-border bg-bg p-3">
+                  {repairSummary.changes.map((change, index) => (
+                    <div key={`${change.issue_id}-${index}`} className="rounded-lg border border-border bg-bg p-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={change.result === "applied" ? "text-accent-green" : "text-accent-orange"}>
                           {change.result === "applied" ? "✓" : "!"}
@@ -425,8 +431,8 @@ function ChapterCard({
                 <details className="mt-3 rounded-lg border border-accent-orange/25 bg-accent-orange/5">
                   <summary className="cursor-pointer px-3 py-2 font-medium">Se problemer som gjenstår</summary>
                   <ul className="space-y-1 border-t border-accent-orange/25 p-3 text-text-secondary">
-                    {repairSummary.changes.filter((change) => change.result === "unresolved" || change.result === "manual_review").map((change) => (
-                      <li key={change.issue_id}>• {change.reason}</li>
+                    {repairSummary.changes.filter((change) => change.result === "unresolved" || change.result === "manual_review").map((change, index) => (
+                      <li key={`${change.issue_id}-${index}`}>• {change.reason}</li>
                     ))}
                   </ul>
                 </details>

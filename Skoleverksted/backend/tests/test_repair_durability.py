@@ -29,8 +29,14 @@ from Skoleverksted.backend.platform.store import PlatformStore
 from Skoleverksted.backend.platform.truth import TruthAudit
 
 
-REPAIRED_TEXT = "## Aktører\n\n" + ("Rettet og dokumentert setning om perioden. " * 30)
-ORIGINAL_TEXT = "## Aktører\n\n" + ("Uklar påstand om perioden uten dekning. " * 30)
+REPAIRED_TEXT = "## Aktører\n\n" + " ".join(
+    f"Rettet og dokumentert setning om perioden {index}."
+    for index in range(30)
+)
+ORIGINAL_TEXT = "## Aktører\n\n" + " ".join(
+    f"Uklar påstand om perioden uten dekning {index}."
+    for index in range(30)
+)
 
 
 class _Harness:

@@ -249,8 +249,9 @@ def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch)
         store = PlatformStore(Path(tmp) / "platform.sqlite3")
         compendium = store.create_compendium(_proposal())
         chapter = compendium.chapters[0]
-        before = "## Aktører\n\n" + (
-            "Store deler av middelklassen støttet fascismen uten forbehold. " * 20
+        before = "## Aktører\n\n" + "\n".join(
+            f"Store deler av middelklassen støttet fascismen uten forbehold i eksempel {index}."
+            for index in range(20)
         )
         chapter.content_markdown = before
         chapter.status = "needs_revision"
@@ -263,9 +264,14 @@ def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch)
         saved = store.replace_compendium_chapter(compendium.id, chapter)
         assert saved is not None
         compendium = saved
-        after = "## Aktører\n\n" + (
-            "Deler av middelklassen støttet fascistiske partier, men mønsteret "
-            "varierte mellom land og grupper (Kilde: Konkret artikkel). " * 12
+        after = "## Aktører\n\n" + "\n".join(
+            (
+                "Deler av middelklassen støttet fascistiske partier, men mønsteret "
+                "varierte mellom land og grupper (Kilde: Konkret artikkel) i eksempel 0."
+                if index == 0
+                else f"Store deler av middelklassen støttet fascismen uten forbehold i eksempel {index}."
+            )
+            for index in range(20)
         )
         calls = 0
 
@@ -320,8 +326,9 @@ def test_automatic_repair_can_upgrade_weak_sources_without_existing_notes(monkey
     with tempfile.TemporaryDirectory() as tmp:
         compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
         chapter = compendium.chapters[0]
-        chapter.content_markdown = "## Kapittel\n\n" + (
-            "Ideologier påvirket politiske konflikter og samfunnsendringer. " * 20
+        chapter.content_markdown = "## Kapittel\n\n" + " ".join(
+            f"Ideologier påvirket politiske konflikter og samfunnsendringer i eksempel {index}."
+            for index in range(20)
         )
         chapter.status = "approved"
         chapter.sources = [

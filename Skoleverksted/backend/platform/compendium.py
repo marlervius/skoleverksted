@@ -264,6 +264,7 @@ def _audit_chapter_material(
     subject: str,
     level: str,
     provided_sources: list[CompendiumSource] | None = None,
+    mutate_content: bool = True,
 ) -> tuple[str, list[str], list[str], TruthPassport]:
     audit_input = (
         f"{content.rstrip()}\n\n{_TRUTH_FACTS_MARKER}\n"
@@ -278,6 +279,21 @@ def _audit_chapter_material(
         level=level,
         provided_sources=provided_sources or [],
     )
+
+    # Generation may use the truth layer's safe sentence edits, but repair has
+    # already applied an explicit RepairPlan. A re-audit must therefore be an
+    # audit only; otherwise an unsupported claim could be silently removed or
+    # qualified outside RepairSummary.changes.
+    if not mutate_content:
+        if truth_audit.content != audit_input:
+            truth_audit.passport.status = "needs_review"
+            truth_audit.passport.limitations.append(
+                "Etterkontrollen foreslo en ekstra tekstendring som ikke ble utført "
+                "uten en eksplisitt reparasjonshandling."
+            )
+        truth_audit.passport.content_revision = content_revision(content)
+        return content, key_facts, glossary, truth_audit.passport
+
     revised = truth_audit.content
     if (
         _TRUTH_FACTS_MARKER not in revised
@@ -1215,6 +1231,7 @@ def apply_repair_plan(
     issues = {issue.issue_id: issue for issue in plan.issues}
     result = content
     changes: list[RepairChange] = []
+    processed_issue_ids: set[str] = set()
     for action in plan.proposed_actions:
         issue = issues.get(action.issue_id)
         source_refs = list(dict.fromkeys(_canonical_source_url(url) for url in action.source_refs if _canonical_source_url(url)))
@@ -1227,6 +1244,7 @@ def apply_repair_plan(
                 source_refs=source_refs,
             ))
             continue
+        processed_issue_ids.add(action.issue_id)
         if action.action == "keep":
             changes.append(RepairChange(
                 issue_id=action.issue_id,
@@ -1237,13 +1255,23 @@ def apply_repair_plan(
                 source_refs=source_refs,
             ))
             continue
-        if action.action in {"source_required", "manual_review"}:
+        if action.action == "source_required":
+            changes.append(RepairChange(
+                issue_id=action.issue_id,
+                action=action.action,
+                result="unresolved",
+                before=action.target_text or issue.original_text,
+                reason=action.justification or "Påstanden krever lærerens vurdering eller en konkret kilde.",
+                source_refs=source_refs,
+            ))
+            continue
+        if action.action == "manual_review":
             changes.append(RepairChange(
                 issue_id=action.issue_id,
                 action=action.action,
                 result="manual_review",
                 before=action.target_text or issue.original_text,
-                reason=action.justification or "Påstanden krever lærerens vurdering eller en konkret kilde.",
+                reason=action.justification or "Påstanden krever lærerens vurdering.",
                 source_refs=source_refs,
             ))
             continue
@@ -1265,17 +1293,6 @@ def apply_repair_plan(
                     result="manual_review",
                     before=action.target_text or issue.original_text,
                     reason="Reparasjonsplanen mangler en faglig begrunnelse.",
-                    source_refs=source_refs,
-                ))
-                continue
-            replacement = action.replacement_text.strip()
-            if not replacement or "\n" in replacement or replacement[-1] not in ".!?":
-                changes.append(RepairChange(
-                    issue_id=action.issue_id,
-                    action="manual_review",
-                    result="manual_review",
-                    before=action.target_text or issue.original_text,
-                    reason="Erstatningen er ikke en hel setning eller deterministisk tekstlinje.",
                     source_refs=source_refs,
                 ))
                 continue
@@ -1307,6 +1324,22 @@ def apply_repair_plan(
                 source_refs=source_refs,
             ))
             continue
+        if action.action in {"qualify", "replace"}:
+            replacement = action.replacement_text.strip()
+            if (
+                not replacement
+                or "\n" in replacement
+                or (target.kind != "line" and replacement[-1] not in ".!?")
+            ):
+                changes.append(RepairChange(
+                    issue_id=action.issue_id,
+                    action="manual_review",
+                    result="manual_review",
+                    before=target_text,
+                    reason="Erstatningen er ikke en hel setning eller deterministisk tekstlinje.",
+                    source_refs=source_refs,
+                ))
+                continue
         if action.action == "remove":
             start, end = target.line_start, target.line_end
             if target.kind != "line":
@@ -1342,11 +1375,32 @@ def apply_repair_plan(
             reason=action.justification,
             source_refs=source_refs,
         ))
+    # Every reported issue must have an explicit outcome. An omitted action is
+    # not permission to treat the issue as resolved.
+    for issue in plan.issues:
+        if issue.issue_id in processed_issue_ids:
+            continue
+        changes.append(RepairChange(
+            issue_id=issue.issue_id,
+            action="manual_review",
+            result="manual_review",
+            before=issue.original_text,
+            reason="Reparasjonsplanen rapporterte problemet, men foreslo ingen handling.",
+            source_refs=list(issue.source_refs),
+        ))
     return result, changes
 
 
-def _metrics(passport: TruthPassport | None, quality_issues: list[TextQualityIssue]) -> RepairMetrics:
-    if passport is None:
+def _metrics(
+    passport: TruthPassport | None,
+    quality_issues: list[TextQualityIssue],
+    *,
+    content: str | None = None,
+) -> RepairMetrics:
+    if passport is None or (
+        content is not None
+        and passport.content_revision != content_revision(content)
+    ):
         return RepairMetrics(
             unresolved=1,
             source_grounding_failures=1,
@@ -1363,11 +1417,18 @@ def _metrics(passport: TruthPassport | None, quality_issues: list[TextQualityIss
     )
 
 
-def _legacy_plan(content_before: str, payload: dict[str, Any], chapter_id: str) -> RepairPlan:
+def _legacy_plan(
+    content_before: str,
+    payload: dict[str, Any],
+    chapter_id: str,
+    *,
+    source_refs: list[str] | None = None,
+) -> RepairPlan:
     """Compatibility adapter for pre-v2 fixtures; production uses repair_plan."""
     proposed = _markdown_text(payload.get("content_markdown"))
     changes = _strings(payload.get("changes"), 30)
     actions: list[RepairAction] = []
+    legacy_sources = list(dict.fromkeys(source_refs or []))[:12]
     if proposed and proposed != content_before and changes:
         matcher = difflib.SequenceMatcher(a=content_before.splitlines(), b=proposed.splitlines())
         for index, (tag, start, end, other_start, other_end) in enumerate(matcher.get_opcodes()):
@@ -1382,7 +1443,7 @@ def _legacy_plan(content_before: str, payload: dict[str, Any], chapter_id: str) 
                     target_text=before,
                     replacement_text=after,
                     justification=changes[min(index, len(changes) - 1)],
-                    source_refs=[],
+                    source_refs=legacy_sources,
                 ))
         if not actions:
             actions.append(RepairAction(
@@ -1394,7 +1455,7 @@ def _legacy_plan(content_before: str, payload: dict[str, Any], chapter_id: str) 
     else:
         actions.append(RepairAction(
             issue_id="legacy-no-change",
-            action="manual_review",
+            action="keep",
             justification="Det gamle modellsvaret beskrev ingen sikker tekstendring.",
         ))
     issues = [RepairIssue(
@@ -1573,29 +1634,32 @@ JSON (source_revision skal være {source_revision}):
         repair_changes: list[RepairChange] = []
         planned_issue_count = 0
         if legacy_mode:
-            # Existing persisted fixtures may still mock v1.  They are adapted
-            # for compatibility, but new model calls cannot use this shape
-            # because REPAIR_OUTPUT_SCHEMA now requires RepairPlan.
-            repaired_content = _markdown_text(payload.get("content_markdown"))
+            # Existing persisted fixtures may still mock v1. Adapt them into
+            # sentence/line-level actions; never trust a whole rewritten
+            # chapter as a repair result.
+            proposed_content = _markdown_text(payload.get("content_markdown"))
             minimum_length = max(400, int(len(content_before) * 0.45))
-            if len(repaired_content) < minimum_length:
+            if len(proposed_content) < minimum_length:
                 raise ValueError("Den reviderte teksten var uventet kort.")
             changes = _strings(payload.get("changes"), 30)
             if not changes:
                 raise ValueError("KI-redaktøren beskrev ingen endringer.")
-            legacy_plan = _legacy_plan(content_before, payload, chapter_id)
+            legacy_plan = _legacy_plan(
+                content_before,
+                payload,
+                chapter_id,
+                source_refs=[source.url for source in sources if source.url],
+            )
             planned_issue_count = len(legacy_plan.issues)
-            repair_changes = [
-                RepairChange(
-                    issue_id=f"legacy-{index}",
-                    action="replace",
-                    result="applied" if repaired_content != content_before else "skipped",
-                    before="",
-                    after="",
-                    reason=change,
-                )
-                for index, change in enumerate(changes)
-            ]
+            repaired_content, repair_changes = apply_repair_plan(
+                content_before,
+                legacy_plan,
+                trusted_source_urls={source.url for source in sources if source.url},
+                # This branch is only for persisted v1 fixtures. It still
+                # requires a concrete source ref and deterministic anchor;
+                # new model responses must use the strict RepairPlan path.
+                allow_legacy_sources=True,
+            )
             observe("legacy_response_adapted", action_count=len(legacy_plan.proposed_actions))
         else:
             # A model-reported URL is only a suggestion. It is not stored as
@@ -1694,8 +1758,16 @@ JSON (source_revision skal være {source_revision}):
                 "bevart uendret; prøv igjen om litt.",
             ][:30],
             repair_summary=RepairSummary(
-                before=_metrics(chapter.truth_passport, inspect_markdown(content_before, min_words=120)),
-                after=_metrics(chapter.truth_passport, inspect_markdown(content_before, min_words=120)),
+                before=_metrics(
+                    chapter.truth_passport,
+                    inspect_markdown(content_before, min_words=120),
+                    content=content_before,
+                ),
+                after=_metrics(
+                    chapter.truth_passport,
+                    inspect_markdown(content_before, min_words=120),
+                    content=content_before,
+                ),
                 changes=[failure_change],
                 found_count=1,
                 manual_review_count=1,
@@ -1791,6 +1863,7 @@ JSON:
             source for source in sources
             if source.origin in {"teacher", "grounding"}
         ],
+        mutate_content=False,
     )
     for truth_source in truth_passport.sources:
         if not any(item.url == truth_source.url for item in sources):
@@ -1836,8 +1909,16 @@ JSON:
             "Automatisk kontroll fullført, men ingen sikre rettelser kunne gjennomføres."
         )
     repair_summary = RepairSummary(
-        before=_metrics(chapter.truth_passport, before_quality_issues),
-        after=_metrics(truth_passport, quality_issues),
+        before=_metrics(
+            chapter.truth_passport,
+            before_quality_issues,
+            content=content_before,
+        ),
+        after=_metrics(
+            truth_passport,
+            quality_issues,
+            content=repaired_content,
+        ),
         changes=repair_changes[:80],
         found_count=max(planned_issue_count, len(repair_changes)),
         repaired_count=len(applied_changes),
@@ -1852,6 +1933,8 @@ JSON:
             if not applied_changes
             else "quality-gate-passed"
             if verified
+            else "max-passes"
+            if _pass >= MAX_REPAIR_PASSES
             else "issues-remain"
         ),
     )

@@ -113,6 +113,56 @@ def test_partial_and_ambiguous_targets_are_fail_closed() -> None:
     assert "flere tekstenheter" in ambiguous_changes[0].reason
 
 
+def test_source_required_is_unresolved_and_omitted_issue_is_manual_review() -> None:
+    content = "## Kapittel\n\nEn påstand som trenger en konkret kilde.\n"
+    source_required = _plan(content, [{
+        "issue_id": "source-required",
+        "action": "source_required",
+        "target_text": "En påstand som trenger en konkret kilde.",
+        "replacement_text": "",
+        "justification": "Læreren må legge inn en faglig kilde.",
+    }])
+    after, changes = apply_repair_plan(content, source_required)
+    assert after == content
+    assert changes[0].result == "unresolved"
+
+    omitted = RepairPlan.model_validate({
+        "chapter_id": "chapter-1",
+        "source_revision": content_revision(content),
+        "issues": [{
+            "issue_id": "omitted",
+            "claim_id": "claim-1",
+            "category": "factual",
+            "severity": "high",
+            "original_text": "En påstand som trenger en konkret kilde.",
+            "evidence": "Ingen handling ble foreslått.",
+            "source_refs": [],
+            "recommended_action": "manual_review",
+        }],
+        "proposed_actions": [],
+        "expected_result": "Problemet skal vises for læreren.",
+    })
+    after, changes = apply_repair_plan(content, omitted)
+    assert after == content
+    assert changes[0].result == "manual_review"
+    assert "ingen handling" in changes[0].reason
+
+
+def test_complete_point_line_can_be_replaced_without_sentence_punctuation() -> None:
+    content = "## Kapittel\n\n- Gammel punktlinje\n"
+    plan = _plan(content, [{
+        "issue_id": "line",
+        "action": "replace",
+        "target_text": "Gammel punktlinje",
+        "replacement_text": "Ny dokumentert punktlinje",
+        "justification": "Punktlinjen er erstattet av kildebelagt tekst.",
+        "source_refs": [SOURCE],
+    }])
+    after, changes = apply_repair_plan(content, plan, trusted_source_urls={SOURCE})
+    assert after == "## Kapittel\n\n- Ny dokumentert punktlinje\n"
+    assert changes[0].result == "applied"
+
+
 def test_unknown_source_cannot_make_a_replace_green() -> None:
     content = "## Kapittel\n\nEn udokumentert historisk påstand.\n"
     plan = _plan(content, [{
@@ -247,3 +297,80 @@ def test_repair_pipeline_applies_plan_and_reaudits_the_new_text(tmp_path: Path, 
     assert repaired.truth_passport.content_revision == content_revision(repaired.content_markdown)
     assert "repair_plan_applied" in observed
     assert "truth_audit" in observed
+
+
+def test_reaudit_cannot_apply_unplanned_truth_mutation(tmp_path: Path, monkeypatch) -> None:
+    before = "## Kapittel\n\nGammel formulering som skal kvalifiseres. " + (
+        "Kontekst om perioden og aktørene gir nødvendig faglig bakgrunn. " * 30
+    )
+    store = PlatformStore(tmp_path / "platform.sqlite3")
+    compendium = store.create_compendium(CompendiumCreate(
+        title="Den franske revolusjonen",
+        topic="Den franske revolusjonen",
+        subject="Historie",
+        level="VG2",
+        source_brief=SOURCE,
+        chapters=[CompendiumChapter(
+            title="Aktører",
+            content_markdown=before,
+            status="needs_revision",
+            verification_notes=["Formuleringen må kvalifiseres."],
+        )],
+    ))
+    chapter = compendium.chapters[0]
+
+    def fake_google(_prompt, **kwargs):
+        schema = kwargs.get("response_schema", {})
+        if "approved" in schema.get("properties", {}):
+            return {"approved": True, "notes": [], "unsafe_claims": []}, []
+        return {
+            "repair_plan": {
+                "chapter_id": chapter.id,
+                "source_revision": content_revision(before),
+                "issues": [{
+                    "issue_id": "qualify",
+                    "claim_id": "claim-1",
+                    "category": "factual",
+                    "severity": "medium",
+                    "original_text": "Gammel formulering som skal kvalifiseres.",
+                    "evidence": "Kilden støtter en avgrenset formulering.",
+                    "source_refs": [SOURCE],
+                    "recommended_action": "qualify",
+                }],
+                "proposed_actions": [{
+                    "issue_id": "qualify",
+                    "action": "qualify",
+                    "target_text": "Gammel formulering som skal kvalifiseres.",
+                    "replacement_text": "Ny avgrenset formulering.",
+                    "justification": "Kilden støtter den avgrensede formuleringen.",
+                    "source_refs": [SOURCE],
+                }],
+                "expected_result": "Fjern den bastante formuleringen.",
+            },
+            "key_facts": [],
+            "glossary": [],
+            "sources": [],
+        }, []
+
+    def fake_audit(**kwargs):
+        return TruthAudit(
+            content=kwargs["content"].replace("Ny avgrenset formulering.", "Uplanlagt audit-endring."),
+            passport=TruthPassport(
+                status="verified",
+                coverage_percent=100,
+                verified_claims=2,
+                total_claims=2,
+            ),
+        )
+
+    monkeypatch.setattr(compendium_module, "_call_google_json", fake_google)
+    monkeypatch.setattr(compendium_module, "audit_truth", fake_audit)
+    monkeypatch.setattr(compendium_module, "MAX_REPAIR_PASSES", 1)
+
+    repaired = repair_compendium_chapter(compendium, chapter.id)
+
+    assert "Ny avgrenset formulering." in repaired.content_markdown
+    assert "Uplanlagt audit-endring." not in repaired.content_markdown
+    assert repaired.status == "needs_revision"
+    assert repaired.repair_summary is not None
+    assert repaired.repair_summary.qualified_count == 1

@@ -1193,6 +1193,7 @@ class PlatformStore:
         repair_summary: Any | None = None,
         failure_reason: str = "",
         expected_statuses: tuple[str, ...] = ACTIVE_REPAIR_STATUSES,
+        terminal_event: tuple[str, dict[str, Any]] | None = None,
     ) -> RepairJob | None:
         """Write a terminal status and release the chapter lock."""
         with self._exclusive() as conn:
@@ -1210,7 +1211,27 @@ class PlatformStore:
             job.lease_expires_at = ""
             job.finished_at = utc_now()
             job.updated_at = job.finished_at
-            return self._save_repair_job(conn, job)
+            finished = self._save_repair_job(conn, job)
+            if terminal_event is not None:
+                stage, payload = terminal_event
+                entry = RepairLedgerEntry(
+                    job_id=job.id,
+                    operation_id=job.operation_id,
+                    stage=stage,
+                    payload=_ledger_safe(payload),
+                )
+                conn.execute(
+                    "INSERT INTO repair_events(id,job_id,operation_id,stage,payload,created_at) VALUES(?,?,?,?,?,?)",
+                    (
+                        entry.id,
+                        entry.job_id,
+                        entry.operation_id,
+                        entry.stage,
+                        self._json(entry.payload),
+                        entry.created_at,
+                    ),
+                )
+            return finished
 
     def request_repair_cancel(self, job_id: str) -> RepairJob | None:
         """Record the teacher's intent durably, whatever the model is doing."""
@@ -1246,6 +1267,7 @@ class PlatformStore:
         placeholders = ",".join("?" for _ in ACTIVE_REPAIR_STATUSES)
         now = utc_now()
         released = 0
+        recovered: list[RepairJob] = []
         with self._exclusive() as conn:
             rows = conn.execute(
                 f"SELECT payload FROM repair_jobs WHERE status IN ({placeholders})",
@@ -1261,7 +1283,18 @@ class PlatformStore:
                 job.finished_at = now
                 job.updated_at = now
                 self._save_repair_job(conn, job)
+                recovered.append(job)
                 released += 1
+        for job in recovered:
+            # Recovery happens before a RepairService instance may exist, so
+            # write the durable event directly here rather than leaving a
+            # status transition with no explanation in the ledger.
+            self.append_repair_event(
+                job.id,
+                job.operation_id,
+                "recovered",
+                {"status": job.status, "message": message},
+            )
         return released
 
     def append_repair_event(
