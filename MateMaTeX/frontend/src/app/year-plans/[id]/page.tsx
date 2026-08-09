@@ -19,6 +19,7 @@ import {
   NotebookPen,
   PackageOpen,
   Pencil,
+  Presentation,
   RefreshCw,
   Save,
   Sparkles,
@@ -439,7 +440,7 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
                           className="btn-primary"
                           href={`/teaching-packages/new?${new URLSearchParams({ yearPlan: plan.id, period: period.id })}`}
                         >
-                          <PackageOpen className="h-4 w-4" /> Lag undervisningspakke
+                          <Presentation className="h-4 w-4" /> PowerPoint + undervisningspakke
                         </Link>
                         <Link className="btn-primary" href={generationHref(plan, period, "laeringsark", "learning_sheet")}><FileText className="h-4 w-4" /> Læringsark</Link>
                         <Link className="btn-secondary" href={generationHref(plan, period, "laeringsark", "worksheet")}><NotebookPen className="h-4 w-4" /> Oppgaveark</Link>

@@ -98,8 +98,8 @@ function NewTeachingPackageForm() {
           <div className="rounded-xl bg-accent-blue/10 p-3 text-accent-blue"><PackageOpen className="h-6 w-6" /></div>
           <div>
             <p className="text-xs font-medium uppercase tracking-wide text-text-muted">{plan.subject} · {plan.level} · {plan.school_year}</p>
-            <h1 className="mt-1 font-display text-3xl tracking-tight">Lag undervisningspakke</h1>
-            <p className="mt-2 text-sm leading-relaxed text-text-secondary">Bekreft perioden, velg innholdet og start én varig pakkejobb. Du kan lukke siden mens genereringen pågår.</p>
+            <h1 className="mt-1 font-display text-3xl tracking-tight">Lag PowerPoint og undervisningspakke</h1>
+            <p className="mt-2 text-sm leading-relaxed text-text-secondary">PowerPoint, læringsark, oppgaveark, fasit og lærerveiledning er valgt som standard. Bekreft innholdet og start én varig pakkejobb.</p>
           </div>
         </div>
         <div className="mt-5 rounded-xl bg-accent-blue/5 p-4 text-sm">
@@ -111,11 +111,11 @@ function NewTeachingPackageForm() {
       {error && <div role="alert" className="card text-sm text-accent-red">{error}</div>}
 
       <section className="card space-y-5">
-        <div><h2 className="text-lg font-semibold">1. Velg artefakter</h2><p className="mt-1 text-sm text-text-muted">Alle er valgt som anbefalt standard. Du kan starte med en mindre pakke.</p></div>
+        <div><h2 className="text-lg font-semibold">1. Velg innhold i pakken</h2><p className="mt-1 text-sm text-text-muted">PowerPoint og resten av undervisningspakken er forhåndsvalgt. Du kan fjerne deler du ikke trenger.</p></div>
         <div className="grid gap-3 md:grid-cols-2">
           {allTypes.map((type) => {
             const checked = selected.includes(type);
-            return <button key={type} type="button" className={`rounded-xl border p-4 text-left transition ${checked ? "border-accent-blue bg-accent-blue/5" : "border-border bg-bg/40"}`} onClick={() => setSelected((current) => checked ? current.filter((item) => item !== type) : [...current, type])}>
+            return <button key={type} type="button" aria-pressed={checked} className={`rounded-xl border p-4 text-left transition ${checked ? "border-accent-blue bg-accent-blue/5" : "border-border bg-bg/40"}`} onClick={() => setSelected((current) => checked ? current.filter((item) => item !== type) : [...current, type])}>
               <div className="flex items-start gap-3"><span className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${checked ? "border-accent-blue bg-accent-blue text-white" : "border-border"}`}>{checked && <Check className="h-3.5 w-3.5" />}</span><span><strong className="text-sm">{labels[type].title}</strong><span className="mt-1 block text-xs leading-relaxed text-text-muted">{labels[type].description}</span></span></div>
             </button>;
           })}
@@ -134,7 +134,7 @@ function NewTeachingPackageForm() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-5">
           <p className="text-xs text-text-muted">Pakken lagres på perioden og får en egen revisjonshistorikk.</p>
           <button className="btn-primary" onClick={() => void start()} disabled={starting || selected.length === 0}>
-            {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageOpen className="h-4 w-4" />} Opprett pakke
+            {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageOpen className="h-4 w-4" />} Opprett PowerPoint-pakke
           </button>
         </div>
       </section>
