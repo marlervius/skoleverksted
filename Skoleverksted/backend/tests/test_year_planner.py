@@ -38,6 +38,32 @@ class YearPlannerTests(unittest.TestCase):
         self.assertEqual(len(plan.periods), 6)
         self.assertEqual(sum(period.duration_weeks for period in plan.periods), 30)
 
+    def test_fov_module_four_subjects_use_subject_specific_fallbacks(self):
+        subjects = (
+            "Matematikk",
+            "Naturfag",
+            "Samfunnsfag",
+        )
+
+        for subject in subjects:
+            with self.subTest(subject=subject):
+                plan = build_year_plan(
+                    YearPlanGenerateRequest(
+                        subject=subject,
+                        level="FOV modul 4",
+                        school_year="2026-2027",
+                        teaching_weeks=30,
+                        number_of_periods=6,
+                        use_ai=False,
+                    ),
+                )
+
+                self.assertEqual(plan.subject, subject)
+                self.assertEqual(plan.level, "FOV modul 4")
+                self.assertEqual(len(plan.periods), 6)
+                self.assertNotIn("Grunnlag og sentrale begreper", plan.periods[0].title)
+                self.assertTrue(plan.periods[0].overview)
+
 
 if __name__ == "__main__":
     unittest.main()

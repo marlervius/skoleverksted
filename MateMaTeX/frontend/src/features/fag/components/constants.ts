@@ -17,6 +17,11 @@ export const LEVELS = [
   { value: "Yrkesfag", label: "Yrkesfag", description: "Praktiske fag" },
 ];
 
+export const YEAR_PLAN_LEVELS = [
+  ...LEVELS,
+  { value: "FOV modul 4", label: "FOV modul 4", description: "Fjerde modul i forberedende opplæring for voksne" },
+];
+
 export const LANGUAGE_LEVELS = [
   { value: "none", label: "Standard norsk", description: "Ingen tilpasning" },
   { value: "B2", label: "B2 - Øvre mellomnivå", description: "Noe forenklet" },

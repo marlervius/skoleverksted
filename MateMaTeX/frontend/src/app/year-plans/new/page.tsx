@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarRange, Clock3, Loader2, Sparkles } from "lucide-react";
-import { SUBJECTS, LEVELS } from "@/features/fag/components/constants";
+import { SUBJECTS, YEAR_PLAN_LEVELS } from "@/features/fag/components/constants";
 import { generateYearPlan } from "@/lib/platform-api";
 
 function suggestedSchoolYear(): string {
@@ -79,7 +79,7 @@ export default function NewYearPlanPage() {
             </label>
             <label className="text-sm font-medium">Nivå
               <select className="input mt-2" value={level} onChange={(event) => setLevel(event.target.value)}>
-                {LEVELS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                {YEAR_PLAN_LEVELS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
             </label>
             <label className="text-sm font-medium">Skoleår
