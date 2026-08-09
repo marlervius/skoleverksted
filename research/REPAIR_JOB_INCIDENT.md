@@ -68,3 +68,44 @@ reparasjon flyttes til den eksisterende durable job queue-en med database- eller
 Redis-ledger og avbrytbar worker. Det er bevisst ikke gjort i denne auditten,
 fordi produksjonsfeilen som er dokumentert her var manglende timeout/status,
 ikke et skaleringskrav.
+
+---
+
+## Lukking — durable repair execution (8. august 2026)
+
+Denne hendelsen er nå lukket på kodenivå. Rotårsaken var ikke bare manglende
+timeout: **HTTP-requesten eide modellarbeidet**. `_run_repair_with_timeout()`
+startet en daemon-tråd, men request-tråden blokkerte på `done.wait(120)`, så
+ingen respons kunne sendes før arbeidet var ferdig. Låsen lå i prosessminne,
+`operation_id` fantes bare i loggen, og det fantes ingen jobb-ID, ingen varig
+status og ingen ledger. Derfor endte to forsøk i HTTP 504, ett forsøk svarte
+HTTP 200 mens reparasjonen internt feilet, og en retry fikk HTTP 409 med en
+operation-ID som ikke kunne slås opp noe sted.
+
+Reparasjonen er flyttet til en varig jobb i
+`Skoleverksted/backend/platform/repair.py`, med ledger og CAS i `store.py` og en
+202-kontrakt i `router.py`. Den fullstendige tilstandsmaskinen, lås-livssyklusen
+og restart-semantikken står i `research/REPAIR_DURABILITY_EXECPLAN.md`.
+
+Det som er endret siden avsnittene over:
+
+1. `COMPENDIUM_REPAIR_TIMEOUT_SECONDS` er borte. En klient-timeout bestemmer
+   ikke lenger noe; `COMPENDIUM_REPAIR_LEASE_SECONDS` (standard 900) styrer hvor
+   lenge et kapittel kan være reservert.
+2. Kapittellåsen er ikke lenger en `dict` i prosessminne, men raden i
+   `repair_jobs`. Den overlever restart og slippes av `recover_incomplete_repair_jobs()`
+   og `expire_stale_repair_leases()`.
+3. En jobb kan ikke lenger rapporteres som `succeeded` uten fullført write-back.
+   Kapittel 1-tilfellet — HTTP 200 med intern feil — gir nå `failed_retryable`
+   med kapittelstatusen som eget innholdsresultat.
+4. Den gjenstående risikoen i avsnittet over («daemon-tråden kan fortsatt bruke
+   ressurser etter server-timeout») gjelder fortsatt for selve modellkallet,
+   men den kan ikke lenger skade kapitlet: cancel og CAS blokkerer write-back
+   fra en sen worker.
+
+Testdekning: `Skoleverksted/backend/tests/test_repair_durability.py`, 27 tester,
+inkludert en HTTP-test mot den reelle ASGI-ruteren som beviser 202 uten å vente
+på modellen, 409 ved parallell reparasjon, idempotent replay, gjenfinning etter
+reload og `succeeded` først etter write-back. Full backend-suite: 120 bestått.
+
+Ikke verifisert: en ekte Render-/Gemini-kjøring mot den nye kontrakten.

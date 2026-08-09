@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
-from threading import Event, Lock, Thread
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
@@ -23,6 +21,9 @@ from .models import (
     ProjectUpdate,
     QualityPassport,
     QualityPassportRequest,
+    RepairJob,
+    RepairJobAccepted,
+    RepairLedgerEntry,
     ThemePack,
     ThemePackRequest,
     ThemePackTask,
@@ -39,11 +40,11 @@ from .compendium import (
     _source_quality_notes,
     generate_compendium_chapter,
     plan_compendium,
-    repair_compendium_chapter,
 )
 from .compendium_renderer import render_compendium
 from .images import resolve_image
 from .quality import build_quality_passport
+from .repair import RepairConflictError, get_repair_service
 from .store import get_platform_store
 from .queue import get_durable_job_queue
 from .year_planner import build_year_plan
@@ -52,70 +53,12 @@ from .year_planner import build_year_plan
 router = APIRouter(tags=["platform"])
 
 logger = logging.getLogger(__name__)
-_repair_registry_lock = Lock()
-_inflight_repairs: dict[tuple[str, str], str] = {}
-_REPAIR_TIMEOUT_SECONDS = max(
-    30,
-    min(300, int(os.getenv("COMPENDIUM_REPAIR_TIMEOUT_SECONDS", "120"))),
-)
 
 
-class RepairInProgressError(RuntimeError):
-    def __init__(self, operation_id: str):
-        super().__init__(f"En automatisk retting kjører allerede (jobb {operation_id}).")
-        self.operation_id = operation_id
-
-
-class RepairTimeoutError(TimeoutError):
-    def __init__(self, operation_id: str, timeout: int):
-        super().__init__(f"Automatisk retting nådde tidsgrensen på {timeout} sekunder (jobb {operation_id}).")
-        self.operation_id = operation_id
-
-
-def _run_repair_with_timeout(
-    compendium: Compendium,
-    chapter_id: str,
-    *,
-    operation_id: str,
-) -> CompendiumChapter:
-    key = (compendium.id, chapter_id)
-    with _repair_registry_lock:
-        previous = _inflight_repairs.get(key)
-        if previous:
-            raise RepairInProgressError(previous)
-        _inflight_repairs[key] = operation_id
-
-    done = Event()
-    result: dict[str, object] = {}
-
-    def worker() -> None:
-        try:
-            result["chapter"] = repair_compendium_chapter(compendium, chapter_id)
-        except BaseException as exc:  # preserve the original exception for the request
-            result["error"] = exc
-        finally:
-            with _repair_registry_lock:
-                if _inflight_repairs.get(key) == operation_id:
-                    _inflight_repairs.pop(key, None)
-            done.set()
-
-    Thread(target=worker, name=f"compendium-repair-{operation_id}", daemon=True).start()
-    if not done.wait(_REPAIR_TIMEOUT_SECONDS):
-        logger.error(
-            "Kompendiumreparasjon tidsavbrutt operation_id=%s compendium_id=%s chapter_id=%s timeout_s=%s",
-            operation_id,
-            compendium.id,
-            chapter_id,
-            _REPAIR_TIMEOUT_SECONDS,
-        )
-        raise RepairTimeoutError(operation_id, _REPAIR_TIMEOUT_SECONDS)
-    error = result.get("error")
-    if error:
-        raise error
-    chapter = result.get("chapter")
-    if not isinstance(chapter, CompendiumChapter):
-        raise RuntimeError(f"Reparasjonsjobben ga ikke et kapittelresultat (jobb {operation_id}).")
-    return chapter
+def _operation_id(request: Request) -> str:
+    """One teacher action = one operation id; a replay reuses the same job."""
+    header = (request.headers.get("x-operation-id") or request.headers.get("x-request-id") or "").strip()
+    return (header or uuid4().hex)[:80]
 
 
 @router.get("/compendia", response_model=list[Compendium])
@@ -215,55 +158,76 @@ def produce_compendium_chapter(compendium_id: str, chapter_id: str):
     return updated
 
 
-@router.post("/compendia/{compendium_id}/chapters/{chapter_id}/repair", response_model=Compendium)
+def _accepted(job: RepairJob) -> RepairJobAccepted:
+    return RepairJobAccepted(
+        job_id=job.id,
+        operation_id=job.operation_id,
+        compendium_id=job.compendium_id,
+        chapter_id=job.chapter_id,
+        status=job.status,
+        status_url=job.status_url,
+    )
+
+
+@router.post(
+    "/compendia/{compendium_id}/chapters/{chapter_id}/repair",
+    response_model=RepairJobAccepted,
+    status_code=202,
+)
 def repair_compendium_chapter_endpoint(
     compendium_id: str,
     chapter_id: str,
     request: Request,
 ):
-    store = get_platform_store()
-    compendium = store.get_compendium(compendium_id)
+    """Register the repair durably and return immediately.
+
+    No model call happens before this response is sent, so a client timeout or
+    a dropped connection can no longer decide the fate of the work.
+    """
+    compendium = get_platform_store().get_compendium(compendium_id)
     if compendium is None:
         raise HTTPException(status_code=404, detail="Kompendiet finnes ikke.")
-    operation_id = (request.headers.get("x-request-id") or uuid4().hex[:12]).strip()[:80]
     try:
-        chapter = _run_repair_with_timeout(
+        job = get_repair_service().submit(
             compendium,
             chapter_id,
-            operation_id=operation_id,
+            operation_id=_operation_id(request),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except RepairInProgressError as exc:
+    except RepairConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except RepairTimeoutError as exc:
-        raise HTTPException(
-            status_code=504,
-            detail=(
-                f"Automatisk retting nådde tidsgrensen. Jobb-ID: {exc.operation_id}. "
-                "Kapittelet er ikke endret; prøv igjen."
-            ),
-        ) from exc
-    except Exception as exc:
-        logger.exception(
-            "Kompendiumreparasjon feilet operation_id=%s compendium_id=%s chapter_id=%s",
-            operation_id,
-            compendium_id,
-            chapter_id,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Automatisk retting feilet. Jobb-ID: {operation_id}. "
-                "Kapittelet er ikke endret; prøv igjen."
-            ),
-        ) from exc
-    updated = store.replace_compendium_chapter(compendium_id, chapter)
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Kapitlet finnes ikke.")
-    return updated
+    return _accepted(job)
+
+
+@router.get(
+    "/compendia/{compendium_id}/chapters/{chapter_id}/repair",
+    response_model=RepairJob,
+)
+def latest_chapter_repair_job(compendium_id: str, chapter_id: str):
+    """Lets the page find its repair again after a reload."""
+    job = get_platform_store().latest_repair_job(compendium_id, chapter_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Ingen reparasjon er registrert for kapitlet.")
+    return job
+
+
+@router.get("/repair-jobs/{job_id}", response_model=RepairJob)
+def get_repair_job(job_id: str):
+    job = get_platform_store().get_repair_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Reparasjonsjobben finnes ikke.")
+    return job
+
+
+@router.get("/repair-jobs/{job_id}/events", response_model=list[RepairLedgerEntry])
+def list_repair_job_events(job_id: str, limit: int = Query(default=200, ge=1, le=500)):
+    store = get_platform_store()
+    if store.get_repair_job(job_id) is None:
+        raise HTTPException(status_code=404, detail="Reparasjonsjobben finnes ikke.")
+    return store.list_repair_events(job_id, limit=limit)
 
 
 @router.post("/compendia/{compendium_id}/compile", response_model=Compendium)
@@ -579,15 +543,25 @@ def get_job(job_id: str):
 
 @router.get("/queue", response_model=list[Job])
 def list_queue(limit: int = Query(default=100, ge=1, le=300)):
+    store = get_platform_store()
+    # A crashed worker must not keep a chapter locked in the visible queue.
+    store.expire_stale_repair_leases()
     return [
-        job for job in get_platform_store().list_jobs(limit=limit)
+        job for job in store.list_jobs(limit=limit)
         if job.status in {"queued", "planning", "generating", "verifying", "rendering"}
     ]
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=Job)
 def cancel_job(job_id: str):
-    job = get_durable_job_queue().cancel(job_id)
+    store = get_platform_store()
+    if store.get_repair_job(job_id) is not None:
+        # Repair owns a chapter lock, so cancelling has to go through its own
+        # lifecycle rather than only flipping the shared ledger row.
+        get_repair_service().cancel(job_id)
+    else:
+        get_durable_job_queue().cancel(job_id)
+    job = store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Jobben finnes ikke i plattformhistorikken.")
     return job

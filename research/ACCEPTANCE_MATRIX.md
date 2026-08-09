@@ -1,5 +1,10 @@
 # Acceptance matrix
 
+> **Autoritativ matrise er «Kandidatkjøring `ff725bb69978`» nederst
+> (7. august 2026).** Tabellen rett under gjelder baselinereleasen
+> `69b00d81e5a7` og er historikk. Merk særlig at C06 (80 %-porten) nå er
+> bestått, mens C11 er forverret.
+
 Resultatene under beskriver siste identiske produksjonskjøring på forrige
 release. `IMPLEMENTERT` betyr kode finnes; det betyr ikke produksjonsgodkjenning.
 Kandidatoppdateringen 2026-08-03 står i siste seksjon og er fortsatt
@@ -63,3 +68,77 @@ Dette endrer ikke dommen: `REJECTED`.
 | PDF-/Word-ID, filnavn, størrelse, hash | Ingen; compile var blokkert i siste identiske run |
 | Manuell faglig vurdering | `pending teacher review` |
 | Dom | `REJECTED` |
+
+---
+
+## Kandidatkjøring `ff725bb69978` — 7. august 2026
+
+Kompendium `0689cd00b57946779fbdc3e44f2c1cb7`, identisk scenario, uendret
+terskel på 80 %.
+
+| ID | Kriterium | Baseline | Kandidat | Resultat |
+|---|---|---|---|---|
+| C01 | Strukturell språkkontroll i alle kapitler | bestått | bestått | **BESTÅTT** |
+| C02 | Ingen fragmenter/manglende subjekter | 0 funn | 0 funn | **BESTÅTT** |
+| C03 | Kritiske faglige feil rettes med evidens | ikke bestått | 0 av 3 reparasjoner fullførte | **IKKE BESTÅTT** |
+| C04 | Kildelenker har tydelig hentestatus | bestått | 3/3 `teacher`/`provided`; grounding-kilder separat merket | **BESTÅTT** |
+| C05 | Teknisk verifikasjonsfeil skilles fra unsupported | bestått | ingen `verification_failed`/`source_unavailable` feilmerket | **BESTÅTT** |
+| C06 | Minst 80 % påstander har evidens | 32/44 = 73 % | **42/48 = 88 %** | **BESTÅTT** |
+| C07 | Resterende påstander har riktig usikkerhetsstatus | bestått | `disputed` 1, `interpretation` 1, `unsupported` 4 | **BESTÅTT** |
+| C08 | Reparasjon fullfører/feiler innen 120 s med jobb-ID | delvis | 2× 504 på 120 s, 1× 200 som skjuler intern feil | **IKKE BESTÅTT** |
+| C09 | Lærer ser hva reparasjon endret | ikke verifisert | `revision_summary` tom i alle tre kapitlene | **IKKE BESTÅTT** |
+| C10 | PDF kun etter eksplisitt godkjenning | bestått | HTTP 409 blokkerte | **BESTÅTT** |
+| C11 | Ingen skjulte feil i hele kjøringen | ikke bestått | **forverret**: HTTP 200 skjulte en mislykket reparasjon | **IKKE BESTÅTT** |
+| C12 | Eksisterende tester består | 398/2 (feil tall) | **402 passed, 2 skipped**; CI grønn på alle fire jobber | **PRODUKSJONSBEVIST** |
+| A01 | Ingen fragmenter introdusert av truth/reparasjon | bestått for generert tekst | 0 funn; `removed_claims` 0/0/0 mot baselines 0/5/3 | **BESTÅTT** |
+| A02 | Lærerkilder spores ende til ende | API-ledd bestått | API-ledd bestått; sluttprodukt mangler fortsatt | **DELVIS** |
+| A03 | Modell-URL blir ikke lærer-kilde | bestått | `origin=grounding` holdt adskilt fra `origin=teacher` | **BESTÅTT** |
+| A04 | Ingen jobb uten terminal status | bestått for timeout | timeout terminal; men 200-svar med intern feil er tvetydig | **IKKE BESTÅTT** |
+| A05 | Timeout/feil er forståelig i frontend | delvis | backendbody bevist; frontend ikke kontrollert | **DELVIS** |
+| A06 | Retry er sporbar og dupliserer ikke | bestått | 3/3 låseprober ga 409 med aktiv jobb-ID på 0,11–0,24 s | **BESTÅTT** |
+| A07 | Uløste problemer blokkerer compile | bestått | HTTP 409, alle tre kapitler listet | **BESTÅTT** |
+| A08 | Godkjent dokument lastes som PDF/Word | ikke verifisert | HTTP 404; `artifact_version=0` | **IKKE BESTÅTT** |
+| A09 | Backend består produksjonsnær runtime | bestått | 402/2 i kandidat-image; `compileall` exit 0 | **BESTÅTT** |
+| A10 | Identisk scenario er manuelt vurdert | ikke bestått | ingen sluttfil å vurdere | **IKKE BESTÅTT** |
+
+### Endring mot baseline
+
+Fire kriterier gikk fra ikke bestått til bestått: **C06** (80 %-porten),
+**C04**/**C07** styrket, og **A01** er nå produksjonsbevist med
+`removed_claims = 0` i alle kapitler mot baselines åtte automatisk fjernede
+påstander.
+
+Ett kriterium ble **forverret**: **C11**. Baseline manglet rå ledger; kandidaten
+har i tillegg en dokumentert falsk grønn respons — reparasjonen av kapittel 1
+svarte HTTP 200 mens den internt feilet og satte kapittelstatus til
+`source_grounding_failed`.
+
+Fem kriterier er uendret ikke bestått: C03, C08, C09, A08, A10 — alle
+nedstrøms av at reparasjonen ikke fullfører.
+
+---
+
+## Kandidat `durable-repair` — 8. august 2026 (ikke deployet)
+
+Denne seksjonen gjelder P0 «Durable compendium repair execution». Kriteriene
+under er testet lokalt og i produksjonsnær ASGI-runtime, **ikke** mot ekte
+Gemini i produksjon. Ingen produksjonsstatus i seksjonene over er endret.
+
+| ID | Kriterium | Bevis | Resultat | Alvorlighet |
+|---|---|---|---|---|
+| C08 | Reparasjon fullfører/feiler med sporbar jobb-ID | 202-kontrakt + `repair_jobs`-ledger | **OMDEFINERT OG BESTÅTT LOKALT**; kriteriet er ikke lenger «innen 120 s», men «varig jobbidentitet med terminal status» | P1 |
+| C11 | Ingen skjulte feil i hele kjøringen | `repair_events`-ledger, 27 tester | **DELVIS BESTÅTT LOKALT**; ledger finnes nå, men er ikke produksjonsbevist | P0 |
+| R01 | Repair registreres varig før arbeid starter | `test_repair_is_registered_durably_before_any_work` | **BESTÅTT LOKALT** | P0 |
+| R02 | Endepunkt returnerer 202 uten å vente på modell | `test_http_contract_is_asynchronous_durable_and_recoverable` | **BESTÅTT LOKALT** | P0 |
+| R03 | Modellkall skjer utenfor request-tråden | `test_model_call_never_runs_in_the_request_thread` | **BESTÅTT LOKALT** | P0 |
+| R04 | Ingen falsk `succeeded` uten write-back | timeout-/provider-/parse-/crash-/DB-tester | **BESTÅTT LOKALT** | P0 |
+| R05 | Jobben overlever backend-restart | `test_job_status_survives_a_backend_restart` | **BESTÅTT LOKALT** | P0 |
+| R06 | Restart under kjøring gir retryable, ikke suksess | `test_restart_during_the_model_call_is_retryable_not_successful` | **BESTÅTT LOKALT** | P0 |
+| R07 | Lås frigjøres ved terminal feil, restart og stale lease | tre låstester | **BESTÅTT LOKALT** | P0 |
+| R08 | Lærerredigering under repair overskrives aldri | `test_teacher_edit_during_repair_supersedes_the_result` | **BESTÅTT LOKALT** | P0 |
+| R09 | Cancel hindrer sen write-back | `test_cancel_during_model_work_discards_the_late_result` | **BESTÅTT LOKALT** | P1 |
+| R10 | Ledger gjør en repair rekonstruerbar uten hemmeligheter | `test_the_ledger_reconstructs_the_repair`, `test_the_ledger_stores_no_secrets_and_no_prompt_text` | **BESTÅTT LOKALT** | P0 |
+| R11 | Frontend forstår 202 og gjenfinner jobb etter reload | Vitest + `getChapterRepairJob` | **BESTÅTT LOKALT** | P1 |
+
+Uendret ikke bestått: **C03**, **C09**, **A08**, **A10**. Alle krever en
+vellykket reparasjon mot ekte modell i produksjon, som ikke er kjørt.

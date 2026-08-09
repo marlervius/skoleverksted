@@ -1,6 +1,10 @@
 # Skoleverksted product scorecard
 
-**Oppdatert:** 2026-08-03
+> **Gjeldende måling er «Kandidatmåling `ff725bb69978`» nederst
+> (7. august 2026).** Tallene i seksjonene under er fra baselinereleasen
+> `69b00d81e5a7`.
+
+**Oppdatert:** 2026-08-07
 
 **Status:** baseline; de fleste produktmål er ennå `UKJENT`
 
@@ -101,3 +105,91 @@ M1-koden er `912007bf5b4a68b736bbd14daa2011494bed266c`; releasekandidaten er `ff
 | Kandidat-E2E | Ikke kjørt; krever autorisert deploy |
 | Manuell lærerreview | `pending teacher review` |
 | Dom | `REJECTED` |
+
+---
+
+## Kandidatmåling `ff725bb69978` — 7. august 2026
+
+**Pilotdom: fortsatt `REJECTED`.** Første måling der produksjonen kjører
+kandidaten. Alle tall under er `PRODUKSJONSBEVIST` med mindre annet står.
+
+### Tillit og faglig kvalitet
+
+| Mål | Baseline `69b00d8` | Kandidat `ff725bb` | Vurdering |
+|---|---|---|---|
+| Andel påstander med evidens | 32/44 = 73 % | **42/48 = 88 %** | Porten på 80 % er nådd for første gang |
+| Laveste kapittel | 56 % | **85 %** | Ingen kapitler under terskelen |
+| Automatisk fjernet tekst | 8 påstander (0/5/3) | **0** | Fail-closed virker i produksjon |
+| Språkfragmenter | 0 | 0 | Uendret |
+| Lærerkilder korrekt merket | 3/3 | 3/3 | Uendret |
+| Faglig korrekthet vurdert av lærer | `UKJENT` | `UKJENT` | Ingen sluttfil å vurdere |
+
+### Pålitelighet og jobbkontroll
+
+| Mål | Baseline | Kandidat | Vurdering |
+|---|---|---|---|
+| Vellykkede reparasjoner | 0/1 | **0/3** | Fortsatt ingen |
+| Reparasjonstimeout | 1× 504 | 2× 504 (120,11 s / 120,21 s) | Uendret feilmodus |
+| Reparasjon med falsk 200 | ikke observert | **1** | Ny defekt |
+| Dobbeltkjøring blokkert | 1/1 med 409 | **3/3 med 409** (0,11–0,24 s) | Robust |
+| Jobb-ID i feilmelding | ja | ja | Uendret |
+| Durable jobb / gjenopptak | nei | nei | Uendret |
+| Compile-port blokkerer korrekt | ja | ja | Uendret |
+| Sluttartefakt produsert | nei | nei | `artifact_version=0` |
+
+### Lærertid og brukerreise
+
+| Mål | Observert |
+|---|---|
+| Tid disposisjon → tre genererte kapitler | 7 min 51 s (13,26 s + 132,08 s + 206,48 s + 118,78 s) |
+| Tid brukt på reparasjonsforsøk | 5 min 16 s, uten resultat |
+| Total tid til blokkert compile | **13 min 8 s** |
+| Leverbar fil ved slutten | ingen |
+| Tapte utkast | ingen observert; tekst ble bevart uendret ved alle feil |
+
+### Drift, sikkerhet og sporbarhet
+
+| Mål | Status |
+|---|---|
+| Release identifisert i readiness | `PRODUKSJONSBEVIST` — `ff725bb69978` |
+| Korrelasjons-ID gjennom platform-ruten | `PRODUKSJONSBEVIST` — `X-Request-ID` ble ekko-et i alle 14 kall |
+| Render deploy-ID | `UKJENT` — ingen dashboardtilgang |
+| Vercel production-branch | `UKJENT` — ingen dashboardtilgang, ingen branch i `vercel.json` |
+| Varig response-ledger | `UKJENT` — finnes ikke |
+| Auth/tenant på platform-ruter | `UKJENT` — uendret, fortsatt ingen |
+
+### Testgrunnlag — korrigert
+
+| Suite | Tidligere oppgitt | Faktisk målt |
+|---|---|---|
+| Docker-suite baseline `69b00d8` | 398 passed, 2 skipped | **396 passed, 2 skipped** |
+| Docker-suite kandidat `ff725bb` | 398 passed, 2 skipped | **402 passed, 2 skipped** |
+| Frontend | 13 tester | 13 tester, 5 filer |
+| TypeScript / produksjonsbygg | bestått | bestått |
+| Lint | not operational | not operational (ingen ESLint-konfigurasjon) |
+
+---
+
+## Måling 8. august 2026 — durable repair (lokal kandidat)
+
+| Mål | Tidligere verdi | Ny verdi | Evidens |
+|---|---|---|---|
+| Reparasjon returnerer innen ett sekund | 76–120 s, deretter 504 | **< 1 s (202)** | `RUNTIME` — ASGI-test mot reell router |
+| Vellykkede produksjonsreparasjoner | 0/3 | **0/3, uendret** | `PROD` — ikke kjørt mot ny kode |
+| Falsk grønn reparasjonsrespons mulig | ja (HTTP 200 ved intern feil) | **nei** | `LOCAL` — 6 feiltester |
+| Kapittel kan bli permanent låst | ja (409 uten eier) | **nei** | `LOCAL` — restart-, crash- og lease-tester |
+| Reparasjon overlever backend-restart | nei | **ja, som `failed_retryable`** | `LOCAL` |
+| Lærerredigering kan overskrives av sen worker | ja | **nei (CAS → `superseded`)** | `LOCAL` |
+| Varig response-ledger | `UKJENT` — finnes ikke | **finnes (`repair_events`)**, ikke produksjonsbevist | `CODE` + `LOCAL` |
+| Sannhetsdekning | 42/48 = 88 % | **uendret** | `PROD` — ikke berørt av denne milepælen |
+
+### Testgrunnlag
+
+| Suite | Resultat |
+|---|---|
+| Backend, hele `Skoleverksted/backend/tests` | **120 bestått** |
+| Ny suite `test_repair_durability.py` | **27 bestått** |
+| Frontend Vitest | **24 bestått** (opp fra 13) |
+| TypeScript `tsc --noEmit` | bestått |
+| Next-produksjonsbygg | bestått |
+| Lint | `not operational` (uendret, ingen ESLint-konfigurasjon) |

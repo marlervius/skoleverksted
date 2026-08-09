@@ -1,5 +1,9 @@
 # Release evidence
 
+> **Gjeldende release er `ff725bb69978`, deployet 6. august 2026.** Se
+> «Kandidatrelease deployet» nederst. Avsnittene under gjelder den forrige
+> releasen `69b00d81e5a7` og er historikk.
+
 Status: `RELEASE CANDIDATE LOCAL / PRODUCTION GATE REJECTED`.
 
 Backend-releasen er identitetsverifisert i Render, men den identiske
@@ -165,3 +169,67 @@ The current smoke passed once against the old release: readiness, frontend `/`
 and `/compendia`, and the protected mathematics estimate returned HTTP 200.
 This does not substitute for the missing candidate deploy, identical E2E,
 successful repair, final PDF/Word artifacts, or teacher review.
+
+---
+
+## Kandidatrelease deployet — 6.–7. august 2026
+
+Status: `DEPLOYED — PRODUCTION GATE REJECTED`.
+
+### Releaseidentitet
+
+| Felt | Verdi |
+|---|---|
+| Kandidatcommit | `ff725bb6997879e74d60d1d539c57e18578f95ad` |
+| Kodecommit | `912007bf5b4a68b736bbd14daa2011494bed266c` |
+| Kandidat-image (lokal verifikasjon) | `sha256:d9fb7b5f4b4659aefdc729c34358b4e4d704716197f3ab96d3df7c32707c8792` |
+| Forrige release | `69b00d81e5a7d823eb284bc7aee37a8cac6f29ed` |
+| Ny readiness-release | `ff725bb69978` |
+| Config-fingerprint | `dc08f612a352` (uendret fra baseline) |
+
+### Pushbevis
+
+```
+git push origin ff725bb6997879e74d60d1d539c57e18578f95ad:refs/heads/main
+   69b00d8..ff725bb  ff725bb6997879e74d60d1d539c57e18578f95ad -> main
+```
+
+Fast-forward, ingen force, ingen merge-commit. Fire commits tilført:
+`2e66ec7`, `22b80d9`, `912007b`, `ff725bb`. Lokale commits `266b1d2`,
+`53fd943`, `3bb1970` og `72e3e3c` ble bevisst holdt utenfor releasen.
+
+### Deploykjede
+
+| Ledd | Bevis |
+|---|---|
+| GitHub `main` | `ff725bb6997879e74d60d1d539c57e18578f95ad` («Document product excellence baseline») |
+| GitHub Actions | run `31104226437`, «Skoleverksted CI», conclusion `success`; jobbene `frontend`, `platform-backend`, `deterministic-domain-tests`, `full-domain-tests` alle `success` |
+| Render-trigger | `autoDeployTrigger: checksPass` i `render.yaml` |
+| Release-flipp observert | 2026-08-06 13:09:58Z |
+| Readiness etter deploy | HTTP 200, `status=ready`, `rndr-id 965b3e3c-54f6-484f`, `X-Request-ID 6fb1632e23fd`, `Date Thu, 06 Aug 2026 13:10:16 GMT` |
+| Produksjonssmoke | `scripts/production_smoke.py` bestod på forsøk 1 |
+| Vercel | `/`, `/fag`, `/norsk`, `/matematikk` HTTP 200, region `arn1` |
+
+### Fortsatt uten bevis
+
+* Render-dashboardets deploy-ID, deploytidspunkt og deploystatus. Ingen
+  `RENDER_API_KEY` tilgjengelig; releaseidentiteten er bevist via offentlig
+  readiness-SHA og `rndr-id`-headere.
+* Vercels konfigurerte production-branch og aktive deployment-ID. Ingen
+  `VERCEL_TOKEN`; `vercel.json` inneholder ingen git-branch-konfigurasjon.
+* Varig rå response-/reparasjonsledger i produksjon.
+* Sluttartefakt: ingen PDF eller Word ble produsert
+  (`artifact_version=0`, `pdf_size_bytes=0`, `docx_size_bytes=0`).
+
+### Rollback
+
+Rollbackmålet `69b00d81e5a7d823eb284bc7aee37a8cac6f29ed` er uendret og
+tilgjengelig. Rollback utføres som redeploy av den commiten fra
+Render-dashboardet. Force-push til `main` er ikke tillatt og ble ikke brukt.
+
+### Korreksjon av tidligere testtall
+
+Tidligere dokumentert «398 passed, 2 skipped» reproduserer ikke. Målt mot rene
+worktrees i de eksakte imagene: baseline `69b00d8` gir **396 passed, 2
+skipped**, kandidat `ff725bb` gir **402 passed, 2 skipped**. Differansen på +6
+tilsvarer de seks nye testfunksjonene i `test_truth.py`.

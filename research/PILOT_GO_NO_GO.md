@@ -2,6 +2,11 @@
 
 ## Dom: `REJECTED`
 
+> **Oppdatert 7. august 2026.** Produksjonen kjører nå kandidaten
+> `ff725bb69978`. Gjeldende vurdering står i «Oppdatert vurdering etter
+> kandidatdeploy» nederst; avsnittene rett under gjelder baselinereleasen
+> `69b00d81e5a7`.
+
 Skoleverksted skal ikke åpnes for én ekstern historielærer ennå. Den offentlige
 produksjonen kjører fortsatt `69b00d81e5a7`; smoke bestod, men siste identiske
 ekte modellkjøring fikk bare 32/44 verifiserte påstander (73 %), to kapitler i
@@ -83,3 +88,99 @@ Stopp umiddelbart dersom en kilde blir `model_reported` uten tydelig markering,
 et teknisk verifikasjonsproblem vises som `unsupported`, en jobb mangler
 terminal status, språkporten slipper fragmenter gjennom, eller PDF/Word kan
 lastes ned uten eksplisitt lærergodkjenning.
+
+---
+
+## Oppdatert vurdering etter kandidatdeploy — 7. august 2026
+
+**Dom: fortsatt `REJECTED`.** Produksjonen kjører nå kandidaten
+`ff725bb69978` (deployet 6. august 2026 13:09:58Z), ikke lenger
+`69b00d81e5a7`. Dommen står, men begrunnelsen har endret seg.
+
+### Det som ble bedre
+
+* Sannhetsdekningen gikk fra 32/44 = 73 % til **42/48 = 88 %**, og hvert enkelt
+  kapittel er over 80 % (87 %, 85 %, 92 %). Terskelen er ikke endret.
+* Fail-closed sannhetsredigering er **produksjonsbevist**: `removed_claims` er
+  0 i alle tre kapitlene, mot baselines 0/5/3. Den gamle koden fjernet åtte
+  påstanders tekst automatisk i produksjon; kandidaten fjerner ingenting og
+  flagger i stedet det uavklarte for læreren.
+* Lærerkilder propageres fortsatt 3/3 som `origin=teacher`/`fetch_status=provided`,
+  og modellens grounding-kilder holdes adskilt.
+* Null språkfragmenter.
+* Låsen mot dobbeltkjøring virker: 3/3 samtidige retry-forsøk ga HTTP 409 med
+  navngitt aktiv jobb-ID på 0,11–0,24 s.
+
+### Det som fortsatt blokkerer
+
+* **0 av 3 reparasjoner fullførte.** Kapittel 2 og 3 fikk HTTP 504 etter 120 s.
+  Kapittel 1 fikk HTTP 200 etter 76 s, men reparasjonen feilet internt og satte
+  kapittelstatus til `source_grounding_failed` med teksten uendret.
+* Ingen kapitler ble `approved`, compile ga HTTP 409, PDF og Word ga HTTP 404.
+* **Manuell lærervurdering er fortsatt umulig** fordi ingen sluttfil finnes.
+
+### Åpne feil — oppdatert
+
+#### P0
+
+* Reparasjonsutførelsen er ikke pålitelig: to tidsavbrudd og én intern feil på
+  tre forsøk, uten durable jobb, uten gjenopptak og uten kansellering.
+* En mislykket reparasjon rapporteres som HTTP 200. Det er en falsk grønn
+  tilstand og bryter regelen om at `completed` skal bety fullført arbeid.
+* Ingen vellykket produksjonsreparasjon og ingen manuell sluttproduktvurdering.
+* Render-dashboardets deploy-ID og Vercels production-branch er fortsatt
+  uverifisert; releaseidentiteten hviler på offentlig readiness alene.
+
+#### P1
+
+* Rå/normalisert truth- og modelltekst finnes ikke i noe varig ledger.
+* `revision_summary` er tom i alle kapitler, så læreren kan ikke se hva en
+  reparasjon eventuelt endret.
+* Frontendens visning av 504/409/`source_grounding_failed` er ikke kontrollert.
+* PDF og Word er fortsatt ikke visuelt kontrollert.
+
+#### P2
+
+* Kildekvalitetskontrollen flagget `scribd.com` og `en.wikipedia.org` som
+  kilder som bør erstattes. Det fungerte som ment, men viser at
+  grounding-kilder kan trekke inn svake kilder som må håndteres av læreren.
+* Reparasjon etter server-timeout kan fortsatt bruke ressurser i daemon-tråd.
+
+### Konsekvens for pilot
+
+Ingen ekstern pilot skal starte. Kandidaten er et reelt fremskritt på
+tillitssiden — læreren får ikke lenger tekst slettet i skjul — men lærerreisen
+stopper fortsatt før første leverbare fil. En pilotlærer ville i dag brukt
+omtrent ti minutter på å generere tre kapitler og deretter stått igjen uten
+dokument.
+
+---
+
+## Oppdatering 8. august 2026 — durable repair, fortsatt `REJECTED`
+
+Dommen er uendret `REJECTED`. Produksjonen kjører fortsatt `ff725bb69978`, og
+den nye reparasjonsarkitekturen er ikke deployet.
+
+Det som er løst siden forrige vurdering gjelder infrastrukturen rundt
+reparasjon, ikke lærerens sluttresultat:
+
+* Reparasjon er ikke lenger et blokkerende HTTP-kall. Læreren får en varig
+  jobb-ID på under ett sekund og kan forlate siden.
+* En mislykket reparasjon kan ikke lenger svare HTTP 200. Kapittel 1-tilfellet
+  fra kandidatkjøringen ville i dag gitt `failed_retryable` med konkret retry.
+* Et kapittel kan ikke lenger bli permanent låst av en timeout, en crash eller
+  en restart.
+* Lærerens egen redigering under en reparasjon blir aldri overskrevet.
+
+Det som fortsatt blokkerer pilot er uendret:
+
+* Ingen dokumentert vellykket reparasjon mot ekte modell i produksjon.
+* Ingen godkjente kapitler, ingen PDF, ingen Word, ingen manuell faglig
+  vurdering av en sluttfil.
+* Ingen skolepålogging, ingen tenant-modell på plattformrutene.
+* Render deploy-ID og Vercel production-branch er fortsatt `UKJENT`.
+
+Konsekvens: ingen ekstern pilot. Neste port er en deploy av
+durable-repair-kandidaten fulgt av det identiske Historie VG2-scenarioet, der
+kravet er at reparasjonen er varig, observerbar, gjenopprettbar og ikke-
+destruktiv — ikke at modellen alltid løfter kapitlet over kvalitetsporten.

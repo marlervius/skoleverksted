@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
+import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -977,20 +980,58 @@ eller svake kilder for sentrale påstander.
         return CompendiumChapter.model_validate(updated)
 
 
-def repair_compendium_chapter(compendium: Compendium, chapter_id: str) -> CompendiumChapter:
+REPAIR_PROMPT_VERSION = "compendium-repair-v1"
+REPAIR_VERIFICATION_PROMPT_VERSION = "compendium-repair-verify-v1"
+
+
+def _model_name() -> str:
+    return os.getenv("GOOGLE_MODEL", "gemini-3.5-flash").removeprefix("gemini/")
+
+
+def _hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def repair_preconditions(
+    compendium: Compendium,
+    chapter_id: str,
+) -> tuple[CompendiumChapter, list[str]]:
+    """Everything the endpoint can decide before a job is worth registering.
+
+    Raises `KeyError` for an unknown chapter and `ValueError` when there is
+    nothing to repair, so the caller can answer 404/409 synchronously.
+    """
     chapter = next((item for item in compendium.chapters if item.id == chapter_id), None)
     if chapter is None:
         raise KeyError("Kapitlet finnes ikke.")
-    content_before = chapter.content_markdown.strip()
-    if len(content_before) < 100:
+    if len(chapter.content_markdown.strip()) < 100:
         raise ValueError("Kapitlet må ha en tekst før kontrollmerknadene kan rettes.")
-    source_quality_notes = _source_quality_notes(chapter.sources)
     repair_notes = _strings(
-        [*chapter.verification_notes, *source_quality_notes],
+        [*chapter.verification_notes, *_source_quality_notes(chapter.sources)],
         30,
     )
     if not repair_notes:
         raise ValueError("Kapitlet har ingen kontrollmerknader eller svake kilder å rette.")
+    return chapter, repair_notes
+
+
+def repair_compendium_chapter(
+    compendium: Compendium,
+    chapter_id: str,
+    *,
+    observer: Callable[[str, dict[str, Any]], None] | None = None,
+) -> CompendiumChapter:
+    def observe(stage: str, **data: Any) -> None:
+        if observer is None:
+            return
+        try:
+            observer(stage, data)
+        except Exception:
+            # The forensic ledger must never break a teacher's repair.
+            logger.warning("Reparasjonsledgeren kunne ikke skrives", exc_info=True)
+
+    chapter, repair_notes = repair_preconditions(compendium, chapter_id)
+    content_before = chapter.content_markdown.strip()
 
     scope = compendium.scope_contract.model_dump()
     repair_prompt = f"""
@@ -1045,11 +1086,32 @@ JSON:
   "sources": [{{"title": "...", "url": "https://...", "publisher": "..."}}]
 }}
 """
+    observe(
+        "model_request",
+        call="repair",
+        model=_model_name(),
+        prompt_version=REPAIR_PROMPT_VERSION,
+        prompt_chars=len(repair_prompt),
+        prompt_hash=_hash(repair_prompt),
+        content_hash_before=_hash(content_before),
+        note_count=len(repair_notes),
+        grounded=True,
+    )
+    started = time.monotonic()
     try:
         payload, grounded_sources = _call_google_json(
             repair_prompt,
             grounded=True,
             response_schema=REPAIR_OUTPUT_SCHEMA,
+        )
+        observe(
+            "model_response",
+            call="repair",
+            duration_ms=round((time.monotonic() - started) * 1000),
+            provider_returned=True,
+            parsed=True,
+            response_fields=sorted(str(key) for key in payload)[:20],
+            grounded_source_count=len(grounded_sources),
         )
         repaired_content = _markdown_text(payload.get("content_markdown"))
         minimum_length = max(400, int(len(content_before) * 0.45))
@@ -1083,6 +1145,15 @@ JSON:
             else "source_grounding_failed"
             if any(marker in error_text for marker in ("kilde", "etterprøvbare", "svake"))
             else "verification_failed"
+        )
+        observe(
+            "model_failed",
+            call="repair",
+            duration_ms=round((time.monotonic() - started) * 1000),
+            error_type=type(exc).__name__,
+            error=str(exc),
+            chapter_status=repair_status,
+            content_written=False,
         )
         updated = chapter.model_dump()
         updated.update(
@@ -1118,6 +1189,16 @@ JSON:
   "unsafe_claims": ["konkret påstand som fortsatt må rettes"]
 }}
 """
+    observe(
+        "model_request",
+        call="verification",
+        model=_model_name(),
+        prompt_version=REPAIR_VERIFICATION_PROMPT_VERSION,
+        prompt_chars=len(verification_prompt),
+        prompt_hash=_hash(verification_prompt),
+        grounded=True,
+    )
+    verification_started = time.monotonic()
     try:
         verdict, _ = _call_google_json(
             verification_prompt,
@@ -1129,6 +1210,15 @@ JSON:
         if unsafe:
             notes.extend(f"Må fortsatt kontrolleres: {claim}" for claim in unsafe)
         verified = verdict.get("approved") is True and not unsafe
+        observe(
+            "model_response",
+            call="verification",
+            duration_ms=round((time.monotonic() - verification_started) * 1000),
+            provider_returned=True,
+            parsed=True,
+            approved=verdict.get("approved") is True,
+            unsafe_claim_count=len(unsafe),
+        )
         if verified and not notes:
             notes = [
                 "De opprinnelige kontrollmerknadene er behandlet av KI og "
@@ -1136,6 +1226,13 @@ JSON:
             ]
     except Exception as exc:
         logger.warning("Ny kontroll etter kapittelretting feilet for %s: %s", chapter.title, exc)
+        observe(
+            "model_failed",
+            call="verification",
+            duration_ms=round((time.monotonic() - verification_started) * 1000),
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
         verified = False
         notes = [
             "Teksten ble rettet og lagret, men den uavhengige etterkontrollen "
@@ -1176,6 +1273,23 @@ JSON:
         for note in truth_passport.limitations
         if note not in notes
     )
+    chapter_status = "generated" if verified else (failure_status or "needs_revision")
+    observe(
+        "truth_audit",
+        truth_status=truth_passport.status,
+        coverage_percent=truth_passport.coverage_percent,
+        verified_claims=truth_passport.verified_claims,
+        total_claims=truth_passport.total_claims,
+        quality_issue_count=len(quality_issues),
+        failure_status=failure_status,
+        independent_check_approved=verified,
+        proposed_change_count=len(changes),
+        source_count=len(sources),
+        content_hash_before=_hash(content_before),
+        content_hash_after=_hash(repaired_content),
+        content_chars_after=len(repaired_content),
+        chapter_status=chapter_status,
+    )
     updated = chapter.model_dump()
     updated.update(
         content_markdown=repaired_content,
@@ -1185,7 +1299,7 @@ JSON:
         verification_notes=notes[:30],
         truth_passport=truth_passport,
         revision_summary=changes[:30],
-        status="generated" if verified else (failure_status or "needs_revision"),
+        status=chapter_status,
         updated_at=utc_now(),
     )
     return CompendiumChapter.model_validate(updated)

@@ -2,6 +2,12 @@
 
 **Dom:** `REJECTED`
 
+> **Gjeldende release: `ff725bb69978`, deployet 6. august 2026 13:09:58Z.**
+> Kandidatverifikasjonen fra 7. august 2026 står i siste seksjon og er den
+> autoritative. Alt over den beskriver baselinereleasen `69b00d81e5a7` og er
+> historikk. Merk korreksjonen av de lokale testtallene i seksjon 2 der:
+> baseline er 396/2 og kandidat er 402/2, ikke 398/2.
+
 Denne rapporten er en uavhengig release-gate, ikke en ny produktanalyse.
 Statusordene brukes slik: `IMPLEMENTERT`, `LOKALT TESTET`, `TESTET I RIKTIG
 RUNTIME`, `TESTET MOT EKTE MODELL`, `TESTET I PRODUKSJON` og `IKKE VERIFISERT`.
@@ -181,3 +187,156 @@ produksjonsscenario på forrige release hadde 32/44 verifiserte påstander under
 80 %-regelen, to kapitler i `needs_revision`, repair-timeout og ingen sluttfil.
 Kandidatens identiske scenario og lærerreview mangler. Dommen er derfor fortsatt
 **REJECTED**.
+
+---
+
+## Kandidatverifikasjon i produksjon — 7. august 2026
+
+**Dom:** `REJECTED`. **Kandidat:** `ff725bb6997879e74d60d1d539c57e18578f95ad`,
+deployet som release `ff725bb69978`.
+
+### 1. Pre-deploy-gate
+
+| Kontroll | Resultat |
+|---|---|
+| Kandidat entydig | `ff725bb…` løser til én commit; `912007b` er direkte forfar |
+| Diff mot `69b00d8` | 4 commits (`2e66ec7`, `22b80d9`, `912007b`, `ff725bb`), 11 filer, +809/−29 |
+| Produksjonskode i diffen | kun `Skoleverksted/backend/platform/truth.py` |
+| Urelaterte lokale endringer | 4 modifiserte + 1 utracket fil i arbeidskopien; ikke i kandidaten |
+| Utelatte lokale commits | `266b1d2`, `53fd943`, `3bb1970`, `72e3e3c` (18 filer, +1359/−86, inkl. MateMaTeX-backendkode) holdt utenfor |
+| Rollbackmål | `69b00d81e5a7…` bekreftet på GitHub og i live readiness før push |
+
+### 2. Lokal teststatus — re-verifisert, ikke sitert
+
+Alle gates ble kjørt på nytt mot rene `git worktree`-utsjekkinger for å unngå
+forurensning fra den skitne arbeidskopien.
+
+| Gate | Tidligere dokumentert | Målt 7. august 2026 |
+|---|---|---|
+| Docker-suite, kandidat-image | 398 passed, 2 skipped | **402 passed, 2 skipped, 47 warnings** |
+| Docker-suite, baseline-image | 398 passed, 2 skipped | **396 passed, 2 skipped, 47 warnings** |
+| `compileall` | bestått | exit 0 (kun eksisterende SyntaxWarnings) |
+| Frontend vitest | 13 tester | 13 passed / 5 filer |
+| TypeScript | bestått | `tsc --noEmit` exit 0 |
+| Produksjonsbygg | bestått | `next build` exit 0 |
+| Lint | not operational | bekreftet: ingen ESLint-konfigurasjon i treet |
+
+**Korreksjon:** tallet `398 passed, 2 skipped` reproduserer verken for baseline
+eller kandidat og er feil i tidligere dokumentasjon. Riktig baseline er
+**396/2** og riktig kandidat er **402/2**. Differansen på +6 tilsvarer nøyaktig
+de seks nye testfunksjonene i `test_truth.py` (6 → 12). Kandidattallet er
+verifisert to uavhengige veier: image-intern `/app` og read-only mount av en ren
+`ff725bb`-worktree ga begge 402/2.
+
+### 3. Deploybevis
+
+| Kontroll | Resultat |
+|---|---|
+| Push | `git push origin ff725bb…:refs/heads/main` — fast-forward `69b00d8..ff725bb`, ingen force |
+| GitHub `main` | `ff725bb6997879e74d60d1d539c57e18578f95ad` |
+| CI-run | `31104226437`, «Skoleverksted CI», conclusion `success`, alle fire jobber grønne |
+| CI-testtall | platform-backend 91 passed / 3 skipped + gate 2 passed; frontend 5 filer / 13 tester; deterministic 67 passed; Fag 67/4 skipped, Norsk 53, Matematikk 179/3 skipped |
+| Release-flipp | 2026-08-06 13:09:58Z, `69b00d81e5a7` → `ff725bb69978` |
+| Readiness etter deploy | HTTP 200, `status=ready`, alle sjekker `true`, `rndr-id 965b3e3c-54f6-484f`, `X-Request-ID 6fb1632e23fd` |
+| Runtime | `skoleverksted-v3`, `gemini-3.5-flash`, `gemini-3.1-flash-image`, fingerprint `dc08f612a352` — identisk med baseline |
+| Produksjonssmoke | bestått på forsøk 1 |
+| Vercel | `/`, `/fag`, `/norsk`, `/matematikk` svarte 200 (region `arn1`) |
+
+**Uverifisert:** Render-dashboardets formelle deploy-ID, deploytidspunkt og
+status, samt Vercels konfigurerte production-branch og aktive deployment-ID.
+Miljøet hadde verken `RENDER_API_KEY` eller `VERCEL_TOKEN`, og `vercel.json`
+inneholder ingen branch-konfigurasjon. Deployen er bevist via offentlig
+readiness-SHA, ikke via dashboardene.
+
+### 4. Identisk produksjonsscenario
+
+Kompendium `0689cd00b57946779fbdc3e44f2c1cb7`. Full tidslinje og
+punkt-for-punkt-sammenligning står i `IDENTICAL_SCENARIO_E2E.md`.
+
+| Måling | Baseline `69b00d81e5a7` | Kandidat `ff725bb69978` |
+|---|---|---|
+| Påstander totalt | 44 | 48 |
+| Verifisert | 32 | 42 |
+| Dekning | 73 % | **88 %** |
+| Kapittel 1 / 2 / 3 | 100 % / 62 % / 56 % | 87 % / 85 % / 92 % |
+| Lærerkilder `teacher`/`provided` | 3/3 | 3/3 |
+| Språkfragmenter | 0 | 0 |
+| `removed_claims` | 0 / 5 / 3 | **0 / 0 / 0** |
+| Reparasjon | 1 forsøk, 504 | 3 forsøk: 1× 200 (intern feil), 2× 504 |
+| Retry-adferd | 409 med jobb-ID | 409 med jobb-ID, 0,11–0,24 s |
+| Compile | 409 | 409 |
+| PDF / Word | ingen | ingen (404, `artifact_version=0`) |
+| Manuell lærervurdering | ikke mulig | ikke mulig |
+
+### 5. Nytt funn: falsk grønn reparasjonsrespons
+
+Reparasjonen av kapittel 1 svarte **HTTP 200** etter 75,94 s, men mislyktes
+internt. Kapittelstatus gikk fra `needs_revision` til
+**`source_grounding_failed`**, `revision_count` forble 0, `revision_summary`
+forble tom, og verifikasjonsnoten sier «Automatisk retting kunne ikke
+fullføres.» `compendium.py` fanger unntaket, setter feilstatus på kapitlet og
+returnerer likevel 200. En klient kan ikke skille dette fra suksess på
+HTTP-nivå.
+
+Netto: **0 av 3 reparasjoner reparerte noe**, og én av dem gjorde
+kapittelstatusen dårligere enn før den ble kalt.
+
+### 6. Konklusjon
+
+Kandidaten leverer det milepælen lovet — fail-closed sannhetsredigering er nå
+produksjonsbevist, og sannhetsdekningen går fra 73 % til 88 % — men den løser
+ikke reparasjonsporten. Uten fullført reparasjon finnes ingen godkjente
+kapitler, ingen PDF, ingen Word og dermed ingen manuell faglig vurdering.
+Dommen er `REJECTED`, og neste P0 er reparasjonsutførelse og durable jobber.
+
+---
+
+## 7. Durable repair execution — lokal verifikasjon 8. august 2026
+
+**Status: `LOKALT TESTET` og `TESTET I RIKTIG RUNTIME`. Ikke `TESTET MOT EKTE
+MODELL` og ikke `TESTET I PRODUKSJON`.** Dommen for produktet er uendret
+`REJECTED`.
+
+### Hva som ble endret
+
+| Lag | Fil | Endring |
+|---|---|---|
+| Kontrakt | `platform/router.py` | `POST …/repair` gir **202** `RepairJobAccepted`; nye `GET …/repair`, `GET /repair-jobs/{id}`, `GET /repair-jobs/{id}/events`; `POST /jobs/{id}/cancel` rutes til repair-livssyklusen |
+| Utførelse | `platform/repair.py` (ny) | `RepairService` med registrering, claim, heartbeat, CAS-write-back, cancel og ledger; bruker eksisterende `DurableJobGate` som kapasitetsport |
+| Varighet | `platform/store.py` | Tabellene `repair_jobs` og `repair_events`; `register_repair_job`, `claim_repair_job`, `finish_repair_job`, `recover_incomplete_repair_jobs`, `expire_stale_repair_leases`, `replace_compendium_chapter_if_unchanged` |
+| Domene | `platform/models.py` | `RepairJobStatus`, `RepairJob`, `RepairJobAccepted`, `RepairLedgerEntry`; `JobStatus` utvidet med `superseded` |
+| Observability | `platform/compendium.py` | `repair_preconditions()` og en `observer`-krok som logger modellkall, parse, truth-resultat og innholds-hash |
+| Frontend | `lib/platform-api.ts`, `app/compendia/[id]/page.tsx` | 202-kontrakt, polling, jobbstatus i UI, avbryt, gjenfinning etter reload, ingen automatisk ny repair |
+| Drift | `render.yaml` | `COMPENDIUM_REPAIR_TIMEOUT_SECONDS` erstattet av `COMPENDIUM_REPAIR_LEASE_SECONDS` |
+
+### Målt
+
+| Kontroll | Resultat |
+|---|---|
+| Backend-suite `Skoleverksted/backend/tests` | **120 bestått**, 1 warning |
+| Ny durability-suite | **27 bestått** |
+| Responstid for `POST …/repair` med blokkert modellkall | **< 1 s, HTTP 202** |
+| Parallell reparasjon av samme kapittel | **HTTP 409** med aktiv `job_id` |
+| Replay av samme `operation_id` | **HTTP 202**, samme `job_id` |
+| Jobb funnet igjen etter «reload» | **HTTP 200** på `GET …/chapters/{id}/repair` |
+| Terminal status etter frigitt modellkall | **`succeeded`**, ledger slutter med `succeeded` |
+| Speilet plattformjobb | `GET /jobs/{id}` → `completed` |
+| Frontend Vitest / `tsc` / Next-bygg | **24 bestått** / bestått / bestått |
+
+### Hva som fortsatt ikke er verifisert
+
+* Ingen kjøring mot ekte Gemini. Alle modellkall i testene er stubbet.
+* Ingen produksjonsdeploy; Render kjører fortsatt `ff725bb69978`.
+* Ingen vellykket produksjonsreparasjon, og dermed fortsatt ingen godkjente
+  kapitler, ingen PDF/Word og ingen manuell faglig vurdering.
+* Postgres-banen for de nye tabellene er ikke kjørt; kun SQLite er testet.
+* Nettleserverifikasjon av det nye statuspanelet er ikke gjort, fordi en ekte
+  reparasjon krever `GOOGLE_API_KEY` og et seedet produksjonskompendium.
+
+### Konklusjon
+
+Milepælen løser den dokumenterte blockeren på kodenivå: repair execution er nå
+varig, observerbar, gjenopprettbar og ikke-destruktiv, og kan ikke lenger
+rapportere falsk suksess. Den beviser ikke at en reparasjon faktisk lykkes i
+produksjon. Neste port er deploy etter eksplisitt godkjenning, fulgt av det
+identiske Historie VG2-scenarioet.

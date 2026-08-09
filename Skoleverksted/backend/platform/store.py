@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from .models import (
+    ACTIVE_REPAIR_STATUSES,
     Compendium,
     CompendiumChapter,
     CompendiumCreate,
@@ -19,6 +22,8 @@ from .models import (
     Project,
     ProjectCreate,
     ProjectUpdate,
+    RepairJob,
+    RepairLedgerEntry,
     YearPlan,
     YearPlanCreate,
     YearPlanMaterial,
@@ -37,6 +42,63 @@ def _default_db_path() -> Path:
         return Path(configured).expanduser().resolve()
     output_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
     return (output_dir / "platform" / "skoleverksted.sqlite3").resolve()
+
+
+def _lease_deadline(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=max(30, seconds))).isoformat()
+
+
+_SECRET_KEY_MARKERS = ("key", "token", "secret", "password", "authorization", "credential")
+# Compare-and-swap tokens are content hashes, not credentials, and the incident
+# cannot be reconstructed without them.
+_LEDGER_KEY_ALLOWLIST = frozenset({
+    "chapter_token",
+    "result_token",
+    "expected_token",
+    "actual_token",
+})
+_LEDGER_TEXT_LIMIT = 400
+
+
+def _ledger_safe(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep the forensic ledger useful without turning it into a secret store.
+
+    Anything that looks like a credential is dropped, and free text is capped.
+    Callers are expected to pass hashes and counters, not prompts or responses.
+    """
+    safe: dict[str, Any] = {}
+    for key, value in payload.items():
+        lowered = str(key).casefold()
+        if (
+            any(marker in lowered for marker in _SECRET_KEY_MARKERS)
+            and not lowered.endswith("_hash")
+            and lowered not in _LEDGER_KEY_ALLOWLIST
+        ):
+            continue
+        if isinstance(value, str):
+            safe[key] = value[:_LEDGER_TEXT_LIMIT]
+        elif isinstance(value, (int, float, bool)) or value is None:
+            safe[key] = value
+        elif isinstance(value, dict):
+            safe[key] = _ledger_safe(value)
+        elif isinstance(value, (list, tuple)):
+            safe[key] = [
+                item[:_LEDGER_TEXT_LIMIT] if isinstance(item, str) else item
+                for item in list(value)[:20]
+                if isinstance(item, (str, int, float, bool))
+            ]
+        else:
+            safe[key] = str(value)[:_LEDGER_TEXT_LIMIT]
+    return safe
+
+
+class StaleChapterWriteError(RuntimeError):
+    """The chapter changed after the worker read it."""
+
+    def __init__(self, expected: str, actual: str) -> None:
+        super().__init__("Kapittelet ble endret mens reparasjonen kjørte.")
+        self.expected = expected
+        self.actual = actual
 
 
 class _PostgresConnection:
@@ -177,6 +239,30 @@ class PlatformStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_compendia_updated ON compendia(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_compendia_subject ON compendia(subject,level,kind);
+                CREATE TABLE IF NOT EXISTS repair_jobs (
+                    id TEXT PRIMARY KEY,
+                    operation_id TEXT NOT NULL,
+                    compendium_id TEXT NOT NULL,
+                    chapter_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_repair_jobs_chapter
+                    ON repair_jobs(compendium_id,chapter_id,created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_repair_jobs_status ON repair_jobs(status);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_jobs_operation
+                    ON repair_jobs(compendium_id,chapter_id,operation_id);
+                CREATE TABLE IF NOT EXISTS repair_events (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    operation_id TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_repair_events_job ON repair_events(job_id,created_at);
                 """
             )
 
@@ -641,6 +727,281 @@ class PlatformStore:
             compendium.approved_at = None
         compendium.updated_at = utc_now()
         return self._save_compendium(compendium)
+
+    # ------------------------------------------------------------------
+    # Durable chapter repair
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def chapter_content_token(chapter: CompendiumChapter) -> str:
+        """Compare-and-swap token for one chapter's teacher-visible text.
+
+        Revision count is part of the token so that an edit that restores the
+        previous text still invalidates an in-flight repair.
+        """
+        material = f"{chapter.revision_count}\x1f{chapter.content_markdown}"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def compendium_chapter(
+        self,
+        compendium_id: str,
+        chapter_id: str,
+    ) -> CompendiumChapter | None:
+        compendium = self.get_compendium(compendium_id)
+        if compendium is None:
+            return None
+        return next((item for item in compendium.chapters if item.id == chapter_id), None)
+
+    @contextmanager
+    def _exclusive(self):
+        """One writer transaction, so check-then-insert cannot interleave."""
+        with self._lock, self._connection() as conn:
+            if not self.uses_postgres:
+                conn.execute("BEGIN IMMEDIATE")
+            yield conn
+
+    def _save_repair_job(self, conn: Any, job: RepairJob) -> RepairJob:
+        conn.execute(
+            """INSERT INTO repair_jobs(
+                   id,operation_id,compendium_id,chapter_id,status,payload,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 status=excluded.status,payload=excluded.payload,updated_at=excluded.updated_at""",
+            (
+                job.id,
+                job.operation_id,
+                job.compendium_id,
+                job.chapter_id,
+                job.status,
+                self._json(job.model_dump()),
+                job.created_at,
+                job.updated_at,
+            ),
+        )
+        return job
+
+    def _read_repair_job(self, conn: Any, job_id: str) -> RepairJob | None:
+        row = conn.execute("SELECT payload FROM repair_jobs WHERE id=?", (job_id,)).fetchone()
+        return RepairJob.model_validate_json(row["payload"]) if row else None
+
+    def get_repair_job(self, job_id: str) -> RepairJob | None:
+        with self._connection() as conn:
+            return self._read_repair_job(conn, job_id)
+
+    def active_repair_job(self, compendium_id: str, chapter_id: str) -> RepairJob | None:
+        placeholders = ",".join("?" for _ in ACTIVE_REPAIR_STATUSES)
+        with self._connection() as conn:
+            row = conn.execute(
+                f"""SELECT payload FROM repair_jobs
+                    WHERE compendium_id=? AND chapter_id=? AND status IN ({placeholders})
+                    ORDER BY created_at DESC LIMIT 1""",
+                (compendium_id, chapter_id, *ACTIVE_REPAIR_STATUSES),
+            ).fetchone()
+        return RepairJob.model_validate_json(row["payload"]) if row else None
+
+    def latest_repair_job(self, compendium_id: str, chapter_id: str) -> RepairJob | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                """SELECT payload FROM repair_jobs
+                   WHERE compendium_id=? AND chapter_id=?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (compendium_id, chapter_id),
+            ).fetchone()
+        return RepairJob.model_validate_json(row["payload"]) if row else None
+
+    def register_repair_job(self, job: RepairJob) -> tuple[RepairJob, str]:
+        """Reserve the chapter and persist the job before any work starts.
+
+        Returns the stored job and one of `created`, `idempotent` (same
+        operation replayed) or `conflict` (another repair owns the chapter).
+        """
+        placeholders = ",".join("?" for _ in ACTIVE_REPAIR_STATUSES)
+        with self._exclusive() as conn:
+            replay = conn.execute(
+                """SELECT payload FROM repair_jobs
+                   WHERE compendium_id=? AND chapter_id=? AND operation_id=?""",
+                (job.compendium_id, job.chapter_id, job.operation_id),
+            ).fetchone()
+            if replay:
+                return RepairJob.model_validate_json(replay["payload"]), "idempotent"
+            blocking = conn.execute(
+                f"""SELECT payload FROM repair_jobs
+                    WHERE compendium_id=? AND chapter_id=? AND status IN ({placeholders})
+                    ORDER BY created_at DESC LIMIT 1""",
+                (job.compendium_id, job.chapter_id, *ACTIVE_REPAIR_STATUSES),
+            ).fetchone()
+            if blocking:
+                return RepairJob.model_validate_json(blocking["payload"]), "conflict"
+            attempts = conn.execute(
+                "SELECT COUNT(*) AS n FROM repair_jobs WHERE compendium_id=? AND chapter_id=?",
+                (job.compendium_id, job.chapter_id),
+            ).fetchone()["n"]
+            job.attempt = int(attempts) + 1
+            return self._save_repair_job(conn, job), "created"
+
+    def claim_repair_job(self, job_id: str, *, lease_seconds: int = 900) -> RepairJob | None:
+        """Move `queued` to `running` exactly once."""
+        with self._exclusive() as conn:
+            job = self._read_repair_job(conn, job_id)
+            if job is None or job.status != "queued":
+                return None
+            job.status = "running"
+            job.message = "Reparasjonen kjører …"
+            job.started_at = utc_now()
+            job.updated_at = job.started_at
+            job.lease_expires_at = _lease_deadline(lease_seconds)
+            return self._save_repair_job(conn, job)
+
+    def heartbeat_repair_job(self, job_id: str, *, lease_seconds: int = 900) -> RepairJob | None:
+        with self._exclusive() as conn:
+            job = self._read_repair_job(conn, job_id)
+            if job is None or job.status != "running":
+                return None
+            job.lease_expires_at = _lease_deadline(lease_seconds)
+            job.updated_at = utc_now()
+            return self._save_repair_job(conn, job)
+
+    def finish_repair_job(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        message: str = "",
+        result_token: str = "",
+        chapter_status: str | None = None,
+        expected_statuses: tuple[str, ...] = ACTIVE_REPAIR_STATUSES,
+    ) -> RepairJob | None:
+        """Write a terminal status and release the chapter lock."""
+        with self._exclusive() as conn:
+            job = self._read_repair_job(conn, job_id)
+            if job is None or job.status not in expected_statuses:
+                return None
+            job.status = status  # type: ignore[assignment]
+            job.message = message[:400]
+            job.result_token = result_token or job.result_token
+            job.chapter_status = chapter_status  # type: ignore[assignment]
+            job.lease_expires_at = ""
+            job.finished_at = utc_now()
+            job.updated_at = job.finished_at
+            return self._save_repair_job(conn, job)
+
+    def request_repair_cancel(self, job_id: str) -> RepairJob | None:
+        """Record the teacher's intent durably, whatever the model is doing."""
+        with self._exclusive() as conn:
+            job = self._read_repair_job(conn, job_id)
+            if job is None:
+                return None
+            job.cancel_requested = True
+            job.updated_at = utc_now()
+            if job.status in ACTIVE_REPAIR_STATUSES:
+                job.status = "cancelled"
+                job.message = "Avbrutt av læreren."
+                job.lease_expires_at = ""
+                job.finished_at = job.updated_at
+            return self._save_repair_job(conn, job)
+
+    def recover_incomplete_repair_jobs(self) -> int:
+        """A restart loses the model call, so never claim it finished."""
+        return self._release_repair_jobs(
+            "Serveren startet på nytt før reparasjonen var ferdig. "
+            "Kapittelet er ikke endret; start reparasjonen på nytt.",
+        )
+
+    def expire_stale_repair_leases(self) -> int:
+        """A crashed worker must not leave the chapter locked forever."""
+        return self._release_repair_jobs(
+            "Reparasjonen mistet kontakten med arbeideren. "
+            "Kapittelet er ikke endret; start reparasjonen på nytt.",
+            only_expired=True,
+        )
+
+    def _release_repair_jobs(self, message: str, *, only_expired: bool = False) -> int:
+        placeholders = ",".join("?" for _ in ACTIVE_REPAIR_STATUSES)
+        now = utc_now()
+        released = 0
+        with self._exclusive() as conn:
+            rows = conn.execute(
+                f"SELECT payload FROM repair_jobs WHERE status IN ({placeholders})",
+                ACTIVE_REPAIR_STATUSES,
+            ).fetchall()
+            for row in rows:
+                job = RepairJob.model_validate_json(row["payload"])
+                if only_expired and not (job.lease_expires_at and job.lease_expires_at < now):
+                    continue
+                job.status = "failed_retryable"
+                job.message = message[:400]
+                job.lease_expires_at = ""
+                job.finished_at = now
+                job.updated_at = now
+                self._save_repair_job(conn, job)
+                released += 1
+        return released
+
+    def append_repair_event(
+        self,
+        job_id: str,
+        operation_id: str,
+        stage: str,
+        payload: dict[str, Any] | None = None,
+    ) -> RepairLedgerEntry:
+        entry = RepairLedgerEntry(
+            job_id=job_id,
+            operation_id=operation_id,
+            stage=stage,
+            payload=_ledger_safe(payload or {}),
+        )
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                "INSERT INTO repair_events(id,job_id,operation_id,stage,payload,created_at) VALUES(?,?,?,?,?,?)",
+                (
+                    entry.id,
+                    entry.job_id,
+                    entry.operation_id,
+                    entry.stage,
+                    self._json(entry.payload),
+                    entry.created_at,
+                ),
+            )
+        return entry
+
+    def list_repair_events(self, job_id: str, *, limit: int = 200) -> list[RepairLedgerEntry]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT id,job_id,operation_id,stage,payload,created_at FROM repair_events "
+                "WHERE job_id=? ORDER BY created_at,id LIMIT ?",
+                (job_id, limit),
+            ).fetchall()
+        return [
+            RepairLedgerEntry(
+                id=row["id"],
+                job_id=row["job_id"],
+                operation_id=row["operation_id"],
+                stage=row["stage"],
+                created_at=row["created_at"],
+                payload=json.loads(row["payload"]),
+            )
+            for row in rows
+        ]
+
+    def replace_compendium_chapter_if_unchanged(
+        self,
+        compendium_id: str,
+        chapter: CompendiumChapter,
+        expected_token: str,
+    ) -> Compendium | None:
+        """Write back only while the teacher's text is still the one we read.
+
+        Raises `StaleChapterWriteError` when the chapter moved on, so a late
+        worker can never overwrite newer teacher work.
+        """
+        with self._lock:
+            current = self.compendium_chapter(compendium_id, chapter.id)
+            if current is None:
+                return None
+            actual_token = self.chapter_content_token(current)
+            if actual_token != expected_token:
+                raise StaleChapterWriteError(expected_token, actual_token)
+            return self.replace_compendium_chapter(compendium_id, chapter)
 
     def store_compendium_artifacts(
         self,

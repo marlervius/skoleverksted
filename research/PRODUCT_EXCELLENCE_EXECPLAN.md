@@ -2,9 +2,18 @@
 
 **Status:** levende gjennomføringsplan
 
-**Oppdatert:** 2026-08-03
+**Oppdatert:** 2026-08-08
 
 **Produksjonsdom:** `REJECTED`
+
+**Deployet release:** `ff725bb69978` (kandidaten, deployet 2026-08-06 13:09:58Z)
+
+**Forrige P0:** A — repair execution / durable job architecture. **Løst på
+kodenivå, ikke i produksjon.** Se punkt 15 for problemet og punkt 16 for
+løsningen.
+
+**Neste P0:** deploy av durable-repair-kandidaten og ny identisk Historie
+VG2-kjøring. Se punkt 16.6.
 
 **Primær wedge:** Historie VG2, én periode i årsplanen til et kildeforankret og lærergodkjent læringsark eller kort kompendium
 
@@ -275,8 +284,8 @@ Når 1–7 er oppfylt, er den konkrete menneskelige handlingen å merge/pushe de
 | Milepæl | Produktutfall | Port | Status |
 |---|---|---|---|
 | M0 Etabler sannhet | Repo, runtime, produksjonsrelease og gate er identifisert | Ingen uklare releasepåstander | Fullført |
-| M1 Sikker sannhetsmutasjon | Ingen skjult nabosetningssletting; tvetydighet blir review | Full suite + eksplisitte regresjonstester | Implementert lokalt; produksjon ikke berørt |
-| M2 Durable wedge-jobb | Læreren kan refresh/retry uten tvetydig eller duplisert arbeid | Restart-, idempotens-, timeout- og frontend-recoverytest | Ikke startet |
+| M1 Sikker sannhetsmutasjon | Ingen skjult nabosetningssletting; tvetydighet blir review | Full suite + eksplisitte regresjonstester | **Fullført og produksjonsbevist** 2026-08-07: `removed_claims` 0/0/0 mot baselines 0/5/3 |
+| M2 Durable wedge-jobb | Læreren kan refresh/retry uten tvetydig eller duplisert arbeid | Restart-, idempotens-, timeout- og frontend-recoverytest | **Neste P0**; se punkt 15.5 |
 | M3 Pilotisolasjon | Bare riktig pilotbruker kan lese/endre/laste ned egne data | Negative auth/IDOR-tester + backup/restore | Ikke startet |
 | M4 Vellykket identisk scenario | ≥80 % minimumsport, alle sluttpåstander håndtert, repair fullfører | PDF/DOCX + manuell fag-/språk-/layoutreview | Ikke startet |
 | M5 Smal lærerpilor | Wedge reduserer faktisk tid og etterarbeid uten tillitsbrudd | Scorecard med observerte lærerdata og null kritiske hendelser | Ikke startet |
@@ -297,6 +306,172 @@ Når 1–7 er oppfylt, er den konkrete menneskelige handlingen å merge/pushe de
 - Manuell faglig vurdering: `pending teacher review`; ingen lærer har vurdert sluttartefakt.
 - Neste høyest prioriterte arbeid: M2, men M3 må fullføres før flerbrukerpilot.
 
+### 2026-08-07 — M1 deployet og verifisert i produksjon
+
+- Pushet kandidaten `ff725bb` til `main` som fast-forward; CI grønn, Render
+  deployet, readiness viser `ff725bb69978`.
+- Korrigerte testgrunnlaget: baseline 396/2, kandidat 402/2 (ikke 398/2).
+- Kjørte identisk scenario: 42/48 = 88 % mot baselines 32/44 = 73 %.
+- M1 produksjonsbevist: null automatisk fjernet tekst mot baselines åtte.
+- Reparasjon fortsatt ødelagt: 0 av 3 fullførte, og én mislykket reparasjon ble
+  rapportert som HTTP 200.
+- Ingen PDF, ingen Word, ingen manuell lærervurdering. Dom `REJECTED`.
+- Neste P0 valgt etter at produksjonsresultatet forelå: A.
+
 ## 14. Beslutningsregel for videre arbeid
 
 Hver ny endring skal knyttes til én observert lærerfriksjon eller én dokumentert risiko, ha eksplisitt akseptanse, test og rollback, og oppdatere denne loggen og scorecardet. Hvis en endring ikke forbedrer tillit, kjerneløp, lærertid, klarhet eller stabilitet for wedgen, skal den normalt ikke bygges nå.
+
+## 15. Kandidatdeploy og isolert produksjonsverifikasjon — 7. august 2026
+
+Kandidaten `ff725bb` er nå deployet og testet isolert mot det identiske
+scenarioet. Dette avsnittet er autoritativt og overstyrer punkt 10–11 der de
+er i konflikt.
+
+### 15.1 Kontrollert deploy
+
+`git push origin ff725bb…:refs/heads/main` ga fast-forward `69b00d8..ff725bb`.
+Ingen force, ingen merge-commit, fire commits tilført. De fire lokale commitene
+`266b1d2`, `53fd943`, `3bb1970` og `72e3e3c` — inkludert en reell
+MateMaTeX-backendendring — ble holdt utenfor releasen.
+
+CI-run `31104226437` ble grønn på alle fire jobber. Render deployet via
+`autoDeployTrigger: checksPass`, og readiness flippet fra `69b00d81e5a7` til
+**`ff725bb69978`** 2026-08-06 kl. 13:09:58Z. Config-fingerprint er uendret
+`dc08f612a352`, så E2E-en kjørte mot samme prompt- og modellkonfigurasjon som
+baseline.
+
+Render-dashboardets deploy-ID og Vercels production-branch er fortsatt
+`UKJENT`; miljøet hadde ingen dashboard-tokens.
+
+### 15.2 Korreksjon av testgrunnlaget
+
+Tallet «398 bestått, 2 hoppet over» i punkt 3, 10 og 13 er feil. Målt mot rene
+worktrees i de eksakte imagene gir baseline `69b00d8` **396 bestått, 2 hoppet
+over** og kandidat `ff725bb` **402 bestått, 2 hoppet over**. Differansen på +6
+tilsvarer nøyaktig de seks nye testfunksjonene i `test_truth.py`.
+
+### 15.3 Resultat av identisk scenario
+
+Kompendium `0689cd00b57946779fbdc3e44f2c1cb7`, uendret inputkontrakt, uendret
+80 %-terskel.
+
+| Måling | Baseline | Kandidat |
+|---|---|---|
+| Påstander verifisert | 32/44 = 73 % | **42/48 = 88 %** |
+| Laveste kapittel | 56 % | 85 % |
+| `removed_claims` | 0 / 5 / 3 | **0 / 0 / 0** |
+| Språkfragmenter | 0 | 0 |
+| Lærerkilder `teacher`/`provided` | 3/3 | 3/3 |
+| Reparasjoner fullført | 0 av 1 | **0 av 3** |
+| Compile / PDF / Word | 409 / nei / nei | 409 / 404 / 404 |
+| Manuell lærervurdering | umulig | umulig |
+
+**M1 er produksjonsbevist.** Den gamle koden fjernet åtte påstanders tekst
+automatisk i produksjon. Kandidaten fjerner ingenting og registrerer i stedet
+det uavklarte som begrensning for lærerreview. Det var milepælens hele formål,
+og hypotesen om at innstrammingen ville senke dekningen slo ikke til — den
+steg med 15 prosentpoeng.
+
+### 15.4 Ny defekt: falsk grønn reparasjonsrespons
+
+Reparasjonen av kapittel 1 svarte HTTP 200 etter 75,94 s, men feilet internt.
+Kapittelstatus gikk fra `needs_revision` til `source_grounding_failed`,
+`revision_count` forble 0, `revision_summary` forble tom, og noten sier
+«Automatisk retting kunne ikke fullføres.» `compendium.py` fanger unntaket,
+setter feilstatus og returnerer likevel 200.
+
+Dette er nøyaktig den typen falsk grønn tilstand punkt 5 forbyr. En klient kan
+ikke skille en mislykket reparasjon fra en vellykket på HTTP-nivå.
+
+### 15.5 Dom og neste P0
+
+**Dom: `REJECTED`.** Reparasjon, kompilering, PDF, Word og manuell
+lærervurdering mangler.
+
+**Neste P0: A — repair execution / durable job architecture.**
+
+Begrunnelsen er at alle gjenstående ikke-beståtte kriterier (C03, C08, C09,
+C11, A04, A08, A10) er nedstrøms av at reparasjonen ikke fullfører. Alternativ
+B er avkreftet av data: sannhetsdekningen består nå porten. Alternativ C er
+reelt, men den observerte observabilitetsfeilen — 200 på en mislykket
+reparasjon — er selv et symptom på at reparasjonen ikke har en jobbmodell med
+egen terminalstatus. C løses derfor riktigst som en del av A, ikke før den.
+
+Konkret akseptanse for A:
+
+1. Reparasjon opprettes som en durable jobb med egen ID, status og eier, skilt
+   fra HTTP-forespørselens levetid.
+2. En mislykket reparasjon returnerer aldri en suksessstatus; jobben får
+   terminalstatus `failed` med årsak.
+3. Læreren kan refreshe eller miste nettforbindelsen og finne igjen jobben.
+4. Idempotensnøkkel fra UI hindrer dobbeltarbeid; 409 beholdes for aktiv jobb.
+5. Reparasjon som overskrider tidsgrensen kanselleres i stedet for å fortsette
+   i en daemontråd.
+6. `revision_summary` fylles ved fullført reparasjon slik at læreren ser hva
+   som ble endret.
+7. Samme identiske scenario kjøres på nytt og skal fullføre minst én
+   reparasjon, nå compile, produsere PDF og Word og bli manuelt vurdert.
+
+## 16. Durable repair execution — 8. august 2026
+
+Dette avsnittet lukker P0 A på kodenivå. Det overstyrer punkt 15 der de er i
+konflikt om *hvorfor* reparasjon feilet, men ikke om produksjonsstatus:
+produksjonen er urørt og dommen er fortsatt `REJECTED`.
+
+### 16.1 Rotårsak, presist
+
+Reparasjonen feilet ikke fordi den manglet en tidsgrense. Den feilet fordi
+**HTTP-requesten eide modellarbeidet**. Request-tråden blokkerte på
+`done.wait(120)` i `router.py`, låsen lå i en `dict` i prosessminne, og verken
+jobb-ID, status eller evidens ble lagret noe sted. Alle tre observerte
+produksjonssymptomene — 504, 409 uten eier, og HTTP 200 med intern feil — følger
+av dette ene designvalget.
+
+### 16.2 Ny livssyklus
+
+Egne jobbstatuser, adskilt fra kapittelstatus:
+`queued → running → succeeded | failed_retryable | failed_terminal | cancelled | superseded`.
+
+`succeeded` krever modellrespons, vellykket parsing, gjennomført kilde-/
+sannhetskontroll, gyldig CAS-token, fullført write-back og konsistent ledger.
+Kapittelstatus (`generated`, `source_grounding_failed`, …) er et innholdsresultat
+og kan ikke gjøre en jobb grønn eller rød alene.
+
+Full tilstandsmaskin, restart-tabell og lås-livssyklus:
+`research/REPAIR_DURABILITY_EXECPLAN.md`.
+
+### 16.3 Kontrakt
+
+`POST …/repair` returnerer **202** med `job_id`, `operation_id` og `status_url`
+før noe modellkall skjer. Status leses via `GET /repair-jobs/{id}`, evidens via
+`GET /repair-jobs/{id}/events`, gjenfinning etter reload via
+`GET …/chapters/{id}/repair`. `GET /jobs/{id}`, `GET /queue` og
+`POST /jobs/{id}/cancel` er gjenbrukt; hver repair speiles i den eksisterende
+jobbledgeren.
+
+### 16.4 Vern mot de tre farlige utfallene
+
+| Fare | Vern |
+|---|---|
+| Falsk suksess | terminal status settes først etter fullført write-back |
+| Overskrevet lærerarbeid | CAS på innholds-hash + `revision_count` → `superseded` |
+| Permanent låst kapittel | lease + `recover_incomplete_repair_jobs()` + `expire_stale_repair_leases()` |
+
+### 16.5 Evidens
+
+Backend 120 bestått, ny durability-suite 27 bestått, frontend 24 bestått,
+typecheck og produksjonsbygg bestått. En ASGI-test mot den reelle ruteren viser
+202 på under ett sekund mens modellkallet fortsatt er blokkert.
+
+Alle modellkall i testene er stubbet. Ingenting av dette er kjørt mot ekte
+Gemini eller i produksjon.
+
+### 16.6 Neste P0
+
+Deploy durable-repair-kandidaten etter eksplisitt godkjenning, og kjør det
+identiske Historie VG2-scenarioet på nytt. PASS krever at repair execution er
+varig, observerbar, gjenopprettbar, ikke-destruktiv og korrekt representert i
+UI/API — ikke at modellen alltid løfter kapitlet over kvalitetsporten. Et
+faglig for svakt kapittel skal rapporteres som truth-resultat, ikke som
+infrastrukturfeil.

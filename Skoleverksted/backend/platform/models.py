@@ -12,7 +12,18 @@ def utc_now() -> str:
 
 
 ProjectStatus = Literal["draft", "ready", "generating", "completed", "archived"]
-JobStatus = Literal["queued", "planning", "generating", "verifying", "rendering", "completed", "needs_review", "failed", "cancelled"]
+JobStatus = Literal[
+    "queued",
+    "planning",
+    "generating",
+    "verifying",
+    "rendering",
+    "completed",
+    "needs_review",
+    "failed",
+    "cancelled",
+    "superseded",
+]
 YearPlanStatus = Literal["draft", "active", "completed", "archived"]
 YearPlanPeriodStatus = Literal["not_started", "in_progress", "ready", "completed", "needs_revision"]
 MaterialStatus = Literal["draft", "approved", "used", "needs_revision"]
@@ -476,3 +487,71 @@ class CompendiumCompileResult(BaseModel):
     compendium: Compendium
     pdf_download_url: str
     docx_download_url: str
+
+
+RepairJobStatus = Literal[
+    "queued",
+    "running",
+    "succeeded",
+    "failed_retryable",
+    "failed_terminal",
+    "cancelled",
+    "superseded",
+]
+
+ACTIVE_REPAIR_STATUSES: tuple[str, ...] = ("queued", "running")
+
+REPAIR_JOB_KIND = "compendium_repair"
+
+
+class RepairJob(BaseModel):
+    """Durable identity for one teacher-initiated chapter repair.
+
+    The status here describes the *job*, never the chapter. A job that stores a
+    chapter with `source_grounding_failed` is a succeeded job with a content
+    result the teacher must read.
+    """
+
+    id: str
+    operation_id: str = Field(min_length=1, max_length=120)
+    compendium_id: str
+    chapter_id: str
+    chapter_title: str = Field(default="", max_length=180)
+    status: RepairJobStatus = "queued"
+    message: str = Field(default="", max_length=400)
+    chapter_token: str = Field(default="", max_length=80)
+    result_token: str = Field(default="", max_length=80)
+    chapter_status: CompendiumChapterStatus | None = None
+    attempt: int = Field(default=1, ge=1)
+    cancel_requested: bool = False
+    lease_expires_at: str = ""
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
+    started_at: str = ""
+    finished_at: str = ""
+
+    @property
+    def active(self) -> bool:
+        return self.status in ACTIVE_REPAIR_STATUSES
+
+    @property
+    def status_url(self) -> str:
+        return f"/api/platform/repair-jobs/{self.id}"
+
+
+class RepairJobAccepted(BaseModel):
+    job_id: str
+    operation_id: str
+    compendium_id: str
+    chapter_id: str
+    status: RepairJobStatus
+    status_url: str
+
+
+class RepairLedgerEntry(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    job_id: str
+    operation_id: str
+    stage: str = Field(max_length=60)
+    created_at: str = Field(default_factory=utc_now)
+    payload: dict[str, Any] = Field(default_factory=dict)

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -26,16 +26,24 @@ import {
 } from "lucide-react";
 import {
   approveCompendium,
+  awaitRepairJob,
+  cancelRepairJob,
   compileCompendium,
   compendiumDownloadUrl,
   generateCompendiumChapter,
+  getChapterRepairJob,
   getCompendium,
+  getRepairJob,
+  isActiveRepairStatus,
   repairCompendiumChapter,
+  repairStatusView,
   updateCompendium,
   updateCompendiumChapter,
+  REPAIR_POLL_INTERVAL_MS,
   type Compendium,
   type CompendiumChapter,
   type CompendiumChapterStatus,
+  type RepairJob,
   type ScopeContract,
 } from "@/lib/platform-api";
 import { TruthPassport } from "@/components/truth-passport";
@@ -116,6 +124,7 @@ function ChapterCard({
   onToggle,
   onUpdated,
   onError,
+  onRefresh,
 }: {
   compendium: Compendium;
   chapter: CompendiumChapter;
@@ -124,6 +133,7 @@ function ChapterCard({
   onToggle: () => void;
   onUpdated: (value: Compendium) => void;
   onError: (message: string) => void;
+  onRefresh: () => Promise<void>;
 }) {
   const [editingOutline, setEditingOutline] = useState(false);
   const [editingContent, setEditingContent] = useState(false);
@@ -132,6 +142,7 @@ function ChapterCard({
   const [questions, setQuestions] = useState(chapter.guiding_questions.join("\n"));
   const [content, setContent] = useState(chapter.content_markdown);
   const [localBusy, setLocalBusy] = useState("");
+  const [repairJob, setRepairJob] = useState<RepairJob | null>(null);
   const visibleSources = chapter.sources.filter((source) => !isTransientSource(source.url));
   const weakSourceCount = visibleSources.filter(sourceNeedsUpgrade).length
     + (chapter.content_markdown.trim() && visibleSources.length === 0 ? 1 : 0);
@@ -143,6 +154,42 @@ function ChapterCard({
     setContent(chapter.content_markdown);
   }, [chapter.updated_at, chapter.title, chapter.purpose, chapter.guiding_questions, chapter.content_markdown]);
 
+  // A repair outlives this page, so the card looks the job up again on load
+  // instead of assuming a lost fetch means a lost repair.
+  useEffect(() => {
+    let active = true;
+    getChapterRepairJob(compendium.id, chapter.id)
+      .then((job) => {
+        if (active) setRepairJob(job);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [compendium.id, chapter.id]);
+
+  const repairJobId = repairJob && isActiveRepairStatus(repairJob.status) ? repairJob.id : "";
+
+  useEffect(() => {
+    if (!repairJobId) return undefined;
+    let active = true;
+    const timer = setInterval(() => {
+      void getRepairJob(repairJobId)
+        .then((job) => {
+          if (!active) return;
+          setRepairJob(job);
+          if (!isActiveRepairStatus(job.status)) {
+            if (job.status === "succeeded" || job.status === "superseded") void onRefresh();
+          }
+        })
+        .catch(() => undefined);
+    }, REPAIR_POLL_INTERVAL_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [repairJobId, onRefresh]);
+
   async function run(action: string, operation: () => Promise<Compendium>) {
     setLocalBusy(action);
     onError("");
@@ -150,6 +197,32 @@ function ChapterCard({
       onUpdated(await operation());
     } catch (err) {
       onError(err instanceof Error ? err.message : "Handlingen mislyktes.");
+    } finally {
+      setLocalBusy("");
+    }
+  }
+
+  async function startRepair() {
+    setLocalBusy("repair");
+    onError("");
+    try {
+      const accepted = await repairCompendiumChapter(compendium.id, chapter.id);
+      setRepairJob(await getRepairJob(accepted.job_id));
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Reparasjonen kunne ikke startes.");
+    } finally {
+      setLocalBusy("");
+    }
+  }
+
+  async function stopRepair() {
+    if (!repairJob) return;
+    setLocalBusy("cancel-repair");
+    try {
+      await cancelRepairJob(repairJob.id);
+      setRepairJob(await getRepairJob(repairJob.id));
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Reparasjonen kunne ikke avbrytes.");
     } finally {
       setLocalBusy("");
     }
@@ -172,6 +245,8 @@ function ChapterCard({
     setEditingContent(false);
   }
 
+  const repairActive = Boolean(repairJob && isActiveRepairStatus(repairJob.status));
+  const repairView = repairJob ? repairStatusView(repairJob) : null;
   const working = busy || Boolean(localBusy);
   const truthVerified = chapter.truth_passport?.status === "verified";
   const statusClass = chapter.status === "approved"
@@ -216,21 +291,58 @@ function ChapterCard({
             {chapter.content_markdown && (chapter.verification_notes.length > 0 || weakSourceCount > 0) && (
               <button
                 className="btn-primary !bg-accent-teal hover:!bg-accent-teal/90"
-                disabled={working || compendium.status === "outline"}
-                onClick={() => void run("repair", () => repairCompendiumChapter(compendium.id, chapter.id))}
+                disabled={working || repairActive || compendium.status === "outline"}
+                onClick={() => void startRepair()}
                 title={weakSourceCount > 0
                   ? "Erstatt svake og generelle kilder med konkrete, autoritative kilder"
                   : "Undersøk kontrollmerknadene, rett teksten og kontroller resultatet på nytt"}
               >
                 {localBusy === "repair" ? <Loader2 className="h-4 w-4 animate-spin" /> : <SearchCheck className="h-4 w-4" />}
                 {localBusy === "repair"
-                  ? "Sjekker og retter…"
+                  ? "Starter reparasjon…"
                   : weakSourceCount > 0
                     ? `Oppgrader kilder (${weakSourceCount})`
                     : "Sjekk og rett automatisk"}
               </button>
             )}
           </div>
+
+          {repairView && (
+            <div
+              role="status"
+              className={`mt-4 rounded-xl border p-4 text-sm ${
+                repairView.tone === "busy"
+                  ? "border-accent-teal/30 bg-accent-teal/5 text-text-primary"
+                  : repairView.tone === "ok"
+                    ? "border-accent-green/30 bg-accent-green/5 text-text-primary"
+                    : repairView.tone === "warn"
+                      ? "border-accent-orange/30 bg-accent-orange/5 text-text-primary"
+                      : "border-border bg-surface text-text-primary"
+              }`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                {repairActive && <Loader2 className="h-4 w-4 animate-spin text-accent-teal" />}
+                <strong>{repairView.label}</strong>
+                <span className="text-xs text-text-muted">Jobb-ID: {repairJob?.id.slice(0, 12)}</span>
+                {repairJob && repairJob.attempt > 1 && (
+                  <span className="text-xs text-text-muted">Forsøk {repairJob.attempt}</span>
+                )}
+              </div>
+              <p className="mt-1 text-text-secondary">{repairView.detail}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {repairActive && (
+                  <button className="btn-ghost" disabled={localBusy === "cancel-repair"} onClick={() => void stopRepair()}>
+                    {localBusy === "cancel-repair" ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />} Avbryt reparasjonen
+                  </button>
+                )}
+                {repairView.canRetry && (
+                  <button className="btn-secondary" disabled={working} onClick={() => void startRepair()}>
+                    <RefreshCw className="h-4 w-4" /> Prøv reparasjonen på nytt
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {editingOutline ? (
             <div className="mt-4 grid gap-4 rounded-xl border border-border bg-surface p-4">
@@ -457,6 +569,14 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
     }
   }
 
+  const refresh = useCallback(async () => {
+    try {
+      setCompendium(await getCompendium(params.id));
+    } catch {
+      // A failed refresh must not clear the chapter the teacher is reading.
+    }
+  }, [params.id]);
+
   async function repairAllIssues() {
     if (!compendium) return;
     const chapters = compendium.chapters.filter((chapter) =>
@@ -469,13 +589,25 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
     if (!chapters.length) return;
     setAction("sources");
     setError("");
+    const outcomes: string[] = [];
     try {
       for (let index = 0; index < chapters.length; index += 1) {
-        setBatchProgress(`Sjekker og retter kapittel ${index + 1} av ${chapters.length}: ${chapters[index].title}`);
-        const updated = await repairCompendiumChapter(compendium.id, chapters[index].id);
-        setCompendium(updated);
+        const position = `kapittel ${index + 1} av ${chapters.length}: ${chapters[index].title}`;
+        setBatchProgress(`Starter reparasjon av ${position}`);
+        const accepted = await repairCompendiumChapter(compendium.id, chapters[index].id);
+        const finished = await awaitRepairJob(accepted.job_id, {
+          onUpdate: (job) => setBatchProgress(`${repairStatusView(job).label} – ${position}`),
+        });
+        if (finished.status !== "succeeded") {
+          outcomes.push(`${chapters[index].title}: ${repairStatusView(finished).label}`);
+        }
+      }
+      await refresh();
+      if (outcomes.length) {
+        setError(`Noen kapitler ble ikke reparert. ${outcomes.join("; ")}`);
       }
     } catch (err) {
+      await refresh();
       setError(err instanceof Error ? err.message : "Den automatiske revisjonen stoppet.");
     } finally {
       setAction("");
@@ -578,6 +710,7 @@ export default function CompendiumPage({ params }: { params: { id: string } }) {
               onToggle={() => setExpanded(expanded === chapter.id ? "" : chapter.id)}
               onUpdated={setCompendium}
               onError={setError}
+              onRefresh={refresh}
             />
           ))}
         </div>

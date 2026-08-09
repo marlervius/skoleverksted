@@ -1,6 +1,7 @@
 # Skoleverksted – prosjektstatus
 
-> Sist oppdatert: 2. august 2026
+> Sist oppdatert: 7. august 2026
+> Deployet produksjonsrelease: `ff725bb69978` — se siste seksjon i dokumentet
 > Status: aktiv utvikling og pilot-/testfase
 > Repository: [marlervius/skoleverksted](https://github.com/marlervius/skoleverksted)
 > Aktiv arbeidsgren ved siste publisering: laerebokdesign-hefte
@@ -213,6 +214,7 @@ Skoleverksted/backend/platform  Felles plattformlag
   ├─ models.py                  Pydantic-kontrakter
   ├─ store.py                   SQLite/PostgreSQL-lager og filmetadata
   ├─ queue.py                   varig jobbledger og lokal/Redis-kapasitet
+  ├─ repair.py                  varig kapittelreparasjon med lås, CAS og ledger
   ├─ truth.py                   kilde- og faktapass
   ├─ compendium.py              disposisjon, kapittelproduksjon og revisjon
   ├─ compendium_renderer.py     Typst/PDF og Word-kompilering
@@ -285,7 +287,10 @@ Felles plattform-API ligger under /api/platform og har blant annet:
 
 - GET/POST /compendia og POST /compendia/outline
 - GET/PATCH /compendia/{id}
-- kapitteloperasjoner: oppdater, produser og reparer
+- kapitteloperasjoner: oppdater og produser
+- POST /compendia/{id}/chapters/{chapter_id}/repair – starter varig jobb, svarer 202
+- GET /compendia/{id}/chapters/{chapter_id}/repair – siste reparasjon for kapitlet
+- GET /repair-jobs/{job_id} og /repair-jobs/{job_id}/events
 - POST /compendia/{id}/compile og /approve
 - GET /compendia/{id}/download/pdf|docx
 - GET/POST /year-plans
@@ -363,6 +368,7 @@ MATE_API_KEY skal ikke prefikses med NEXT_PUBLIC_. Render må samtidig få den e
 | DATABASE_URL | Valgfri PostgreSQL |
 | REDIS_URL | Valgfri distribuert jobblås |
 | MAX_CONCURRENT_JOBS | Maks samtidige genereringsjobber |
+| COMPENDIUM_REPAIR_LEASE_SECONDS | Hvor lenge en reparasjon kan reservere et kapittel, normalt 900 |
 | MAX_CONCURRENT_COMPILES | Maks samtidige kompileringer |
 | TYPST_PATH / PDFLATEX_PATH | Kompileringsverktøy |
 
@@ -626,3 +632,116 @@ kapittel 2/3 `needs_revision`, repair HTTP 504 etter 120 sekunder, retry HTTP
 `pending teacher review`. Rollback er redeploy av
 `69b00d81e5a7d823eb284bc7aee37a8cac6f29ed`; ingen force-push, nøkkelrotasjon
 eller produksjonsdataendring skal brukes.
+
+---
+
+## Produksjonsstatus 7. august 2026 — kandidaten er deployet
+
+**Deployet release:** `ff725bb69978` (commit
+`ff725bb6997879e74d60d1d539c57e18578f95ad`), erstattet `69b00d81e5a7`
+6. august 2026 kl. 13:09:58Z.
+
+**Dom: `REJECTED`.** Neste P0: durable reparasjonsjobb.
+
+### Hva som ble bedre
+
+Kandidatens eneste kodeendring gjorde sannhetslaget fail-closed: automatisk
+tekstendring skjer bare når treffet er entydig, ellers flagges påstanden for
+lærerens gjennomgang. Effekten i produksjon er målt:
+
+- Sannhetsdekning: **42/48 = 88 %**, opp fra 32/44 = 73 %. Alle tre kapitler
+  over 80 %-terskelen.
+- Automatisk fjernet tekst: **0 påstander**, ned fra 8. Den gamle koden slettet
+  tekst i skjul; det gjør den ikke lenger.
+- Null språkfragmenter, 3/3 lærerkilder korrekt merket `teacher`/`provided`.
+
+### Hva som fortsatt blokkerer
+
+Reparasjonssteget fullfører ikke. I det identiske scenarioet feilet alle tre
+forsøkene:
+
+- Kapittel 2 og 3: HTTP 504 etter 120 sekunder.
+- Kapittel 1: HTTP 200 etter 76 sekunder, men reparasjonen feilet internt og
+  satte kapittelstatus til `source_grounding_failed`. En mislykket operasjon
+  ble altså rapportert som suksess.
+
+Uten fullført reparasjon blir ingen kapitler godkjent, compile blokkerer med
+HTTP 409, og PDF og Word finnes ikke. Manuell faglig vurdering av sluttfil er
+derfor fortsatt ikke gjennomført.
+
+### Uverifiserte forhold
+
+- Render-dashboardets deploy-ID, deploytidspunkt og status.
+- Vercels konfigurerte production-branch og aktive deployment.
+- Varig rå response- og reparasjonsledger i produksjon.
+- Frontendens visning av 504, 409 og `source_grounding_failed`.
+
+### Korrigerte tall
+
+Tidligere dokumentert lokal testbaseline «398 bestått, 2 hoppet over» var feil.
+Målt mot rene utsjekkinger i de eksakte imagene: baseline `69b00d8` gir **396
+bestått, 2 hoppet over**, kandidat `ff725bb` gir **402 bestått, 2 hoppet
+over**.
+
+---
+
+## 23. Durable compendium repair — 8. august 2026 (ikke deployet)
+
+**Dom: fortsatt `REJECTED`.** Produksjonen kjører `ff725bb69978`. Denne
+milepælen er lokalt og runtime-verifisert, ikke produksjonsverifisert.
+
+### Hva som var galt
+
+Den dokumenterte blockeren var ikke sannhetsdekningen — den er 42/48 = 88 % og
+over 80 %-terskelen. Blockeren var reparasjonsutførelsen: 0 av 3 forsøk lyktes,
+to endte i HTTP 504, ett svarte HTTP 200 mens det internt feilet, og en retry
+fikk HTTP 409 uten at jobben kunne slås opp noe sted.
+
+Rotårsaken var at HTTP-requesten eide modellarbeidet. Request-tråden blokkerte
+til reparasjonen var ferdig, kapittellåsen lå i prosessminne, og det fantes
+verken jobb-ID, varig status eller evidens.
+
+### Hva som er gjort
+
+Reparasjon er nå en varig jobb:
+
+- `POST …/repair` returnerer **HTTP 202** med `job_id`, `operation_id` og
+  `status_url` før noe modellkall skjer.
+- Modellarbeidet kjører i en worker bak den eksisterende `DurableJobGate`.
+- Jobb, lås og evidens ligger i to nye tabeller, `repair_jobs` og
+  `repair_events`, med lease, recovery ved restart og opprydding av døde leaser.
+- Write-back er beskyttet av compare-and-swap på kapittelteksten. En sen worker
+  kan aldri overskrive nyere lærerredigering; jobben blir `superseded`.
+- En jobb kan ikke bli `succeeded` uten fullført write-back. Kapittelstatus er
+  et innholdsresultat og gjør ikke jobben grønn.
+- Frontend viser jobbstatus, lar læreren forlate siden, gjenfinner jobben etter
+  reload, tilbyr avbryt og konkret retry, og starter aldri en ny reparasjon
+  automatisk.
+
+Nye filer: `Skoleverksted/backend/platform/repair.py`,
+`Skoleverksted/backend/tests/test_repair_durability.py`,
+`research/REPAIR_DURABILITY_EXECPLAN.md`.
+
+`COMPENDIUM_REPAIR_TIMEOUT_SECONDS` er fjernet fra `render.yaml` og erstattet av
+`COMPENDIUM_REPAIR_LEASE_SECONDS` (standard 900).
+
+### Målt
+
+- Backend: **120 tester bestått** (hvorav 27 nye durability-tester).
+- Frontend Vitest: **24 tester bestått** (opp fra 13).
+- TypeScript og Next-produksjonsbygg: bestått.
+- ASGI-test mot reell router: HTTP 202 på under ett sekund mens modellkallet
+  fortsatt er blokkert; 409 ved parallell repair; idempotent replay; jobb funnet
+  igjen etter reload; `succeeded` først etter write-back.
+
+### Ikke verifisert
+
+Ingen kjøring mot ekte Gemini. Ingen produksjonsdeploy. Ingen vellykket
+produksjonsreparasjon, og dermed fortsatt ingen godkjente kapitler, ingen
+PDF/Word og ingen manuell faglig sluttvurdering. Postgres-banen for de nye
+tabellene er ikke kjørt.
+
+### Neste
+
+Deploy etter eksplisitt godkjenning, deretter det identiske Historie
+VG2-scenarioet mot den nye kontrakten.

@@ -37,11 +37,6 @@ from Skoleverksted.backend.platform.models import (
     YearPlanPeriod,
 )
 from Skoleverksted.backend.platform.router import approve_compendium as approve_compendium_endpoint
-from Skoleverksted.backend.platform.router import (
-    RepairInProgressError,
-    RepairTimeoutError,
-    _run_repair_with_timeout,
-)
 from Skoleverksted.backend.platform.router import update_compendium_chapter as update_chapter_endpoint
 from Skoleverksted.backend.platform.store import PlatformStore
 from Skoleverksted.backend.platform.truth import TruthAudit
@@ -247,48 +242,6 @@ def test_generation_passes_teacher_sources_and_blocks_broken_language(monkeypatc
         assert result.truth_passport is not None
         provided = captured["provided_sources"]
         assert provided and provided[0].origin == "teacher"
-
-
-def test_repair_timeout_is_explicit_and_does_not_return_a_fake_success(monkeypatch):
-    with tempfile.TemporaryDirectory() as tmp:
-        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
-        monkeypatch.setattr("Skoleverksted.backend.platform.router._REPAIR_TIMEOUT_SECONDS", 0.01)
-
-        def hangs(*_args, **_kwargs):
-            time.sleep(0.1)
-
-        monkeypatch.setattr("Skoleverksted.backend.platform.router.repair_compendium_chapter", hangs)
-        with pytest.raises(RepairTimeoutError) as error:
-            _run_repair_with_timeout(compendium, compendium.chapters[0].id, operation_id="test-timeout")
-        assert error.value.operation_id == "test-timeout"
-
-
-def test_repair_lock_rejects_parallel_requests(monkeypatch):
-    with tempfile.TemporaryDirectory() as tmp:
-        compendium = PlatformStore(Path(tmp) / "platform.sqlite3").create_compendium(_proposal())
-        monkeypatch.setattr("Skoleverksted.backend.platform.router._REPAIR_TIMEOUT_SECONDS", 1)
-        started = threading.Event()
-
-        def slow_success(*_args, **_kwargs):
-            started.set()
-            time.sleep(0.15)
-            return compendium.chapters[0]
-
-        monkeypatch.setattr("Skoleverksted.backend.platform.router.repair_compendium_chapter", slow_success)
-        outcome: list[object] = []
-        worker = threading.Thread(
-            target=lambda: outcome.append(
-                _run_repair_with_timeout(compendium, compendium.chapters[0].id, operation_id="first")
-            ),
-            daemon=True,
-        )
-        worker.start()
-        assert started.wait(1)
-        with pytest.raises(RepairInProgressError) as error:
-            _run_repair_with_timeout(compendium, compendium.chapters[0].id, operation_id="second")
-        assert error.value.operation_id == "first"
-        worker.join(timeout=2)
-        assert len(outcome) == 1
 
 
 def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch):

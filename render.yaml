@@ -46,8 +46,10 @@ services:
         value: "1"
       - key: MAX_CONCURRENT_COMPILES
         value: "1"
-      - key: COMPENDIUM_REPAIR_TIMEOUT_SECONDS
-        value: "120"
+      # Repair runs in a durable worker, so the lease — not an HTTP timeout —
+      # bounds how long a chapter can stay reserved.
+      - key: COMPENDIUM_REPAIR_LEASE_SECONDS
+        value: "900"
       - key: GOOGLE_API_KEY
         sync: false
       - key: GOOGLE_IMAGE_MODEL

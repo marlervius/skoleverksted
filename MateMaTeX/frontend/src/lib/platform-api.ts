@@ -136,6 +136,127 @@ export interface PlatformJob {
   updated_at: string;
 }
 
+export type RepairJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed_retryable"
+  | "failed_terminal"
+  | "cancelled"
+  | "superseded";
+
+export interface RepairJob {
+  id: string;
+  operation_id: string;
+  compendium_id: string;
+  chapter_id: string;
+  chapter_title: string;
+  status: RepairJobStatus;
+  message: string;
+  chapter_token: string;
+  result_token: string;
+  chapter_status: string | null;
+  attempt: number;
+  cancel_requested: boolean;
+  lease_expires_at: string;
+  created_at: string;
+  updated_at: string;
+  started_at: string;
+  finished_at: string;
+}
+
+export interface RepairJobAccepted {
+  job_id: string;
+  operation_id: string;
+  compendium_id: string;
+  chapter_id: string;
+  status: RepairJobStatus;
+  status_url: string;
+}
+
+export interface RepairLedgerEntry {
+  id: string;
+  job_id: string;
+  operation_id: string;
+  stage: string;
+  created_at: string;
+  payload: Record<string, unknown>;
+}
+
+export const REPAIR_POLL_INTERVAL_MS = 3000;
+
+const ACTIVE_REPAIR_STATUSES: RepairJobStatus[] = ["queued", "running"];
+
+export const isActiveRepairStatus = (status: RepairJobStatus) =>
+  ACTIVE_REPAIR_STATUSES.includes(status);
+
+export const isTerminalRepairStatus = (status: RepairJobStatus) =>
+  !isActiveRepairStatus(status);
+
+/** What the teacher is told, and whether they can do anything about it. */
+export function repairStatusView(job: RepairJob): {
+  label: string;
+  detail: string;
+  tone: "busy" | "ok" | "warn" | "info";
+  canRetry: boolean;
+} {
+  switch (job.status) {
+    case "queued":
+      return {
+        label: "Reparasjon i kø",
+        detail:
+          "Reparasjonen er lagret på serveren. Du kan forlate siden og komme tilbake senere.",
+        tone: "busy",
+        canRetry: false,
+      };
+    case "running":
+      return {
+        label: "Sjekker og retter …",
+        detail:
+          "Serveren undersøker kildene og retter teksten. Du kan forlate siden; arbeidet fortsetter.",
+        tone: "busy",
+        canRetry: false,
+      };
+    case "succeeded":
+      return {
+        label: "Reparasjonen er fullført",
+        detail: job.message || "Kapittelet er oppdatert. Kontroller endringene før du godkjenner.",
+        tone: "ok",
+        canRetry: false,
+      };
+    case "superseded":
+      return {
+        label: "Din nyere tekst ble beholdt",
+        detail:
+          "Kapittelet ble redigert mens reparasjonen kjørte. Den nyere teksten din er bevart, "
+          + "og reparasjonsresultatet ble forkastet. Start reparasjonen på nytt hvis du fortsatt ønsker den.",
+        tone: "info",
+        canRetry: true,
+      };
+    case "cancelled":
+      return {
+        label: "Reparasjonen ble avbrutt",
+        detail: job.message || "Reparasjonen ble avbrutt. Kapittelet er uendret.",
+        tone: "info",
+        canRetry: true,
+      };
+    case "failed_terminal":
+      return {
+        label: "Reparasjonen kan ikke kjøres",
+        detail: job.message || "Reparasjonen kan ikke fullføres for dette kapittelet.",
+        tone: "warn",
+        canRetry: false,
+      };
+    default:
+      return {
+        label: "Reparasjonen feilet",
+        detail: job.message || "Kapittelet er ikke endret.",
+        tone: "warn",
+        canRetry: true,
+      };
+  }
+}
+
 export type YearPlanStatus = "draft" | "active" | "completed" | "archived";
 export type YearPlanPeriodStatus = "not_started" | "in_progress" | "ready" | "completed" | "needs_revision";
 export type MaterialStatus = "draft" | "approved" | "used" | "needs_revision";
@@ -516,11 +637,70 @@ export const generateCompendiumChapter = (compendiumId: string, chapterId: strin
     `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}/generate`,
     { method: "POST" },
   );
-export const repairCompendiumChapter = (compendiumId: string, chapterId: string) =>
-  requestJson<Compendium>(
+/**
+ * Starts a repair and returns as soon as the job is durable.
+ *
+ * The model work happens in a backend worker, so this call must not be given a
+ * long client timeout — a slow response here means registration failed, not
+ * that the repair is slow.
+ */
+export const repairCompendiumChapter = (
+  compendiumId: string,
+  chapterId: string,
+  operationId?: string,
+) =>
+  requestJson<RepairJobAccepted>(
     `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}/repair`,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: operationId ? { "x-operation-id": operationId } : undefined,
+    },
+    30_000,
   );
+
+export const getRepairJob = (jobId: string) =>
+  requestJson<RepairJob>(`/repair-jobs/${encodeURIComponent(jobId)}`, undefined, 20_000);
+
+export const listRepairJobEvents = (jobId: string) =>
+  requestJson<RepairLedgerEntry[]>(
+    `/repair-jobs/${encodeURIComponent(jobId)}/events`,
+    undefined,
+    20_000,
+  );
+
+/** Returns the chapter's most recent repair, or null when there never was one. */
+export async function getChapterRepairJob(
+  compendiumId: string,
+  chapterId: string,
+): Promise<RepairJob | null> {
+  try {
+    return await requestJson<RepairJob>(
+      `/compendia/${encodeURIComponent(compendiumId)}/chapters/${encodeURIComponent(chapterId)}/repair`,
+      undefined,
+      20_000,
+    );
+  } catch (error) {
+    if (error instanceof PlatformApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export const cancelRepairJob = (jobId: string) => cancelPlatformJob(jobId);
+
+/** Polls one repair job to a terminal status. Never starts a new repair itself. */
+export async function awaitRepairJob(
+  jobId: string,
+  options: { onUpdate?: (job: RepairJob) => void; intervalMs?: number; signal?: AbortSignal } = {},
+): Promise<RepairJob> {
+  const interval = options.intervalMs ?? REPAIR_POLL_INTERVAL_MS;
+  for (;;) {
+    const job = await getRepairJob(jobId);
+    options.onUpdate?.(job);
+    if (isTerminalRepairStatus(job.status)) return job;
+    if (options.signal?.aborted) return job;
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
 export const compileCompendium = (compendiumId: string) =>
   requestJson<Compendium>(`/compendia/${encodeURIComponent(compendiumId)}/compile`, {
     method: "POST",
