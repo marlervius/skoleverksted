@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
-from .compendium import repair_compendium_chapter, repair_preconditions
+from .compendium import content_revision, repair_compendium_chapter, repair_preconditions
 from .models import (
     REPAIR_JOB_KIND,
     Compendium,
@@ -123,6 +123,7 @@ class RepairService:
             status="queued",
             message="Reparasjonen er registrert og venter på ledig kapasitet …",
             chapter_token=self._store.chapter_content_token(chapter),
+            source_revision=chapter.content_revision or content_revision(chapter.content_markdown),
         )
         job, outcome = self._store.register_repair_job(candidate)
         if outcome == "conflict":
@@ -140,6 +141,7 @@ class RepairService:
                 "chapter_title": chapter.title,
                 "note_count": len(repair_notes),
                 "chapter_token": job.chapter_token,
+                "source_revision": job.source_revision,
                 "attempt": job.attempt,
                 "subject": compendium.subject,
                 "level": compendium.level,
@@ -176,6 +178,7 @@ class RepairService:
                 job,
                 "failed_retryable",
                 f"Reparasjonen stoppet uventet ({type(exc).__name__}). Kapittelet er ikke endret.",
+                failure_reason=str(exc),
             )
         finally:
             heartbeat.stop()
@@ -206,6 +209,7 @@ class RepairService:
                 job,
                 "failed_retryable",
                 f"Reparasjonen feilet ({type(exc).__name__}). Kapittelet er ikke endret.",
+                failure_reason=str(exc),
             )
 
         current = self._store.get_repair_job(job.id)
@@ -216,6 +220,7 @@ class RepairService:
                 "cancelled",
                 "Læreren avbrøt reparasjonen. Resultatet ble forkastet og kapittelet er uendret.",
                 expected_statuses=("running", "cancelled"),
+                failure_reason="cancelled",
             )
 
         return self._write_back(job, chapter, recorder)
@@ -244,6 +249,7 @@ class RepairService:
                 "superseded",
                 "Kapittelet ble redigert mens reparasjonen kjørte. "
                 "Den nyere teksten er beholdt, og reparasjonsresultatet ble forkastet.",
+                failure_reason="stale_content_revision",
             )
         except Exception as exc:
             recorder.write("failed", error_type=type(exc).__name__, error=str(exc), content_written=False)
@@ -251,10 +257,16 @@ class RepairService:
                 job,
                 "failed_retryable",
                 f"Lagringen av reparasjonen feilet ({type(exc).__name__}). Kapittelet er ikke endret.",
+                failure_reason=str(exc),
             )
         if updated is None:
             recorder.write("failed", error_type="MissingChapter", content_written=False)
-            return self._finish(job, "failed_terminal", "Kapitlet finnes ikke lenger.")
+            return self._finish(
+                job,
+                "failed_terminal",
+                "Kapitlet finnes ikke lenger.",
+                failure_reason="missing_chapter",
+            )
 
         stored = next((item for item in updated.chapters if item.id == chapter.id), chapter)
         result_token = self._store.chapter_content_token(stored)
@@ -273,6 +285,9 @@ class RepairService:
                 "uendret med oppdaterte kontrollmerknader; prøv igjen.",
                 result_token=result_token,
                 chapter_status=stored.status,
+                output_revision=stored.content_revision,
+                repair_summary=stored.repair_summary,
+                failure_reason=recorder.failure_reason,
             )
         recorder.write("succeeded", chapter_status=stored.status)
         return self._finish(
@@ -281,6 +296,8 @@ class RepairService:
             "Reparasjonen er fullført og kapittelet er oppdatert.",
             result_token=result_token,
             chapter_status=stored.status,
+            output_revision=stored.content_revision,
+            repair_summary=stored.repair_summary,
         )
 
     # -- cancellation --------------------------------------------------
@@ -302,7 +319,10 @@ class RepairService:
         message: str,
         *,
         result_token: str = "",
+        output_revision: str = "",
         chapter_status: str | None = None,
+        repair_summary: Any | None = None,
+        failure_reason: str = "",
         expected_statuses: tuple[str, ...] = ("queued", "running"),
     ) -> RepairJob | None:
         finished = self._store.finish_repair_job(
@@ -310,7 +330,10 @@ class RepairService:
             status=status,
             message=message,
             result_token=result_token,
+            output_revision=output_revision,
             chapter_status=chapter_status,
+            repair_summary=repair_summary,
+            failure_reason=failure_reason,
             expected_statuses=expected_statuses,
         )
         if finished is None:
@@ -339,6 +362,9 @@ class RepairService:
             result_summary={
                 "repair_status": job.status,
                 "chapter_status": job.chapter_status or "",
+                "source_revision": job.source_revision,
+                "output_revision": job.output_revision,
+                "repair_summary": job.repair_summary.model_dump() if job.repair_summary else None,
                 "status_url": job.status_url,
             },
             retryable=retryable,

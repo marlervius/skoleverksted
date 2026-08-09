@@ -155,7 +155,11 @@ export interface RepairJob {
   message: string;
   chapter_token: string;
   result_token: string;
+  source_revision: string;
+  output_revision: string;
   chapter_status: string | null;
+  repair_summary: RepairSummary | null;
+  failure_reason: string;
   attempt: number;
   cancel_requested: boolean;
   lease_expires_at: string;
@@ -183,6 +187,48 @@ export interface RepairLedgerEntry {
   payload: Record<string, unknown>;
 }
 
+export type RepairActionKind =
+  | "keep"
+  | "qualify"
+  | "replace"
+  | "remove"
+  | "source_required"
+  | "manual_review";
+
+export interface RepairChange {
+  issue_id: string;
+  action: RepairActionKind;
+  result: "applied" | "unresolved" | "manual_review" | "skipped";
+  before: string;
+  after: string;
+  reason: string;
+  source_refs: string[];
+}
+
+export interface RepairMetrics {
+  verified_claims: number;
+  total_claims: number;
+  coverage: number;
+  unresolved: number;
+  source_grounding_failures: number;
+  language_failures: number;
+}
+
+export interface RepairSummary {
+  before: RepairMetrics;
+  after: RepairMetrics;
+  changes: RepairChange[];
+  found_count: number;
+  repaired_count: number;
+  qualified_count: number;
+  replaced_count: number;
+  removed_count: number;
+  unresolved_count: number;
+  manual_review_count: number;
+  pass_count: number;
+  stop_reason: string;
+}
+
 export const REPAIR_POLL_INTERVAL_MS = 3000;
 
 const ACTIVE_REPAIR_STATUSES: RepairJobStatus[] = ["queued", "running"];
@@ -203,7 +249,7 @@ export function repairStatusView(job: RepairJob): {
   switch (job.status) {
     case "queued":
       return {
-        label: "Reparasjon i kø",
+        label: "Sjekker fakta og kilder",
         detail:
           "Reparasjonen er lagret på serveren. Du kan forlate siden og komme tilbake senere.",
         tone: "busy",
@@ -211,7 +257,7 @@ export function repairStatusView(job: RepairJob): {
       };
     case "running":
       return {
-        label: "Sjekker og retter …",
+        label: "Lager plan og retter dokumenterte problemer",
         detail:
           "Serveren undersøker kildene og retter teksten. Du kan forlate siden; arbeidet fortsetter.",
         tone: "busy",
@@ -219,8 +265,8 @@ export function repairStatusView(job: RepairJob): {
       };
     case "succeeded":
       return {
-        label: "Reparasjonen er fullført",
-        detail: job.message || "Kapittelet er oppdatert. Kontroller endringene før du godkjenner.",
+        label: "Automatisk revisjon ferdig",
+        detail: job.message || "Ny tekst og nytt faktapass er lagret. Kontroller endringene før du godkjenner.",
         tone: "ok",
         canRetry: false,
       };
@@ -386,7 +432,9 @@ export interface CompendiumChapter {
   sources: CompendiumSource[];
   verification_notes: string[];
   truth_passport: TruthPassport | null;
+  content_revision: string;
   revision_summary: string[];
+  repair_summary: RepairSummary | null;
   previous_content_markdown: string;
   revision_count: number;
   status: CompendiumChapterStatus;

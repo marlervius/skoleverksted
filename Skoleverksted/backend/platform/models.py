@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
@@ -159,6 +160,10 @@ class TruthClaim(BaseModel):
 class TruthPassport(BaseModel):
     version: str = "1.0"
     generated_at: str = Field(default_factory=utc_now)
+    # A passport is only valid for the exact text revision it audited.  The
+    # empty default keeps old persisted compendia readable; new audits always
+    # populate this value before they can be considered green.
+    content_revision: str = Field(default="", max_length=128)
     status: Literal[
         "verified",
         "needs_review",
@@ -177,6 +182,78 @@ class TruthPassport(BaseModel):
     removed_claims: list[str] = Field(default_factory=list, max_length=50)
     limitations: list[str] = Field(default_factory=list, max_length=30)
     summary: str = Field(default="", max_length=1200)
+
+
+RepairActionKind = Literal[
+    "keep",
+    "qualify",
+    "replace",
+    "remove",
+    "source_required",
+    "manual_review",
+]
+
+
+class RepairIssue(BaseModel):
+    issue_id: str = Field(min_length=1, max_length=80)
+    claim_id: str = Field(default="", max_length=80)
+    category: str = Field(default="factual", max_length=80)
+    severity: Literal["low", "medium", "high", "critical"] = "medium"
+    original_text: str = Field(default="", max_length=1600)
+    evidence: str = Field(default="", max_length=1600)
+    source_refs: list[str] = Field(default_factory=list, max_length=12)
+    recommended_action: RepairActionKind = "manual_review"
+
+
+class RepairAction(BaseModel):
+    issue_id: str = Field(min_length=1, max_length=80)
+    action: RepairActionKind
+    target_text: str = Field(default="", max_length=1600)
+    replacement_text: str = Field(default="", max_length=1600)
+    justification: str = Field(default="", max_length=1600)
+    source_refs: list[str] = Field(default_factory=list, max_length=12)
+
+
+class RepairPlan(BaseModel):
+    chapter_id: str = Field(min_length=1, max_length=80)
+    source_revision: str = Field(min_length=1, max_length=128)
+    issues: list[RepairIssue] = Field(default_factory=list, max_length=80)
+    proposed_actions: list[RepairAction] = Field(default_factory=list, max_length=80)
+    expected_result: str = Field(default="", max_length=1600)
+
+
+class RepairChange(BaseModel):
+    issue_id: str = Field(min_length=1, max_length=80)
+    action: RepairActionKind
+    result: Literal["applied", "unresolved", "manual_review", "skipped"]
+    before: str = Field(default="", max_length=1600)
+    after: str = Field(default="", max_length=1600)
+    reason: str = Field(default="", max_length=1600)
+    source_refs: list[str] = Field(default_factory=list, max_length=12)
+
+
+class RepairMetrics(BaseModel):
+    verified_claims: int = Field(default=0, ge=0)
+    total_claims: int = Field(default=0, ge=0)
+    coverage: int = Field(default=0, ge=0, le=100)
+    unresolved: int = Field(default=0, ge=0)
+    source_grounding_failures: int = Field(default=0, ge=0)
+    language_failures: int = Field(default=0, ge=0)
+
+
+class RepairSummary(BaseModel):
+    before: RepairMetrics = Field(default_factory=RepairMetrics)
+    after: RepairMetrics = Field(default_factory=RepairMetrics)
+    changes: list[RepairChange] = Field(default_factory=list, max_length=80)
+    found_count: int = Field(default=0, ge=0)
+    repaired_count: int = Field(default=0, ge=0)
+    qualified_count: int = Field(default=0, ge=0)
+    replaced_count: int = Field(default=0, ge=0)
+    removed_count: int = Field(default=0, ge=0)
+    unresolved_count: int = Field(default=0, ge=0)
+    manual_review_count: int = Field(default=0, ge=0)
+    pass_count: int = Field(default=1, ge=1, le=3)
+    stop_reason: str = Field(default="", max_length=240)
 
 
 class ThemePackRequest(BaseModel):
@@ -388,11 +465,19 @@ class CompendiumChapter(BaseModel):
     sources: list[CompendiumSource] = Field(default_factory=list, max_length=50)
     verification_notes: list[str] = Field(default_factory=list, max_length=30)
     truth_passport: TruthPassport | None = None
+    content_revision: str = Field(default="", max_length=128)
     revision_summary: list[str] = Field(default_factory=list, max_length=30)
+    repair_summary: RepairSummary | None = None
     previous_content_markdown: str = Field(default="", max_length=80_000)
     revision_count: int = Field(default=0, ge=0, le=1000)
     status: CompendiumChapterStatus = "planned"
     updated_at: str = Field(default_factory=utc_now)
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.content_revision:
+            self.content_revision = hashlib.sha256(
+                self.content_markdown.replace("\r\n", "\n").strip().encode("utf-8")
+            ).hexdigest()
 
 
 class CompendiumPlanRequest(BaseModel):
@@ -521,7 +606,11 @@ class RepairJob(BaseModel):
     message: str = Field(default="", max_length=400)
     chapter_token: str = Field(default="", max_length=80)
     result_token: str = Field(default="", max_length=80)
+    source_revision: str = Field(default="", max_length=128)
+    output_revision: str = Field(default="", max_length=128)
     chapter_status: CompendiumChapterStatus | None = None
+    repair_summary: RepairSummary | None = None
+    failure_reason: str = Field(default="", max_length=400)
     attempt: int = Field(default=1, ge=1)
     cancel_requested: bool = False
     lease_expires_at: str = ""
