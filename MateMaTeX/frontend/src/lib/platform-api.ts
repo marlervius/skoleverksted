@@ -739,6 +739,10 @@ export const listYearPlans = (limit = 50) =>
   requestJson<YearPlan[]>(`/year-plans?limit=${limit}`);
 export const getYearPlan = (id: string) =>
   requestJson<YearPlan>(`/year-plans/${encodeURIComponent(id)}`);
+export const deleteYearPlan = (id: string) =>
+  requestJson<{ deleted: true; id: string }>(`/year-plans/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 export const generateYearPlan = (input: YearPlanGenerateInput) =>
   requestJson<YearPlan>("/year-plans/generate", {
     method: "POST",

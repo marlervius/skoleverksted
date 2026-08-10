@@ -13,6 +13,7 @@ from Skoleverksted.backend.platform.models import (
     YearPlanPeriodUpdate,
 )
 from Skoleverksted.backend.platform.store import PlatformStore
+from Skoleverksted.backend.platform.teaching_package import build_package_from_period
 
 
 class PlatformStoreTests(unittest.TestCase):
@@ -105,6 +106,45 @@ class PlatformStoreTests(unittest.TestCase):
             self.assertEqual(loaded.periods[0].materials[0].title, material.title)  # type: ignore[union-attr]
             stored = store.get_year_plan_material(created.id, material.id)
             self.assertEqual(stored[1].read_bytes(), b"%PDF-test")  # type: ignore[index]
+
+    def test_delete_year_plan_removes_owned_files_and_teaching_packages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = PlatformStore(root / "platform.sqlite3")
+            plan = store.create_year_plan(YearPlanCreate(
+                title="Påbegynt matematikkplan",
+                subject="Matematikk",
+                level="VG1 1T",
+                school_year="2026-2027",
+                periods=[YearPlanPeriod(title="Algebra", lesson_count=8)],
+            ))
+            period = plan.periods[0]
+            material_result = store.add_year_plan_material(
+                plan.id,
+                period.id,
+                YearPlanMaterialCreate(title="Oppgaveark", filename="algebra.pdf"),
+                b"%PDF-test",
+            )
+            self.assertIsNotNone(material_result)
+            material = material_result[1]  # type: ignore[index]
+            material_path = store.files_dir / plan.id / f"{material.id}.bin"
+
+            package = build_package_from_period(
+                plan,
+                period,
+                artifact_types=["presentation"],
+            )
+            store.create_teaching_package(package)
+            package_dir = store.teaching_packages_dir / package.id
+            package_dir.mkdir(parents=True)
+            (package_dir / "preview.pptx").write_bytes(b"pptx-test")
+
+            self.assertTrue(store.delete_year_plan(plan.id))
+            self.assertIsNone(store.get_year_plan(plan.id))
+            self.assertEqual(store.list_teaching_packages(year_plan_id=plan.id), [])
+            self.assertFalse(material_path.exists())
+            self.assertFalse(package_dir.exists())
+            self.assertFalse(store.delete_year_plan(plan.id))
 
 
 if __name__ == "__main__":

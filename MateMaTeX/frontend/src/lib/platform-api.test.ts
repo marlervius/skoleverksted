@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitRepairJob,
+  deleteYearPlan,
   getChapterRepairJob,
   isActiveRepairStatus,
   isTerminalRepairStatus,
@@ -186,5 +187,18 @@ describe("repair job client", () => {
 
     expect(seen).toEqual(["queued", "running", "succeeded"]);
     expect(finished.status).toBe("succeeded");
+  });
+});
+
+describe("year plan client", () => {
+  it("deletes the selected year plan with an encoded id", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ deleted: true, id: "plan/1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteYearPlan("plan/1")).resolves.toEqual({ deleted: true, id: "plan/1" });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain("/year-plans/plan%2F1");
+    expect(init.method).toBe("DELETE");
   });
 });
