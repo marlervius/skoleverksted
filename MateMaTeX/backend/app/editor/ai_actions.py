@@ -7,6 +7,7 @@ replacement LaTeX using the model-agnostic LLM interface.
 
 from __future__ import annotations
 
+import asyncio
 import structlog
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
@@ -15,6 +16,7 @@ from app.auth import get_current_user
 from app.rate_limit import limiter
 
 from app.models.llm import get_llm
+from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
 
 logger = structlog.get_logger()
 
@@ -171,6 +173,20 @@ async def _run_action(
             user_prompt += f"\n\nEKSTRA INSTRUKSJONER:\n{req.extra_instructions}"
 
         result = await llm.ainvoke(system_prompt, user_prompt)
+        gate = await asyncio.to_thread(
+            run_quality_pipeline,
+            generator_id="matematikk.editor_ai_action",
+            content=result.strip(),
+            topic="Matematikkredigering",
+            subject="Matematikk",
+            level="VGS",
+        )
+        if not gate.source_approved:
+            return EditorActionResponse(
+                success=False,
+                error="Forslaget ble blokkert av den globale kvalitetskontrollen.",
+            )
+        result = gate.approved_content
 
         logger.info(
             "editor_action_completed",

@@ -878,7 +878,7 @@ def _retry_english_fix(payload, leak_words: list[str]):
         return None
 
 
-def generate_lesson_content(topic: str, subject: str, level: str, language_level: str = None, options: dict[str, bool] = None, description: str = None, source_text: str = None, basis_text: str = None, interest: str = None, progress_callback=None) -> dict:
+def generate_lesson_content(topic: str, subject: str, level: str, language_level: str = None, options: dict[str, bool] = None, description: str = None, source_text: str = None, basis_text: str = None, interest: str = None, progress_callback=None, quality_generator_id: str = "fag.learning_sheet") -> dict:
     """
     Generate complete lesson content using the AI agents.
     
@@ -2506,7 +2506,7 @@ Hold fasiten praktisk og under 450 ord."""
         progress_callback(
             "Sannhetslaget: dokumenterer påstander og avviser usikre kilder…"
         )
-    from Skoleverksted.backend.platform.truth import audit_truth
+    from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
 
     truth_input = json.dumps(
         {
@@ -2518,12 +2518,14 @@ Hold fasiten praktisk og under 450 ord."""
         },
         ensure_ascii=False,
     )
-    truth_audit = audit_truth(
+    quality_result = run_quality_pipeline(
+        generator_id=quality_generator_id,
         content=truth_input,
         topic=topic,
         subject=subject,
         level=level,
     )
+    truth_audit = type("QualityAudit", (), {"content": quality_result.approved_content, "passport": quality_result.passport})()
     try:
         truth_payload = json.loads(truth_audit.content)
     except (TypeError, json.JSONDecodeError):
@@ -2589,6 +2591,10 @@ Hold fasiten praktisk og under 450 ord."""
         "warnings": warnings,
         "source_grounded": source_grounded,
         "truth_passport": truth_audit.passport.model_dump(mode="json"),
+        "verification_content": truth_audit.content,
+        "quarantine": [item.model_dump(mode="json") for item in quality_result.quarantine],
+        "quality_rounds": [item.model_dump(mode="json") for item in quality_result.rounds],
+        "quality_stop_reason": quality_result.stop_reason,
         "prompt_version": PROMPT_VERSION,
     }
 

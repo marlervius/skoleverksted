@@ -75,6 +75,7 @@ TeachingPackageStatus = Literal[
     "needs_revision",
     "reviewed_with_issues",
     "approved",
+    "user_approved_with_exceptions",
     "archived",
 ]
 
@@ -171,6 +172,16 @@ TruthClaimStatus = Literal[
     "not_evaluated",
 ]
 TruthAction = Literal["keep", "qualify", "remove"]
+TruthContentType = Literal[
+    "fact",
+    "quote",
+    "number",
+    "mathematics",
+    "user_input",
+    "instruction",
+    "creative",
+    "interpretation",
+]
 
 
 class TruthSource(BaseModel):
@@ -178,9 +189,23 @@ class TruthSource(BaseModel):
     url: str = Field(min_length=8, max_length=1000)
     publisher: str = Field(default="", max_length=180)
     source_tier: Literal["primary", "authoritative", "editorial", "other"] = "other"
+    published_at: str = Field(default="", max_length=80)
     retrieved_at: str = Field(default_factory=utc_now)
     origin: Literal["teacher", "grounding", "model"] = "model"
     fetch_status: Literal["provided", "grounded", "model_reported", "fetched", "source_unavailable"] = "model_reported"
+
+
+class TruthSourceAttempt(BaseModel):
+    """A source lookup recorded for one claim, never an approval by itself."""
+
+    title: str = Field(default="", max_length=300)
+    url: str = Field(default="", max_length=1000)
+    publisher: str = Field(default="", max_length=180)
+    published_at: str = Field(default="", max_length=80)
+    retrieved_at: str = Field(default_factory=utc_now)
+    status: Literal["supported", "not_supported", "unavailable", "not_evaluated"] = "not_evaluated"
+    supports_claim: str = Field(default="", max_length=1600)
+    evidence: str = Field(default="", max_length=1600)
 
 
 class TruthClaim(BaseModel):
@@ -193,6 +218,9 @@ class TruthClaim(BaseModel):
     source_urls: list[str] = Field(default_factory=list, max_length=8)
     evidence: str = Field(default="", max_length=1200)
     confidence: float = Field(default=0, ge=0, le=1)
+    content_type: TruthContentType = "fact"
+    location: str = Field(default="", max_length=300)
+    source_attempts: list[TruthSourceAttempt] = Field(default_factory=list, max_length=20)
 
 
 class TruthPassport(BaseModel):
@@ -294,6 +322,40 @@ class RepairSummary(BaseModel):
     stop_reason: str = Field(default="", max_length=240)
 
 
+class QualityRevisionRound(BaseModel):
+    """Durable audit record for one AI repair and re-check round."""
+
+    round_number: int = Field(ge=1, le=20)
+    started_at: str = Field(default_factory=utc_now)
+    completed_at: str = Field(default_factory=utc_now)
+    before_revision: str = Field(default="", max_length=128)
+    after_revision: str = Field(default="", max_length=128)
+    claims_found: int = Field(default=0, ge=0)
+    claims_verified: int = Field(default=0, ge=0)
+    corrected_count: int = Field(default=0, ge=0)
+    unresolved_count: int = Field(default=0, ge=0)
+    changed: bool = False
+    status: Literal["completed", "no_progress", "max_rounds", "failed"] = "completed"
+    summary: str = Field(default="", max_length=1600)
+    changes: list[RepairChange] = Field(default_factory=list, max_length=120)
+
+
+class QualityQuarantineItem(BaseModel):
+    """Content withheld from approved text while remaining visible to the teacher."""
+
+    id: str = Field(default_factory=lambda: uuid4().hex[:12])
+    claim_id: str = Field(default="", max_length=80)
+    content_type: TruthContentType = "fact"
+    original_text: str = Field(min_length=1, max_length=2400)
+    location: str = Field(default="Ukjent seksjon", max_length=300)
+    reason: str = Field(default="Påstanden mangler tilstrekkelig dokumentasjon.", max_length=1600)
+    source_attempts: list[TruthSourceAttempt] = Field(default_factory=list, max_length=20)
+    suggested_replacement: str = Field(default="", max_length=2400)
+    omission_consequence: str = Field(default="", max_length=1600)
+    status: Literal["withheld", "replaced", "removed", "resolved"] = "withheld"
+    created_at: str = Field(default_factory=utc_now)
+
+
 class ThemePackRequest(BaseModel):
     title: str = Field(min_length=2, max_length=160)
     theme: str = Field(min_length=2, max_length=240)
@@ -323,6 +385,10 @@ class ThemePack(BaseModel):
     project: Project
     tasks: list[ThemePackTask]
     quality_passport: QualityPassport
+    truth_passport: TruthPassport | None = None
+    quality_rounds: list[QualityRevisionRound] = Field(default_factory=list)
+    quarantine: list[QualityQuarantineItem] = Field(default_factory=list)
+    quality_stop_reason: str = ""
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -406,6 +472,13 @@ class YearPlanCreate(BaseModel):
     periods: list[YearPlanPeriod] = Field(default_factory=list, max_length=30)
     notes: str = Field(default="", max_length=4000)
     planning_source: Literal["ai", "fallback", "manual"] = "manual"
+    truth_passport: TruthPassport | None = None
+    quality_rounds: list[QualityRevisionRound] = Field(default_factory=list)
+    quarantine: list[QualityQuarantineItem] = Field(default_factory=list)
+    quality_stop_reason: str = ""
+    content_revision: str = Field(default="", max_length=128)
+    approved_at: str | None = None
+    approved_revision: str = Field(default="", max_length=128)
 
 
 class YearPlan(YearPlanCreate):
@@ -512,6 +585,10 @@ class TeachingArtifact(BaseModel):
     quality_passport: QualityPassport | None = None
     verification_notes: list[str] = Field(default_factory=list, max_length=40)
     source_quality_notes: list[str] = Field(default_factory=list, max_length=30)
+    quality_rounds: list[QualityRevisionRound] = Field(default_factory=list, max_length=20)
+    quarantine: list[QualityQuarantineItem] = Field(default_factory=list, max_length=120)
+    quality_run_count: int = Field(default=0, ge=0, le=100)
+    quality_stop_reason: str = Field(default="", max_length=240)
     status: TeachingArtifactStatus = "planned"
     generation_token: str | None = Field(default=None, max_length=160)
     artifact_job_id: str | None = Field(default=None, max_length=160)
@@ -557,6 +634,22 @@ class TeachingArtifactUpdate(BaseModel):
     status: Literal["needs_revision", "reviewed_with_issues"] | None = None
 
 
+class TeachingApprovalRecord(BaseModel):
+    """Audit trail for a final teacher decision and later revocation."""
+
+    action: Literal["approved", "approved_with_exceptions", "revoked"]
+    teacher: str = Field(default="", max_length=180)
+    at: str = Field(default_factory=utc_now)
+    package_revision: int = Field(default=1, ge=1)
+    artifact_versions: dict[str, int] = Field(default_factory=dict)
+    content_hashes: dict[str, str] = Field(default_factory=dict)
+    verification_statuses: dict[str, str] = Field(default_factory=dict)
+    source_urls: list[str] = Field(default_factory=list, max_length=200)
+    omitted_claims: list[str] = Field(default_factory=list, max_length=120)
+    unresolved_claims: list[str] = Field(default_factory=list, max_length=120)
+    reason: str = Field(default="", max_length=1600)
+
+
 class TeachingPackage(TeachingPackageCreate):
     id: str = Field(default_factory=lambda: uuid4().hex)
     title: str = Field(default="Undervisningspakke", min_length=2, max_length=180)
@@ -573,12 +666,15 @@ class TeachingPackage(TeachingPackageCreate):
     approved_by: str = Field(default="", max_length=180)
     approved_revision: int = 0
     approved_digest: str = Field(default="", max_length=128)
+    approval_history: list[TeachingApprovalRecord] = Field(default_factory=list, max_length=50)
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
 
 
 class TeachingApprovalRequest(BaseModel):
     teacher: str = Field(default="local-teacher", min_length=1, max_length=180)
+    confirm: bool = False
+    reason: str = Field(default="", max_length=1600)
 
 
 class TeachingPackageJobAccepted(BaseModel):
@@ -650,6 +746,9 @@ class CompendiumChapter(BaseModel):
     content_revision: str = Field(default="", max_length=128)
     revision_summary: list[str] = Field(default_factory=list, max_length=30)
     repair_summary: RepairSummary | None = None
+    quality_rounds: list[QualityRevisionRound] = Field(default_factory=list, max_length=20)
+    quarantine: list[QualityQuarantineItem] = Field(default_factory=list, max_length=120)
+    quality_stop_reason: str = Field(default="", max_length=240)
     previous_content_markdown: str = Field(default="", max_length=80_000)
     revision_count: int = Field(default=0, ge=0, le=1000)
     status: CompendiumChapterStatus = "planned"
@@ -748,6 +847,7 @@ class CompendiumChapterUpdate(BaseModel):
     sources: list[CompendiumSource] | None = Field(default=None, max_length=50)
     verification_notes: list[str] | None = Field(default=None, max_length=30)
     status: CompendiumChapterStatus | None = None
+    confirm_omissions: bool = False
 
 
 class CompendiumCompileResult(BaseModel):

@@ -22,6 +22,7 @@ from app.auth import get_current_user
 from app.job_store import get_resource_snapshot, store_shared_resource
 from app.rate_limit import limiter
 from app.stores import sharing_store as share_store
+from Skoleverksted.backend.platform.quality_gate import require_export_ready
 
 logger = structlog.get_logger()
 
@@ -122,6 +123,31 @@ async def create_share(
     snapshot = get_resource_snapshot(req.resource_type, req.resource_id)
     if not snapshot:
         raise HTTPException(status_code=404, detail="Resource not found")
+
+    # The approval is bound to the canonical text that entered the quality gate.
+    # ``full_document`` is a later rendering wrapper and therefore has another hash.
+    shared_content = str(
+        snapshot.get("verification_content")
+        or snapshot.get("latex_body")
+        or snapshot.get("full_document")
+        or ""
+    )
+    passport = snapshot.get("truth_passport") or {}
+    if not shared_content.strip():
+        raise HTTPException(status_code=409, detail="Deling er blokkert: ressursen mangler kontrollert innhold.")
+    try:
+        require_export_ready(
+            export_id="matematikk.shared_pdf",
+            content=shared_content,
+            verification_status=passport.get("status", "missing"),
+            verified_revision=passport.get("content_revision", ""),
+            verification_version=passport.get("version", ""),
+            teacher_approved=bool(snapshot.get("teacher_approved_at")),
+            approved_revision=str(snapshot.get("approved_digest") or ""),
+            quarantined_texts=[item.get("original_text", "") for item in snapshot.get("quarantine", [])],
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     store_shared_resource(req.resource_id, snapshot)
     token = secrets.token_urlsafe(24)

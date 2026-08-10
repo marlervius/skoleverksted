@@ -595,7 +595,18 @@ class PlatformStore:
         if current is None:
             return None
         payload = current.model_dump()
-        payload.update(request.model_dump(exclude_none=True))
+        changes = request.model_dump(exclude_none=True)
+        payload.update(changes)
+        if set(changes) - {"status"}:
+            payload.update({
+                "truth_passport": None,
+                "quality_rounds": [],
+                "quarantine": [],
+                "quality_stop_reason": "Innholdet er endret og må kontrolleres på nytt.",
+                "content_revision": "",
+                "approved_at": None,
+                "approved_revision": "",
+            })
         payload["updated_at"] = utc_now()
         return self._save_year_plan(YearPlan.model_validate(payload))
 
@@ -622,6 +633,15 @@ class PlatformStore:
             return None
         payload = plan.model_dump()
         payload["periods"] = [period.model_dump() for period in periods]
+        payload.update({
+            "truth_passport": None,
+            "quality_rounds": [],
+            "quarantine": [],
+            "quality_stop_reason": "Innholdet er endret og må kontrolleres på nytt.",
+            "content_revision": "",
+            "approved_at": None,
+            "approved_revision": "",
+        })
         payload["updated_at"] = utc_now()
         return self._save_year_plan(YearPlan.model_validate(payload))
 
@@ -885,6 +905,7 @@ class PlatformStore:
                         material.artifact_status = "needs_revision"
                         material.status = "needs_revision"
                         material.updated_at = utc_now()
+            final_package_status = package.status if package.status == "approved" else "approved"
             for artifact in stored_package.artifacts:
                 primary = next((file for file in artifact.files if file.format == "pdf"), None) or (artifact.files[0] if artifact.files else None)
                 if artifact.status != "approved" or primary is None:
@@ -912,7 +933,7 @@ class PlatformStore:
                     "artifact_id": artifact.id,
                     "artifact_type": artifact.artifact_type,
                     "artifact_version": artifact.artifact_version,
-                    "artifact_status": "approved",
+                    "artifact_status": final_package_status,
                     "projected_at": utc_now(),
                     "created_at": existing.created_at if existing else utc_now(),
                     "updated_at": utc_now(),
@@ -924,9 +945,10 @@ class PlatformStore:
                     target_period.materials[target_period.materials.index(existing)] = material
                 else:
                     target_period.materials.append(material)
-            stored_package.status = "approved"
+            stored_package.status = final_package_status
             stored_package.approved_at = package.approved_at or utc_now()
             stored_package.approved_by = package.approved_by
+            stored_package.approval_history = list(package.approval_history)
             stored_package.updated_at = stored_package.approved_at
             stored_package.approved_revision = stored_package.package_revision
             stored_package.approved_digest = stored_package.revision_digest

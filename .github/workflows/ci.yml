@@ -55,6 +55,8 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -r MateMaTeX/backend/requirements.txt
       - run: pytest -q MateMaTeX/backend/tests/test_pipeline.py MateMaTeX/backend/tests/test_math_verifier.py MateMaTeX/backend/tests/test_content_quality.py MateMaTeX/backend/tests/test_text_sanitize.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}
 
   full-domain-tests:
     runs-on: ubuntu-latest

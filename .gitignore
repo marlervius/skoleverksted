@@ -21,6 +21,9 @@ env/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-*/
+.pnpm-store/
+.crewai-test/
 .mypy_cache/
 .ruff_cache/
 .coverage

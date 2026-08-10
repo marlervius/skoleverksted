@@ -81,6 +81,25 @@ export async function generateLesson(
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
+  const gated = blob as Blob & { qualityJobId?: string; qualityDownloadUrl?: string };
+  if (gated.qualityJobId && gated.qualityDownloadUrl) {
+    void (async () => {
+      const approval = await fetch(`${API_URL}/generation/${encodeURIComponent(gated.qualityJobId!)}/approve`, { method: "POST" });
+      if (!approval.ok) {
+        const error = await approval.json().catch(() => ({}));
+        window.alert(error.detail || "Dokumentet kunne ikke lærer-godkjennes.");
+        return;
+      }
+      const response = await fetch(gated.qualityDownloadUrl!);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        window.alert(error.detail || "Eksportporten stoppet nedlastingen.");
+        return;
+      }
+      downloadBlob(await response.blob(), filename);
+    })().catch(() => window.alert("Eksporten kunne ikke fullføres."));
+    return;
+  }
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -179,13 +198,18 @@ async function runSseJob(
     };
   });
 
-  const dlRes = await fetch(downloadUrl(job_id), { signal });
+  const finalDownloadUrl = downloadUrl(job_id);
+  const previewUrl = `${finalDownloadUrl}${finalDownloadUrl.includes("?") ? "&" : "?"}preview=true`;
+  const dlRes = await fetch(previewUrl, { signal });
   if (!dlRes.ok) {
     const errorData = await dlRes.json().catch(() => ({}));
     throw new Error(errorData.detail || `Serverfeil: ${dlRes.status}`);
   }
 
   const blob = await dlRes.blob();
+  const gatedBlob = blob as Blob & { qualityJobId?: string; qualityDownloadUrl?: string };
+  gatedBlob.qualityJobId = job_id;
+  gatedBlob.qualityDownloadUrl = finalDownloadUrl;
   const contentDisposition = dlRes.headers.get("Content-Disposition");
   let filename = defaultFilename;
   if (contentDisposition) {
@@ -260,6 +284,7 @@ export async function recompileLesson(
       topic: params.topic,
       subject: params.subject,
       level: params.level,
+      teacher_approved: true,
       language_level: params.languageLevel && params.languageLevel !== "none" ? params.languageLevel : null,
       options: params.options,
       image_url: params.imageUrl || null,

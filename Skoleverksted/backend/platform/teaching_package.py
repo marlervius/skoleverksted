@@ -299,6 +299,8 @@ def can_approve_artifact(artifact: TeachingArtifact) -> list[str]:
         reasons.append("Artefaktet har ikke innhold.")
     if not artifact.truth_passport:
         reasons.append("Faktapasset mangler. Kjør faktapasset på nytt.")
+    elif artifact.truth_passport.version != "2.0":
+        reasons.append("Faktapasset er fra en eldre kvalitetsmodell. Kjør faktapasset på nytt.")
     elif artifact.truth_passport.status != "verified":
         reasons.append(
             f"Faktapasset er ikke grønt ({artifact.truth_passport.verified_claims} av "
@@ -340,6 +342,46 @@ def can_approve_package(package: TeachingPackage) -> list[str]:
     ):
         reasons.append("Pakken har fortsatt aktive eller uferdige artefaktjobber.")
     return list(dict.fromkeys(reasons))
+
+
+def can_approve_package_with_exceptions(package: TeachingPackage) -> list[str]:
+    """Validate mechanics while making the responsibility decision explicit.
+
+    This path deliberately does not call the source-approval gate. It still
+    requires a current, renderable artifact and an idle job, so responsibility
+    approval cannot unlock stale or half-built files.
+    """
+    reasons: list[str] = []
+    required = [artifact for artifact in package.artifacts if artifact.required]
+    if not required:
+        reasons.append("Pakken mangler obligatoriske artefakter.")
+    for artifact in required:
+        if not artifact.content_markdown.strip():
+            reasons.append(f"{artifact.title}: artefaktet har ikke innhold.")
+        if not artifact.files:
+            reasons.append(f"{artifact.title}: det finnes ingen ferdig fil.")
+        if artifact.generation_token or artifact.status == "generating":
+            reasons.append(f"{artifact.title}: artefaktet er fortsatt under arbeid.")
+        if artifact.package_revision != package.package_revision:
+            reasons.append(f"{artifact.title}: tilhører en eldre pakkerevisjon.")
+    return list(dict.fromkeys(reasons))
+
+
+def unresolved_claims(package: TeachingPackage) -> list[str]:
+    result: list[str] = []
+    for artifact in package.artifacts:
+        result.extend(
+            f"{artifact.title}: {item.original_text}"
+            for item in artifact.quarantine
+            if item.status == "withheld"
+        )
+        quarantined_ids = {item.claim_id for item in artifact.quarantine}
+        result.extend(
+            f"{artifact.title}: {claim.claim}"
+            for claim in (artifact.truth_passport.claims if artifact.truth_passport else [])
+            if claim.status != "verified" and claim.id not in quarantined_ids
+        )
+    return result
 
 
 def aggregate_package_status(package: TeachingPackage) -> str:

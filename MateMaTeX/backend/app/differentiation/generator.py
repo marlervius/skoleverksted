@@ -26,6 +26,7 @@ from app.rate_limit import limiter
 from app.validators import ensure_latex_size
 
 from app.models.llm import get_llm
+from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
 
 logger = structlog.get_logger()
 
@@ -212,6 +213,23 @@ async def differentiate_content(
     except json.JSONDecodeError as e:
         logger.error("differentiation_json_parse_error", error=str(e))
 
+    for level_name in ("basic", "standard", "advanced"):
+        field_name = f"{level_name}_latex"
+        candidate = getattr(output, field_name)
+        if not candidate:
+            continue
+        gate = await asyncio.to_thread(
+            run_quality_pipeline,
+            generator_id="matematikk.differentiated",
+            content=candidate,
+            topic=topic or "Matematikk",
+            subject="Matematikk",
+            level=grade or "VGS",
+        )
+        if not gate.source_approved:
+            raise ValueError(f"{level_name}-nivået ble blokkert av den globale kvalitetskontrollen.")
+        setattr(output, field_name, gate.approved_content)
+
     # Verify math in all three levels
     try:
         from app.verification.math_checker import MathChecker
@@ -293,6 +311,22 @@ def differentiate_content_sync(
             output.advanced_latex = data.get("advanced", "")
     except json.JSONDecodeError as e:
         logger.error("differentiation_sync_json_error", error=str(e))
+
+    for level_name in ("basic", "standard", "advanced"):
+        field_name = f"{level_name}_latex"
+        candidate = getattr(output, field_name)
+        if not candidate:
+            continue
+        gate = run_quality_pipeline(
+            generator_id="matematikk.differentiated",
+            content=candidate,
+            topic=topic or "Matematikk",
+            subject="Matematikk",
+            level=grade or "VGS",
+        )
+        if not gate.source_approved:
+            raise ValueError(f"{level_name}-nivået ble blokkert av den globale kvalitetskontrollen.")
+        setattr(output, field_name, gate.approved_content)
 
     try:
         from app.verification.math_checker import MathChecker

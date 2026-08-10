@@ -432,6 +432,39 @@ def finalize(state: PipelineState) -> PipelineState:
         or state.raw_latex_body
     )
 
+    # The shared evidence-first gate runs after mathematical/editorial review
+    # and before the final export candidate is compiled.
+    quality_changed = False
+    try:
+        from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
+
+        quality = run_quality_pipeline(
+            generator_id=(
+                "matematikk.differentiated"
+                if state.request.material_type == "differensiert"
+                else "matematikk.material"
+            ),
+            content=body,
+            topic=state.request.topic,
+            subject="Matematikk",
+            level=state.request.grade,
+        )
+        state.truth_passport = quality.passport.model_dump(mode="json")
+        state.quality_rounds = [item.model_dump(mode="json") for item in quality.rounds]
+        state.quarantine = [item.model_dump(mode="json") for item in quality.quarantine]
+        state.quality_stop_reason = quality.stop_reason
+        state.verification_content = quality.approved_content
+        state.source_approved = quality.source_approved
+        quality_changed = quality.approved_content != body
+        body = quality.approved_content
+    except Exception as exc:
+        state.status = PipelineStatus.FAILED
+        state.error_message = "Den globale kvalitetskontrollen kunne ikke fullføres. Materialet leveres ikke."
+        state.pdf_base64 = ""
+        state.pdf_path = ""
+        logger.warning("global_quality_gate_failed", job_id=state.job_id, error=str(exc))
+        return state
+
     verified_banner = (
         mv.claims_checked > 0
         and mv.claims_incorrect == 0
@@ -474,6 +507,24 @@ def finalize(state: PipelineState) -> PipelineState:
     elif state.final_latex_body and state.full_document:
         state.full_document = wrap_with_style(state.final_latex_body, state.request.pdf_style)
 
+    if quality_changed:
+        try:
+            from app.verification.latex_checker import LatexChecker
+
+            compile_result = LatexChecker(pdflatex_path=config.pdflatex_path).check(state.full_document)
+            state.latex_compilation = compile_result
+            state.pdf_base64 = compile_result.pdf_base64 or ""
+            if not compile_result.success:
+                state.status = PipelineStatus.FAILED
+                state.error_message = "Den verifiserte teksten kunne ikke kompileres. Materialet leveres ikke."
+                return state
+        except Exception as exc:
+            state.status = PipelineStatus.FAILED
+            state.error_message = "Ny kompilering etter kvalitetskontroll feilet. Materialet leveres ikke."
+            state.pdf_base64 = ""
+            logger.warning("quality_recompile_failed", job_id=state.job_id, error=str(exc))
+            return state
+
     if not state.pdf_base64 and state.latex_compilation.pdf_base64:
         state.pdf_base64 = state.latex_compilation.pdf_base64
 
@@ -507,6 +558,10 @@ def finalize(state: PipelineState) -> PipelineState:
     else:
         state.warning_reason = ""
         state.status = PipelineStatus.COMPLETED
+
+    if not state.source_approved:
+        state.warning_reason = ",".join(filter(None, [state.warning_reason, "needs_user_review"]))
+        state.status = PipelineStatus.COMPLETED_WITH_WARNINGS
 
     # Only cache a full result that actually carries a usable PDF. Caching a
     # PDF-less "completed" state would make later cache hits return a document

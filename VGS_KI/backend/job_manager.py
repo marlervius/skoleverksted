@@ -50,6 +50,13 @@ class Job:
     rapport_filename: Optional[str] = None
     error: Optional[str] = None
     done: bool = False
+    verification_content: str = ""
+    truth_passport: dict[str, Any] = field(default_factory=dict)
+    quarantine: list[dict[str, Any]] = field(default_factory=list)
+    quality_rounds: list[dict[str, Any]] = field(default_factory=list)
+    quality_stop_reason: str = ""
+    teacher_approved_at: str = ""
+    approved_digest: str = ""
 
 
 _jobs: dict[str, Job] = {}
@@ -264,6 +271,12 @@ def run_job_in_thread(
                         job_meta["rapport_filename"] = value.get("rapport_filename")
                     if value.get("filename"):
                         filename = value["filename"]
+                    for key in (
+                        "verification_content", "truth_passport", "quarantine",
+                        "quality_rounds", "quality_stop_reason",
+                    ):
+                        if key in value:
+                            job_meta[key] = value[key]
                     return value.get("pdf")
                 return value
 
@@ -273,6 +286,11 @@ def run_job_in_thread(
                     "filename": filename,
                     "rapport_pdf": job_meta.get("rapport_pdf"),
                     "rapport_filename": job_meta.get("rapport_filename"),
+                    "verification_content": job_meta.get("verification_content", ""),
+                    "truth_passport": job_meta.get("truth_passport", {}),
+                    "quarantine": job_meta.get("quarantine", []),
+                    "quality_rounds": job_meta.get("quality_rounds", []),
+                    "quality_stop_reason": job_meta.get("quality_stop_reason", ""),
                 }
 
             # ── Cache check / lock ──
@@ -327,6 +345,11 @@ def run_job_in_thread(
                     job.filename = filename
                     job.rapport_pdf = job_meta.get("rapport_pdf")
                     job.rapport_filename = job_meta.get("rapport_filename")
+                    job.verification_content = str(job_meta.get("verification_content") or "")
+                    job.truth_passport = dict(job_meta.get("truth_passport") or {})
+                    job.quarantine = list(job_meta.get("quarantine") or [])
+                    job.quality_rounds = list(job_meta.get("quality_rounds") or [])
+                    job.quality_stop_reason = str(job_meta.get("quality_stop_reason") or "")
                     job.done = True
 
             total_duration = time.time() - job_start
@@ -343,6 +366,7 @@ def run_job_in_thread(
             for field in ("basis_text", "image_url", "image_metadata", "worksheet_text",
                           "faktarapport_text", "language_exercises", "warnings",
                           "truth_passport",
+                          "quarantine", "quality_rounds", "quality_stop_reason",
                           "source_name", "prompt_version", "lint_issues"):
                 if job_meta.get(field):
                     done_event[field] = job_meta[field]
