@@ -931,28 +931,14 @@ def approve_teaching_package_with_exceptions(package_id: str, request: TeachingA
     reasons = can_approve_package_with_exceptions(package)
     if reasons:
         raise HTTPException(status_code=409, detail="Pakken kan ikke godkjennes med utelatelser ennå: " + " ".join(reasons[:8]))
-    unsafe_open = [
-        f"{artifact.title}: {claim.claim}"
-        for artifact in package.artifacts
-        for claim in (artifact.truth_passport.claims if artifact.truth_passport else [])
-        if claim.status != "verified"
-        and claim.id not in {item.claim_id for item in artifact.quarantine}
-    ]
-    if unsafe_open:
-        raise HTTPException(
-            status_code=409,
-            detail="Påstander som fortsatt finnes i innholdet kan ikke omgås: " + "; ".join(unsafe_open[:6]),
-        )
     unresolved = unresolved_claims(package)
     if not unresolved:
         raise HTTPException(status_code=409, detail="Det finnes ingen uløste punkter. Bruk vanlig godkjenning.")
     package.approved_by = request.teacher
     package.approved_at = utc_now()
-    # This endpoint acknowledges a safe omission; it is not an alternate
-    # responsibility-based approval state. The remaining, exact content has
-    # already passed the ordinary artifact approvals and is exported through
-    # the same central gate as every other approved package.
-    package.status = "approved"
+    # This is a distinct teacher decision. It may export unresolved content,
+    # but only through the responsibility-aware gate and exact package revision.
+    package.status = "user_approved_with_exceptions"
     package.approval_history.append(
         TeachingApprovalRecord(
             action="approved_with_exceptions",
@@ -992,7 +978,7 @@ def _require_teaching_file(package_id: str, artifact_id: str, artifact_format: s
     if result is None:
         raise HTTPException(status_code=404, detail="Filen finnes ikke for denne pakkerevisjonen.")
     package, artifact, file, path = result
-    if package.status != "approved" or file.package_revision != package.package_revision:
+    if package.status not in {"approved", "user_approved_with_exceptions"} or file.package_revision != package.package_revision:
         raise HTTPException(status_code=409, detail="Filen kan lastes ned etter at riktig pakkerevisjon er godkjent.")
     try:
         require_export_ready(
@@ -1002,8 +988,13 @@ def _require_teaching_file(package_id: str, artifact_id: str, artifact_format: s
             verified_revision=artifact.truth_passport.content_revision if artifact.truth_passport else "",
             verification_version=artifact.truth_passport.version if artifact.truth_passport else "",
             teacher_approved=bool(package.approved_at),
-            approved_revision=artifact.approved_revision,
+            approved_revision=artifact.approved_revision or (
+                content_digest(artifact.content_markdown)
+                if package.status == "user_approved_with_exceptions"
+                else ""
+            ),
             quarantined_texts=[item.original_text for item in artifact.quarantine if item.status == "withheld"],
+            responsibility_approved=package.status == "user_approved_with_exceptions",
         )
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1029,7 +1020,7 @@ def download_teaching_package_zip(package_id: str):
     package = get_platform_store().get_teaching_package(package_id)
     if package is None:
         raise HTTPException(status_code=404, detail="Undervisningspakken finnes ikke.")
-    if package.status != "approved":
+    if package.status not in {"approved", "user_approved_with_exceptions"}:
         raise HTTPException(status_code=409, detail="Godkjenn pakken før samlet nedlasting.")
     store = get_platform_store()
     output = io.BytesIO()
@@ -1044,8 +1035,13 @@ def download_teaching_package_zip(package_id: str):
                     verified_revision=artifact.truth_passport.content_revision if artifact.truth_passport else "",
                     verification_version=artifact.truth_passport.version if artifact.truth_passport else "",
                     teacher_approved=bool(package.approved_at),
-                    approved_revision=artifact.approved_revision,
+                    approved_revision=artifact.approved_revision or (
+                        content_digest(artifact.content_markdown)
+                        if package.status == "user_approved_with_exceptions"
+                        else ""
+                    ),
                     quarantined_texts=[item.original_text for item in artifact.quarantine if item.status == "withheld"],
+                    responsibility_approved=package.status == "user_approved_with_exceptions",
                 )
             except PermissionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
