@@ -6,7 +6,6 @@ import {
   AlertCircle,
   ArrowLeft,
   BookOpenCheck,
-  BookCopy,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
@@ -38,6 +37,7 @@ import {
   type YearPlanPeriod,
   type YearPlanPeriodStatus,
 } from "@/lib/platform-api";
+import { isMathematicsSubject, mathematicsGenerationHref } from "@/lib/mathematics-year-plan";
 
 const periodLabels: Record<YearPlanPeriodStatus, string> = {
   not_started: "Ikke startet",
@@ -94,6 +94,9 @@ function generationHref(
   mode: "laeringsark" | "prove" | "sekvens",
   kind: MaterialKind,
 ): string {
+  if (isMathematicsSubject(plan.subject)) {
+    return mathematicsGenerationHref(plan, period, kind);
+  }
   const query = new URLSearchParams({
     topic: period.theme || period.title,
     subject: plan.subject,
@@ -272,6 +275,7 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
   if (!plan) return <div role="alert" className="card text-accent-red">{error || "Årsplanen finnes ikke."}</div>;
 
   const planProgress = progress(plan);
+  const mathematicsPlan = isMathematicsSubject(plan.subject);
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       <Link href="/year-plans" className="inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary">
@@ -429,7 +433,11 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <h4 className="flex items-center gap-2 font-semibold"><Sparkles className="h-4 w-4 text-accent-blue" /> Produser til denne perioden</h4>
-                          <p className="mt-1 text-xs text-text-muted">Generatoren fylles ut med tema, fag, nivå og læringsmål.</p>
+                          <p className="mt-1 text-xs text-text-muted">
+                            {mathematicsPlan
+                              ? "MateMaTeX fylles ut med tema, matematikkfag, nivå og kompetansemål."
+                              : "Generatoren fylles ut med tema, fag, nivå og læringsmål."}
+                          </p>
                         </div>
                         {missing.length === 0
                           ? <span className="badge bg-accent-green/10 text-accent-green">Grunnpakken er komplett</span>
@@ -442,22 +450,24 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
                         >
                           <Presentation className="h-4 w-4" /> PowerPoint + undervisningspakke
                         </Link>
-                        <Link className="btn-primary" href={generationHref(plan, period, "laeringsark", "learning_sheet")}><FileText className="h-4 w-4" /> Læringsark</Link>
+                        <Link className="btn-primary" href={generationHref(plan, period, "laeringsark", "learning_sheet")}><FileText className="h-4 w-4" /> {mathematicsPlan ? "Teori + oppgaver" : "Læringsark"}</Link>
                         <Link className="btn-secondary" href={generationHref(plan, period, "laeringsark", "worksheet")}><NotebookPen className="h-4 w-4" /> Oppgaveark</Link>
                         <Link className="btn-secondary" href={generationHref(plan, period, "prove", "assessment")}><ClipboardCheck className="h-4 w-4" /> Prøve</Link>
-                        <Link className="btn-secondary" href={generationHref(plan, period, "sekvens", "lesson_sequence")}><Layers3 className="h-4 w-4" /> Sekvens</Link>
-                        <Link
-                          className="btn-secondary"
-                          href={`/compendia/new?${new URLSearchParams({
-                            topic: period.theme || period.title,
-                            subject: plan.subject,
-                            level: plan.level,
-                            yearPlan: plan.id,
-                            period: period.id,
-                          })}`}
-                        >
-                          <BookCopy className="h-4 w-4" /> Kompendium
-                        </Link>
+                        <Link className="btn-secondary" href={generationHref(plan, period, "sekvens", "lesson_sequence")}><Layers3 className="h-4 w-4" /> {mathematicsPlan ? "Hefte" : "Sekvens"}</Link>
+                        {!mathematicsPlan && (
+                          <Link
+                            className="btn-secondary"
+                            href={`/compendia/new?${new URLSearchParams({
+                              topic: period.theme || period.title,
+                              subject: plan.subject,
+                              level: plan.level,
+                              yearPlan: plan.id,
+                              period: period.id,
+                            })}`}
+                          >
+                            <FileText className="h-4 w-4" /> Kompendium
+                          </Link>
+                        )}
                       </div>
                     </div>
 

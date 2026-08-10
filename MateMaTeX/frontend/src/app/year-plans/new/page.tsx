@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarRange, Clock3, Loader2, Sparkles } from "lucide-react";
-import { SUBJECTS, YEAR_PLAN_LEVELS } from "@/features/fag/components/constants";
+import { YEAR_PLAN_LEVELS, YEAR_PLAN_SUBJECTS } from "@/features/fag/components/constants";
 import { generateYearPlan } from "@/lib/platform-api";
+import { isMathematicsSubject, MATEMATEX_YEAR_PLAN_LEVELS } from "@/lib/mathematics-year-plan";
 
 function suggestedSchoolYear(): string {
   const now = new Date();
@@ -27,6 +28,18 @@ export default function NewYearPlanPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const totalLessons = useMemo(() => lessonsPerWeek * teachingWeeks, [lessonsPerWeek, teachingWeeks]);
+  const mathematicsSelected = isMathematicsSubject(subject);
+  const availableLevels = mathematicsSelected ? MATEMATEX_YEAR_PLAN_LEVELS : YEAR_PLAN_LEVELS;
+
+  function handleSubjectChange(nextSubject: string) {
+    const nextIsMathematics = isMathematicsSubject(nextSubject);
+    setSubject(nextSubject);
+    if (nextIsMathematics && !MATEMATEX_YEAR_PLAN_LEVELS.some((item) => item.value === level)) {
+      setLevel("VG1 1T");
+    } else if (!nextIsMathematics && MATEMATEX_YEAR_PLAN_LEVELS.some((item) => item.value === level)) {
+      setLevel("VG2");
+    }
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -73,19 +86,24 @@ export default function NewYearPlanPage() {
           <h2 className="flex items-center gap-2 font-semibold"><CalendarRange className="h-5 w-5 text-accent-blue" /> Fag og skoleår</h2>
           <div className="mt-5 grid gap-4 sm:grid-cols-3">
             <label className="text-sm font-medium">Fag
-              <select className="input mt-2" value={subject} onChange={(event) => setSubject(event.target.value)}>
-                {SUBJECTS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              <select className="input mt-2" value={subject} onChange={(event) => handleSubjectChange(event.target.value)}>
+                {YEAR_PLAN_SUBJECTS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
             </label>
             <label className="text-sm font-medium">Nivå
               <select className="input mt-2" value={level} onChange={(event) => setLevel(event.target.value)}>
-                {YEAR_PLAN_LEVELS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                {availableLevels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
             </label>
             <label className="text-sm font-medium">Skoleår
               <input className="input mt-2" value={schoolYear} onChange={(event) => setSchoolYear(event.target.value)} placeholder="2026-2027" />
             </label>
           </div>
+          {mathematicsSelected && (
+            <div className="mt-4 rounded-lg border border-accent-blue/20 bg-accent-blue/5 px-4 py-3 text-sm text-text-secondary">
+              Læremidlene i årsplanen åpnes i <strong className="text-text-primary">MateMaTeX</strong> med matematisk verifisering, fasit og matematikktilpassede eksportvalg.
+            </div>
+          )}
         </section>
 
         <section className="card">
