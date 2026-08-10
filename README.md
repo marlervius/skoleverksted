@@ -30,6 +30,9 @@ kvalitetspass, drift og offentlig API-adresse er felles.
   jobbmotorer er fortsatt autoritative for filer og strømmer.
 - **Kvalitetspass** viser deterministiske kontroller, kilder, kompetansemål,
   matematikkstatus, kompilering og begrensninger.
+- **Global kvalitetsport** kontrollerer alle KI-generatorer og alle eksportløp.
+  Kildegodkjenning og lærergodkjenning bindes til samme tekstrevisjon; feil,
+  gamle pass og endret innhold blokkeres på serveren.
 - **TeachingPackage** har canonical pakke-/artefakttilstand, durable parent/child-
   jobber, innholdsrevisjoner, faktapass, kvalitetspass, lærerreview, atomisk
   årsplanprojeksjon og ZIP-eksport etter godkjenning. Ikke-godkjente artefakter
@@ -46,6 +49,7 @@ MateMaTeX/frontend/             Felles Next.js-frontend (Skoleverksted)
   src/features/norsk            Norskmodulens aktive frontendkode
 Skoleverksted/backend/main.py   Felles FastAPI-inngang
 Skoleverksted/backend/platform  Prosjekter, jobbindeks, kvalitet og Temapakke
+  quality_gate.py               Felles revisjonsløkke, karantene og eksportport
   /api/fag                      VGS-modulen
   /api/norsk                    Scriptorium-modulen
   /api/matematikk               MateMaTeX-modulen
@@ -67,12 +71,14 @@ Felles plattform-API ligger under `/api/platform`:
 - `GET /compendia/{id}/download/{pdf|docx}`
 - `GET/POST /year-plans`
 - `POST /year-plans/generate`
+- `POST /year-plans/{id}/verify` og `POST /year-plans/{id}/approve`
 - `GET/PATCH /year-plans/{id}` og perioder under `/periods/{period_id}`
 - `POST /year-plans/{id}/periods/{period_id}/materials`
 - `GET/POST /projects`
 - `GET/PATCH /projects/{id}`
 - `GET /jobs` og `GET /jobs/{id}`
 - `POST /theme-packs`
+- `POST /theme-packs/{id}/teacher-guide/approve`
 - `POST /quality-passports`
 
 ## Lokal kjøring
@@ -195,3 +201,10 @@ tester. Hver modul beholder API-dokumentasjon på `/api/fag/docs`,
 - Kildebaserte faktapåstander merkes med `[K]` i Fag og Norsk.
 - Kjente matematikkfeil skal fortsatt blokkere levering i matematikkmodulen;
   uttrykk som ikke kan verifiseres merkes for manuell lærerkontroll.
+- En rettelse blir ikke grønn før den reviderte teksten er kontrollert på nytt.
+- Uløste, entydige hele setninger kan legges i sporbar karantene og fjernes fra
+  alle eksportformater. Utrygge fragmenter blokkerer.
+- Faktapass fra før kvalitetsmodell 2.0 må kjøres på nytt. Enhver redigering eller
+  kildeendring opphever tidligere lærer- og kildegodkjenning.
+- Nye generatorer og eksporter skal følge kontrakten i
+  [research/GLOBAL_QUALITY_GATE.md](research/GLOBAL_QUALITY_GATE.md).

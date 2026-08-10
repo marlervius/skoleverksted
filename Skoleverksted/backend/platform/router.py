@@ -23,6 +23,7 @@ from .models import (
     ProjectUpdate,
     QualityPassport,
     QualityPassportRequest,
+    TruthPassport,
     RepairJob,
     RepairJobAccepted,
     RepairLedgerEntry,
@@ -37,9 +38,11 @@ from .models import (
     YearPlanPeriodUpdate,
     YearPlanUpdate,
     TeachingApprovalRequest,
+    TeachingApprovalRecord,
     TeachingArtifactUpdate,
     TeachingPackage,
     TeachingPackageCreate,
+    TeachingPackageUpdate,
     TeachingPackageJobAccepted,
     TeachingArtifactJobAccepted,
     utc_now,
@@ -52,18 +55,22 @@ from .compendium import (
 from .compendium_renderer import render_compendium
 from .images import resolve_image
 from .quality import build_quality_passport
+from .quality_gate import content_digest as gate_content_digest, require_export_ready, run_quality_pipeline, source_approval_reasons
 from .repair import RepairConflictError, get_repair_service
 from .store import get_platform_store
 from .queue import get_durable_job_queue
 from .year_planner import build_year_plan
+from .truth import TruthAudit
 from .teaching_package import (
     ARTIFACT_TITLES,
     aggregate_package_status,
     build_package_from_period,
     can_approve_artifact,
     can_approve_package,
+    can_approve_package_with_exceptions,
     content_digest,
     with_revision_digest,
+    unresolved_claims,
 )
 from .teaching_package_jobs import (
     cancel_teaching_job,
@@ -130,6 +137,7 @@ def update_compendium_chapter(
         raise HTTPException(status_code=404, detail="Kapitlet finnes ikke.")
     payload = chapter.model_dump()
     changes = request.model_dump(exclude_none=True)
+    confirm_omissions = bool(changes.pop("confirm_omissions", False))
     payload.update(changes)
     if "content_markdown" in changes and "status" not in changes:
         payload["status"] = "generated"
@@ -140,6 +148,7 @@ def update_compendium_chapter(
         payload["revision_summary"] = []
         payload["repair_summary"] = None
         payload["truth_passport"] = None
+        payload["quarantine"] = []
     requested_status = changes.get("status")
     passport = payload.get("truth_passport")
     passport_status = (
@@ -158,6 +167,11 @@ def update_compendium_chapter(
     )
     if requested_status == "approved" and (
         passport_status != "verified"
+        or (
+            passport.version if hasattr(passport, "version")
+            else passport.get("version", "") if isinstance(passport, dict)
+            else ""
+        ) != "2.0"
         or passport_revision != chapter.content_revision
     ):
         raise HTTPException(
@@ -166,6 +180,11 @@ def update_compendium_chapter(
                 "Kapitlet kan ikke godkjennes før faktapasset er grønt. "
                 "Kjør «Sjekk og rett automatisk» først."
             ),
+        )
+    if requested_status == "approved" and payload.get("quarantine") and not confirm_omissions:
+        raise HTTPException(
+            status_code=409,
+            detail="Bekreft at du har lest karantenelisten og godkjenner at punktene utelates.",
         )
     payload["updated_at"] = utc_now()
     updated = store.replace_compendium_chapter(
@@ -278,6 +297,7 @@ def compile_compendium(compendium_id: str):
             or chapter.status != "approved"
             or not chapter.truth_passport
             or chapter.truth_passport.status != "verified"
+            or chapter.truth_passport.version != "2.0"
             or chapter.truth_passport.content_revision != chapter.content_revision
         )
     ]
@@ -396,6 +416,21 @@ def download_compendium(compendium_id: str, artifact_type: str):
     if result is None:
         raise HTTPException(status_code=404, detail="Dokumentfilen finnes ikke.")
     compendium, path = result
+    if compendium.status != "approved":
+        raise HTTPException(status_code=409, detail="Kompendiet må være lærer-godkjent før eksport.")
+    for chapter in compendium.chapters:
+        try:
+            require_export_ready(
+                export_id=f"platform.compendium.{artifact_type}",
+                content=chapter.content_markdown,
+                verification_status=chapter.truth_passport.status if chapter.truth_passport else "missing",
+                verified_revision=chapter.truth_passport.content_revision if chapter.truth_passport else "",
+                verification_version=chapter.truth_passport.version if chapter.truth_passport else "",
+                teacher_approved=chapter.status == "approved" and bool(compendium.approved_at),
+                approved_revision=chapter.content_revision,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     filename = compendium.pdf_filename if artifact_type == "pdf" else compendium.docx_filename
     mime = (
         "application/pdf"
@@ -421,6 +456,25 @@ def download_compendium(compendium_id: str, artifact_type: str):
 
 def _teaching_job_status_url(job_id: str) -> str:
     return f"/api/platform/jobs/{job_id}"
+
+
+def _reset_package_approval(package: TeachingPackage, *, teacher: str = "", reason: str = "") -> None:
+    if package.approved_at:
+        package.approval_history.append(
+            TeachingApprovalRecord(
+                action="revoked",
+                teacher=teacher or package.approved_by,
+                package_revision=package.approved_revision or package.package_revision,
+                artifact_versions={item.id: item.artifact_version for item in package.artifacts},
+                unresolved_claims=unresolved_claims(package),
+                reason=reason or "Innholdet eller kvalitetsstatusen ble endret etter godkjenning.",
+            )
+        )
+        package.approval_history = package.approval_history[-50:]
+    package.approved_at = None
+    package.approved_by = ""
+    package.approved_revision = 0
+    package.approved_digest = ""
 
 
 @router.post("/teaching-packages", response_model=TeachingPackage, status_code=201)
@@ -473,6 +527,42 @@ def get_teaching_package(package_id: str):
     if package is None:
         raise HTTPException(status_code=404, detail="Undervisningspakken finnes ikke.")
     return package
+
+
+@router.patch("/teaching-packages/{package_id}", response_model=TeachingPackage)
+def update_teaching_package(package_id: str, request: TeachingPackageUpdate):
+    store = get_platform_store()
+    package = store.get_teaching_package(package_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="Undervisningspakken finnes ikke.")
+    changes = request.model_dump(exclude_none=True)
+    if not changes:
+        return package
+    if "audience" in changes:
+        package.audience = changes["audience"]
+    if "source_brief" in changes:
+        package.source_brief = changes["source_brief"]
+    source_changed = "sources" in changes and changes["sources"] != package.sources
+    if "sources" in changes:
+        package.sources = changes["sources"]
+    if "artifact_types" in changes:
+        package.artifact_types = changes["artifact_types"]
+    package.package_revision += 1
+    for artifact in package.artifacts:
+        artifact.package_revision = package.package_revision
+        artifact.status = "needs_revision"
+        artifact.approved_at = None
+        artifact.approved_by = ""
+        artifact.approved_revision = ""
+        artifact.approved_digest = ""
+        if source_changed:
+            artifact.truth_passport = None
+            artifact.quality_passport = None
+            artifact.files = []
+    _reset_package_approval(package, reason="Pakkens kilder eller rammer ble endret.")
+    package.status = "needs_revision"
+    package.updated_at = utc_now()
+    return store.save_teaching_package(with_revision_digest(package))
 
 
 @router.post(
@@ -588,6 +678,7 @@ def update_teaching_artifact(package_id: str, artifact_id: str, request: Teachin
         artifact.content_revision = content_digest(artifact.content_markdown)
         artifact.truth_passport = None
         artifact.quality_passport = None
+        artifact.quarantine = []
         artifact.files = []
         artifact.approved_at = None
         artifact.approved_by = ""
@@ -611,10 +702,62 @@ def update_teaching_artifact(package_id: str, artifact_id: str, request: Teachin
                 item.approved_revision = ""
                 item.approved_digest = ""
     package.status = "needs_revision"
-    package.approved_at = None
-    package.approved_by = ""
-    package.approved_revision = 0
-    package.approved_digest = ""
+    _reset_package_approval(package, reason="Læreren redigerte eller fjernet en påstand etter godkjenning.")
+    updated = store.save_teaching_package(with_revision_digest(package))
+    try:
+        retract_package_materials(store, updated)
+    except ValueError:
+        pass
+    return updated
+
+
+@router.post("/teaching-packages/{package_id}/artifacts/{artifact_id}/claims/{claim_id}/remove", response_model=TeachingPackage)
+def remove_teaching_claim(package_id: str, artifact_id: str, claim_id: str):
+    """Remove one unresolved claim without regenerating the package."""
+    store = get_platform_store()
+    result = store.teaching_artifact(package_id, artifact_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Artefaktet finnes ikke.")
+    package, artifact = result
+    claim = next(
+        (
+            item for item in (artifact.truth_passport.claims if artifact.truth_passport else [])
+            if item.id == claim_id and item.status != "verified"
+        ),
+        None,
+    )
+    quarantine = next(
+        (item for item in artifact.quarantine if item.claim_id == claim_id or item.id == claim_id),
+        None,
+    )
+    if claim is None and quarantine is None:
+        raise HTTPException(status_code=404, detail="Den uløste påstanden finnes ikke.")
+    content = artifact.content_markdown
+    exact_text = claim.exact_text if claim is not None else quarantine.original_text
+    if exact_text and content.count(exact_text) == 1:
+        content = content.replace(exact_text, "", 1)
+    else:
+        raise HTTPException(status_code=409, detail="Påstanden kunne ikke fjernes sikkert automatisk. Rediger teksten i stedet.")
+    artifact.previous_content_markdown = artifact.content_markdown
+    artifact.revision_count += 1
+    artifact.content_markdown = content
+    artifact.content_revision = content_digest(content)
+    artifact.truth_passport = None
+    artifact.quality_passport = None
+    artifact.files = []
+    artifact.status = "needs_review"
+    artifact.generation_token = None
+    artifact.approved_at = None
+    artifact.approved_by = ""
+    artifact.approved_revision = ""
+    artifact.approved_digest = ""
+    package.package_revision += 1
+    for item in package.artifacts:
+        item.package_revision = package.package_revision
+        if item.id != artifact.id and item.status == "approved":
+            item.status = "needs_revision"
+    _reset_package_approval(package, reason="Læreren fjernet en uløst påstand.")
+    package.status = "needs_revision"
     updated = store.save_teaching_package(with_revision_digest(package))
     try:
         retract_package_materials(store, updated)
@@ -659,6 +802,55 @@ def verify_teaching_artifact(package_id: str, artifact_id: str):
     return TeachingArtifactJobAccepted(job_id=job.id, artifact_id=artifact.id, status=job.status, status_url=_teaching_job_status_url(job.id))
 
 
+@router.post(
+    "/teaching-packages/{package_id}/artifacts/{artifact_id}/repair",
+    response_model=TeachingArtifactJobAccepted,
+    status_code=202,
+)
+def repair_teaching_artifact(package_id: str, artifact_id: str):
+    """Start the bounded AI analyst/source/editor/control workflow."""
+    store = get_platform_store()
+    result = store.teaching_artifact(package_id, artifact_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Artefaktet finnes ikke.")
+    package, artifact = result
+    if not artifact.content_markdown.strip():
+        raise HTTPException(status_code=409, detail="Artefaktet har ikke innhold som kan repareres.")
+    if artifact.generation_token:
+        active = store.get_job(artifact.artifact_job_id or "")
+        if active and active.status in {"queued", "planning", "generating", "verifying", "rendering"}:
+            raise HTTPException(status_code=409, detail="Kvalitetsflyten kjører allerede.")
+    package.package_revision += 1
+    for item in package.artifacts:
+        item.package_revision = package.package_revision
+        if item.id != artifact.id and item.status == "approved":
+            item.status = "needs_revision"
+            item.approved_at = None
+            item.approved_by = ""
+            item.approved_revision = ""
+            item.approved_digest = ""
+    _reset_package_approval(package, reason="AI-reparasjon startet en ny pakkerevisjon.")
+    job_id = f"repair:{package.id}:r{package.package_revision}:{artifact.id}:{artifact.content_revision[:16]}"
+    job = get_durable_job_queue().enqueue(
+        job_id,
+        module="platform",
+        kind="teaching_artifact_repair",
+        payload={
+            "package_id": package.id,
+            "artifact_id": artifact.id,
+            "artifact_type": artifact.artifact_type,
+            "package_revision": package.package_revision,
+        },
+    )
+    artifact.status = "generating"
+    artifact.artifact_job_id = job.id
+    artifact.generation_token = f"{job.id}:{job.attempt}"
+    package.status = "generating"
+    store.save_teaching_package(with_revision_digest(package))
+    start_artifact_worker(package.id, artifact.id, job.id, verify_only=True, quality_repair=True)
+    return TeachingArtifactJobAccepted(job_id=job.id, artifact_id=artifact.id, status=job.status, status_url=_teaching_job_status_url(job.id))
+
+
 @router.post("/teaching-packages/{package_id}/artifacts/{artifact_id}/approve", response_model=TeachingPackage)
 def approve_teaching_artifact(package_id: str, request: TeachingApprovalRequest, artifact_id: str):
     store = get_platform_store()
@@ -684,13 +876,110 @@ def approve_teaching_package(package_id: str, request: TeachingApprovalRequest):
     package = store.get_teaching_package(package_id)
     if package is None:
         raise HTTPException(status_code=404, detail="Undervisningspakken finnes ikke.")
+    if unresolved_claims(package):
+        raise HTTPException(
+            status_code=409,
+            detail="Pakken har karantenepunkter. Godkjenn eksplisitt at disse utelates fra eksport.",
+        )
     reasons = can_approve_package(package)
     if reasons:
         raise HTTPException(status_code=409, detail="Pakken kan ikke godkjennes ennå: " + " ".join(reasons[:8]))
     package.approved_by = request.teacher
     package.approved_at = utc_now()
+    package.approval_history.append(
+        TeachingApprovalRecord(
+            action="approved",
+            teacher=request.teacher,
+            at=package.approved_at,
+            package_revision=package.package_revision,
+            artifact_versions={item.id: item.artifact_version for item in package.artifacts},
+            content_hashes={item.id: content_digest(item.content_markdown) for item in package.artifacts},
+            verification_statuses={
+                item.id: item.truth_passport.status if item.truth_passport else "missing"
+                for item in package.artifacts
+            },
+            source_urls=sorted({
+                source.url
+                for item in package.artifacts
+                for source in (item.truth_passport.sources if item.truth_passport else [])
+                if source.url
+            }),
+            unresolved_claims=[],
+            reason=getattr(request, "reason", "") or "Alle obligatoriske artefakter er kildekontrollert og lærer-godkjent.",
+        )
+    )
+    package.approval_history = package.approval_history[-50:]
     try:
         approved, _ = project_package_materials(store, package)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return approved
+
+
+@router.post("/teaching-packages/{package_id}/approve-with-exceptions", response_model=TeachingPackage)
+def approve_teaching_package_with_exceptions(package_id: str, request: TeachingApprovalRequest):
+    package = get_platform_store().get_teaching_package(package_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="Undervisningspakken finnes ikke.")
+    if not request.confirm:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Bekreft at du har lest karantenelisten og godkjenner at punktene utelates."
+            ),
+        )
+    reasons = can_approve_package_with_exceptions(package)
+    if reasons:
+        raise HTTPException(status_code=409, detail="Pakken kan ikke godkjennes med utelatelser ennå: " + " ".join(reasons[:8]))
+    unsafe_open = [
+        f"{artifact.title}: {claim.claim}"
+        for artifact in package.artifacts
+        for claim in (artifact.truth_passport.claims if artifact.truth_passport else [])
+        if claim.status != "verified"
+        and claim.id not in {item.claim_id for item in artifact.quarantine}
+    ]
+    if unsafe_open:
+        raise HTTPException(
+            status_code=409,
+            detail="Påstander som fortsatt finnes i innholdet kan ikke omgås: " + "; ".join(unsafe_open[:6]),
+        )
+    unresolved = unresolved_claims(package)
+    if not unresolved:
+        raise HTTPException(status_code=409, detail="Det finnes ingen uløste punkter. Bruk vanlig godkjenning.")
+    package.approved_by = request.teacher
+    package.approved_at = utc_now()
+    # This endpoint acknowledges a safe omission; it is not an alternate
+    # responsibility-based approval state. The remaining, exact content has
+    # already passed the ordinary artifact approvals and is exported through
+    # the same central gate as every other approved package.
+    package.status = "approved"
+    package.approval_history.append(
+        TeachingApprovalRecord(
+            action="approved_with_exceptions",
+            teacher=request.teacher,
+            at=package.approved_at,
+            package_revision=package.package_revision,
+            artifact_versions={item.id: item.artifact_version for item in package.artifacts},
+            content_hashes={item.id: content_digest(item.content_markdown) for item in package.artifacts},
+            verification_statuses={
+                item.id: item.truth_passport.status if item.truth_passport else "missing"
+                for item in package.artifacts
+            },
+            source_urls=sorted({
+                url
+                for item in package.artifacts
+                for source in (item.truth_passport.sources if item.truth_passport else [])
+                for url in [source.url]
+                if url
+            }),
+            omitted_claims=unresolved,
+            unresolved_claims=unresolved,
+            reason=getattr(request, "reason", "") or "Læreren har lest karantenelisten og godtar at punktene utelates fra eksport.",
+        )
+    )
+    package.approval_history = package.approval_history[-50:]
+    try:
+        approved, _ = project_package_materials(get_platform_store(), package)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return approved
@@ -705,6 +994,19 @@ def _require_teaching_file(package_id: str, artifact_id: str, artifact_format: s
     package, artifact, file, path = result
     if package.status != "approved" or file.package_revision != package.package_revision:
         raise HTTPException(status_code=409, detail="Filen kan lastes ned etter at riktig pakkerevisjon er godkjent.")
+    try:
+        require_export_ready(
+            export_id=f"platform.teaching_package.{artifact_format}",
+            content=artifact.content_markdown,
+            verification_status=artifact.truth_passport.status if artifact.truth_passport else "missing",
+            verified_revision=artifact.truth_passport.content_revision if artifact.truth_passport else "",
+            verification_version=artifact.truth_passport.version if artifact.truth_passport else "",
+            teacher_approved=bool(package.approved_at),
+            approved_revision=artifact.approved_revision,
+            quarantined_texts=[item.original_text for item in artifact.quarantine if item.status == "withheld"],
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return package, artifact, file, path
 
 
@@ -734,6 +1036,19 @@ def download_teaching_package_zip(package_id: str):
     included = 0
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for artifact in package.artifacts:
+            try:
+                require_export_ready(
+                    export_id="platform.teaching_package.zip",
+                    content=artifact.content_markdown,
+                    verification_status=artifact.truth_passport.status if artifact.truth_passport else "missing",
+                    verified_revision=artifact.truth_passport.content_revision if artifact.truth_passport else "",
+                    verification_version=artifact.truth_passport.version if artifact.truth_passport else "",
+                    teacher_approved=bool(package.approved_at),
+                    approved_revision=artifact.approved_revision,
+                    quarantined_texts=[item.original_text for item in artifact.quarantine if item.status == "withheld"],
+                )
+            except PermissionError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             for file in artifact.files:
                 if file.package_revision != package.package_revision:
                     continue
@@ -773,7 +1088,113 @@ def create_year_plan(request: YearPlanCreate):
 @router.post("/year-plans/generate", response_model=YearPlan, status_code=201)
 def generate_year_plan(request: YearPlanGenerateRequest):
     proposal = build_year_plan(request)
+    canonical = proposal.model_dump_json(exclude={
+        "truth_passport", "quality_rounds", "quarantine", "quality_stop_reason",
+        "content_revision", "approved_at", "approved_revision",
+    })
+    deterministic_audit = None
+    if not request.use_ai:
+        deterministic_audit = lambda **kwargs: TruthAudit(
+            content=kwargs["content"],
+            passport=TruthPassport(
+                version="2.0",
+                status="verified",
+                topic=proposal.title,
+                subject=proposal.subject,
+                coverage_percent=100,
+                summary="Deterministisk reserveplan; rammer og mål er lærerinput.",
+            ),
+        )
+    quality = run_quality_pipeline(
+        generator_id="platform.year_plan",
+        content=canonical,
+        topic=proposal.title,
+        subject=proposal.subject,
+        level=proposal.level,
+        **({"audit": deterministic_audit} if deterministic_audit else {}),
+    )
+    if not quality.source_approved:
+        raise HTTPException(status_code=409, detail="Årsplanen ble blokkert av den globale kvalitetskontrollen.")
+    try:
+        proposal = YearPlanCreate.model_validate_json(quality.approved_content)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Kontrollert årsplan kunne ikke leses som sikker struktur.") from exc
+    proposal.truth_passport = quality.passport
+    proposal.quality_rounds = quality.rounds
+    proposal.quarantine = quality.quarantine
+    proposal.quality_stop_reason = quality.stop_reason
+    proposal.content_revision = gate_content_digest(quality.approved_content)
     return get_platform_store().create_year_plan(proposal)
+
+
+@router.post("/year-plans/{plan_id}/approve", response_model=YearPlan)
+def approve_year_plan(plan_id: str):
+    store = get_platform_store()
+    plan = store.get_year_plan(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Årsplanen finnes ikke.")
+    if not plan.truth_passport or plan.truth_passport.status != "verified" or plan.truth_passport.version != "2.0":
+        raise HTTPException(status_code=409, detail="Årsplanen mangler gyldig global kontroll.")
+    plan.approved_at = utc_now()
+    plan.approved_revision = plan.content_revision
+    plan.updated_at = plan.approved_at
+    return store._save_year_plan(plan)
+
+
+@router.post("/year-plans/{plan_id}/verify", response_model=YearPlan)
+def verify_year_plan(plan_id: str):
+    store = get_platform_store()
+    plan = store.get_year_plan(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Årsplanen finnes ikke.")
+    proposal = YearPlanCreate.model_validate(plan.model_dump())
+    canonical = proposal.model_dump_json(exclude={
+        "truth_passport", "quality_rounds", "quarantine", "quality_stop_reason",
+        "content_revision", "approved_at", "approved_revision",
+    })
+    deterministic_audit = None
+    if plan.planning_source == "fallback":
+        deterministic_audit = lambda **kwargs: TruthAudit(
+            content=kwargs["content"],
+            passport=TruthPassport(
+                version="2.0",
+                status="verified",
+                topic=plan.title,
+                subject=plan.subject,
+                coverage_percent=100,
+                summary="Deterministisk reserveplan; rammer og mål er lærerinput.",
+            ),
+        )
+    quality = run_quality_pipeline(
+        generator_id="platform.year_plan",
+        content=canonical,
+        topic=plan.title,
+        subject=plan.subject,
+        level=plan.level,
+        **({"audit": deterministic_audit} if deterministic_audit else {}),
+    )
+    if not quality.source_approved:
+        raise HTTPException(status_code=409, detail="Årsplanen ble blokkert av den globale kvalitetskontrollen.")
+    try:
+        controlled = YearPlanCreate.model_validate_json(quality.approved_content)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Kontrollert årsplan kunne ikke leses som sikker struktur.") from exc
+    refreshed = YearPlan(
+        **controlled.model_dump(exclude={
+            "truth_passport", "quality_rounds", "quarantine", "quality_stop_reason",
+            "content_revision", "approved_at", "approved_revision",
+        }),
+        id=plan.id,
+        status=plan.status,
+        created_at=plan.created_at,
+        updated_at=utc_now(),
+        truth_passport=quality.passport,
+        quality_rounds=quality.rounds,
+        quarantine=quality.quarantine,
+        quality_stop_reason=quality.stop_reason,
+        content_revision=gate_content_digest(quality.approved_content),
+    )
+    return store._save_year_plan(refreshed)
 
 
 @router.get("/year-plans/{plan_id}", response_model=YearPlan)
@@ -863,6 +1284,26 @@ def download_year_plan_material(plan_id: str, material_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail="Læremiddelet eller filen finnes ikke.")
     material, path = result
+    if material.status not in {"approved", "used"}:
+        raise HTTPException(status_code=409, detail="Læremiddelet må være lærer-godkjent før nedlasting.")
+    if material.source_kind == "teaching_package":
+        package = get_platform_store().get_teaching_package(material.teaching_package_id or "")
+        artifact = next((item for item in (package.artifacts if package else []) if item.id == material.artifact_id), None)
+        if package is None or artifact is None:
+            raise HTTPException(status_code=409, detail="Kvalitetsopphavet til læremiddelet finnes ikke.")
+        try:
+            require_export_ready(
+                export_id="platform.year_plan.material",
+                content=artifact.content_markdown,
+                verification_status=artifact.truth_passport.status if artifact.truth_passport else "missing",
+                verified_revision=artifact.truth_passport.content_revision if artifact.truth_passport else "",
+                verification_version=artifact.truth_passport.version if artifact.truth_passport else "",
+                teacher_approved=artifact.status == "approved" and bool(package.approved_at),
+                approved_revision=artifact.approved_revision,
+                quarantined_texts=[item.original_text for item in artifact.quarantine],
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     filename = "".join(
         character for character in material.filename
         if character not in {'"', "\r", "\n", "\x00"}
@@ -1033,7 +1474,69 @@ def create_theme_pack(request: ThemePackRequest):
     metadata = dict(project.metadata)
     metadata["tasks"] = [task.model_dump() for task in tasks]
     project = store.update_project(project.id, ProjectUpdate(metadata=metadata)) or project
-    return ThemePack(id=uuid4().hex, project=project, tasks=tasks, quality_passport=passport)
+    guide = _theme_pack_guide(project)
+    quality = run_quality_pipeline(
+        generator_id="platform.theme_pack.teacher_guide",
+        content=guide,
+        topic=request.theme,
+        subject=request.subject,
+        level=request.level,
+        provided_sources=([{"title": request.source_name, "content": request.source_text}] if request.source_text.strip() else []),
+    )
+    metadata = dict(project.metadata)
+    metadata["teacher_guide_quality"] = {
+        "content": quality.approved_content,
+        "truth_passport": quality.passport.model_dump(mode="json"),
+        "quality_rounds": [item.model_dump(mode="json") for item in quality.rounds],
+        "quarantine": [item.model_dump(mode="json") for item in quality.quarantine],
+        "quality_stop_reason": quality.stop_reason,
+        "approved_at": None,
+        "approved_digest": "",
+    }
+    project = store.update_project(project.id, ProjectUpdate(metadata=metadata)) or project
+    return ThemePack(
+        id=uuid4().hex,
+        project=project,
+        tasks=tasks,
+        quality_passport=passport,
+        truth_passport=quality.passport,
+        quality_rounds=quality.rounds,
+        quarantine=quality.quarantine,
+        quality_stop_reason=quality.stop_reason,
+    )
+
+
+def _theme_pack_guide(project: Project) -> str:
+    tasks = project.metadata.get("tasks", [])
+    goals = "\n".join(f"- {goal}" for goal in project.competency_goals) or "- Legg til relevante kompetansemål før bruk."
+    task_lines = "\n".join(f"{index}. **{task.get('title', 'Del')}** – {task.get('brief', '')}" for index, task in enumerate(tasks, 1))
+    source = project.metadata.get("source_name") or "Ingen felles kilde oppgitt"
+    return f"""# {project.title}\n\n## Felles ramme\n\nTema: {project.theme}\n\nFag/nivå: {project.subject} / {project.level}\n\nKilde: {source}\n\n{project.description}\n\n## Kompetansemål\n\n{goals}\n\n## Deler\n\n{task_lines}\n\n## Lærerens sluttkontroll\n\n- Kontroller fakta og kildehenvisninger.\n- Kontroller at språk- og regnenivå passer elevgruppen.\n- Gjennomfør oppgavene og fasiten før utdeling.\n- Tilpass personopplysninger og eksempler til klassen.\n"""
+
+
+@router.post("/theme-packs/{project_id}/teacher-guide/approve")
+def approve_theme_pack_teacher_guide(project_id: str):
+    store = get_platform_store()
+    project = store.get_project(project_id)
+    if project is None or project.metadata.get("kind") != "theme_pack":
+        raise HTTPException(status_code=404, detail="Temapakken finnes ikke.")
+    quality = dict(project.metadata.get("teacher_guide_quality") or {})
+    passport = quality.get("truth_passport") or {}
+    reasons = source_approval_reasons(
+        content=str(quality.get("content") or ""),
+        verification_status=passport.get("status", "missing"),
+        verified_revision=passport.get("content_revision", ""),
+        verification_version=passport.get("version", ""),
+        quarantined_texts=[item.get("original_text", "") for item in quality.get("quarantine", [])],
+    )
+    if reasons:
+        raise HTTPException(status_code=409, detail="Lærerveiledningen kan ikke godkjennes: " + "; ".join(reasons))
+    quality["approved_at"] = utc_now()
+    quality["approved_digest"] = gate_content_digest(str(quality.get("content") or ""))
+    metadata = dict(project.metadata)
+    metadata["teacher_guide_quality"] = quality
+    store.update_project(project.id, ProjectUpdate(metadata=metadata))
+    return {"status": "approved", "approved_at": quality["approved_at"]}
 
 
 @router.get("/theme-packs/{project_id}/teacher-guide")
@@ -1041,11 +1544,22 @@ def theme_pack_teacher_guide(project_id: str):
     project = get_platform_store().get_project(project_id)
     if project is None or project.metadata.get("kind") != "theme_pack":
         raise HTTPException(status_code=404, detail="Temapakken finnes ikke.")
-    tasks = project.metadata.get("tasks", [])
-    goals = "\n".join(f"- {goal}" for goal in project.competency_goals) or "- Legg til relevante kompetansemål før bruk."
-    task_lines = "\n".join(f"{index}. **{task.get('title', 'Del')}** – {task.get('brief', '')}" for index, task in enumerate(tasks, 1))
-    source = project.metadata.get("source_name") or "Ingen felles kilde oppgitt"
-    guide = f"""# {project.title}\n\n## Felles ramme\n\nTema: {project.theme}\n\nFag/nivå: {project.subject} / {project.level}\n\nKilde: {source}\n\n{project.description}\n\n## Kompetansemål\n\n{goals}\n\n## Deler\n\n{task_lines}\n\n## Lærerens sluttkontroll\n\n- Kontroller fakta og kildehenvisninger.\n- Kontroller at språk- og regnenivå passer elevgruppen.\n- Gjennomfør oppgavene og fasiten før utdeling.\n- Tilpass personopplysninger og eksempler til klassen.\n"""
+    quality = project.metadata.get("teacher_guide_quality") or {}
+    guide = str(quality.get("content") or "")
+    passport = quality.get("truth_passport") or {}
+    try:
+        require_export_ready(
+            export_id="platform.theme_pack.teacher_guide",
+            content=guide,
+            verification_status=passport.get("status", "missing"),
+            verified_revision=passport.get("content_revision", ""),
+            verification_version=passport.get("version", ""),
+            teacher_approved=bool(quality.get("approved_at")),
+            approved_revision=str(quality.get("approved_digest") or ""),
+            quarantined_texts=[item.get("original_text", "") for item in quality.get("quarantine", [])],
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     filename = "".join(character if character.isalnum() or character in "-_" else "-" for character in project.title).strip("-") or "temapakke"
     return Response(
         guide,

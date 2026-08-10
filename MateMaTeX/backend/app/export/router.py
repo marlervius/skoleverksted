@@ -13,7 +13,7 @@ import re
 import tempfile
 
 import structlog
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
@@ -22,6 +22,7 @@ from app.pipeline.agents.tikz_validator import sanitize_latex_body, strip_tikz_a
 from app.rate_limit import limiter
 from app.latex.preamble import wrap_with_preamble
 from app.validators import ensure_latex_size
+from Skoleverksted.backend.platform.quality_gate import verify_teacher_export
 
 logger = structlog.get_logger()
 
@@ -97,6 +98,7 @@ class PdfExportRequest(BaseModel):
     dyslexia: bool = False
     high_contrast: bool = False
     student_mode: bool = False
+    teacher_approved: bool = False
 
     class Config:
         json_schema_extra = {
@@ -113,6 +115,7 @@ class DocxExportRequest(BaseModel):
     latex_content: str = Field(..., min_length=10)
     title: str = "Oppgaveark"
     include_solutions: bool = True
+    teacher_approved: bool = False
 
 
 class PptxExportRequest(BaseModel):
@@ -122,6 +125,23 @@ class PptxExportRequest(BaseModel):
         "speaker_notes",
         description="'speaker_notes' or 'hidden_slides'",
     )
+    teacher_approved: bool = False
+
+
+async def _quality_gate(content: str, export_id: str, approved: bool, topic: str) -> None:
+    try:
+        await asyncio.to_thread(
+            verify_teacher_export,
+            generator_id="matematikk.material",
+            export_id=export_id,
+            content=content,
+            topic=topic or "Matematikk",
+            subject="Matematikk",
+            level="VGS",
+            teacher_approved=approved,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 class ExportFileResponse(BaseModel):
@@ -217,6 +237,7 @@ async def export_pdf(
     - QR codes for digital solutions
     """
     ensure_latex_size(req.latex_content)
+    await _quality_gate(req.latex_content, "matematikk.pdf", req.teacher_approved, req.cover_topic)
     content = req.latex_content
 
     # Honour the "elevkopi" toggle by stripping solutions BEFORE wrapping.
@@ -328,6 +349,7 @@ async def export_docx(
     maximum control over formatting. Math is rendered as OMML.
     """
     ensure_latex_size(req.latex_content)
+    await _quality_gate(req.latex_content, "matematikk.docx", req.teacher_approved, req.title)
     try:
         from app.export.word import latex_to_docx
 
@@ -370,6 +392,7 @@ async def export_pptx(
     speaker notes or hidden slides, depending on the request.
     """
     ensure_latex_size(req.latex_content)
+    await _quality_gate(req.latex_content, "matematikk.pptx", req.teacher_approved, req.title)
     try:
         from app.export.powerpoint import latex_to_pptx
 

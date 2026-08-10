@@ -65,7 +65,13 @@ def _green_audit(content: str, **kwargs) -> TruthAudit:
         coverage_percent=100,
         verified_claims=1,
         total_claims=1,
-        claims=[TruthClaim(claim="Temaet er kildebasert.", status="verified", exact_text="")],
+        claims=[TruthClaim(
+            claim="Temaet er kildebasert.",
+            status="verified",
+            exact_text="",
+            source_urls=[source.url],
+            content_type="fact",
+        )],
         sources=[source],
     )
     return TruthAudit(content=content, passport=passport)

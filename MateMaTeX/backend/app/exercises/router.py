@@ -28,6 +28,7 @@ from app.exercises.parser import (
 )
 from app.latex.compiler import compile_to_pdf
 from app.latex.preamble import wrap_with_preamble
+from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline, verify_teacher_export
 
 logger = structlog.get_logger()
 
@@ -98,6 +99,7 @@ class ExportRequest(BaseModel):
     format: Literal["pdf", "docx"] = "pdf"
     include_solutions: bool = True
     title: str = "Oppgaveark"
+    teacher_approved: bool = False
 
 
 class ExportResponse(BaseModel):
@@ -411,6 +413,17 @@ async def generate_variant(
     )
 
     variant_latex = await asyncio.to_thread(llm.invoke, system_prompt, user_prompt)
+    gate = await asyncio.to_thread(
+        run_quality_pipeline,
+        generator_id="matematikk.exercise_variant",
+        content=variant_latex,
+        topic=target.get("topic", target.get("title", "Matematikk")),
+        subject="Matematikk",
+        level=target.get("grade_level", "VGS"),
+    )
+    if not gate.source_approved:
+        raise HTTPException(422, "Varianten ble blokkert av den globale kvalitetskontrollen.")
+    variant_latex = gate.approved_content
     from app.verification.math_checker import MathChecker
 
     verification = await asyncio.to_thread(MathChecker().verify, variant_latex)
@@ -477,6 +490,19 @@ async def export_exercises(
         include_solutions=req.include_solutions,
     )
     full_doc = wrap_with_preamble(body)
+    try:
+        await asyncio.to_thread(
+            verify_teacher_export,
+            generator_id="matematikk.material",
+            export_id=f"matematikk.{req.format}",
+            content=body,
+            topic=req.title,
+            subject="Matematikk",
+            level="VGS",
+            teacher_approved=req.teacher_approved,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(409, str(exc)) from exc
 
     if req.format == "pdf":
         import tempfile, os

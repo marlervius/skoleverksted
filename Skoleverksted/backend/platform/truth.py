@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 from urllib.parse import urlsplit
 
-from .models import TruthClaim, TruthPassport, TruthSource
+from .models import TruthClaim, TruthPassport, TruthSource, TruthSourceAttempt
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,14 @@ TRUTH_AUDIT_SCHEMA: dict[str, Any] = {
                     },
                     "evidence": {"type": "string"},
                     "confidence": {"type": "number"},
+                    "content_type": {
+                        "type": "string",
+                        "enum": [
+                            "fact", "quote", "number", "mathematics", "user_input",
+                            "instruction", "creative", "interpretation"
+                        ],
+                    },
+                    "location": {"type": "string"},
                 },
                 "required": [
                     "claim",
@@ -65,6 +73,8 @@ TRUTH_AUDIT_SCHEMA: dict[str, Any] = {
                     "source_urls",
                     "evidence",
                     "confidence",
+                    "content_type",
+                    "location",
                 ],
             },
         },
@@ -164,11 +174,56 @@ def _truth_sources(
                 url=url,
                 publisher=(publisher or _publisher(url))[:180],
                 source_tier=_source_tier(url),  # type: ignore[arg-type]
+                published_at=(str(raw.get("published_at") or "") if isinstance(raw, dict) else str(getattr(raw, "published_at", "") or ""))[:80],
                 origin=origin,  # type: ignore[arg-type]
                 fetch_status=fetch_status,  # type: ignore[arg-type]
             )
         )
     return sources[:50]
+
+
+def _claim_location(content: str, exact_text: str) -> str:
+    """Derive a stable teacher-facing section from the exact text span."""
+    start = content.find(exact_text) if exact_text else -1
+    if start < 0:
+        return "Ukjent seksjon"
+    prefix = content[:start]
+    headings = [line.strip().lstrip("#").strip() for line in prefix.splitlines() if line.strip().startswith("#")]
+    if not headings:
+        return "Hovedtekst"
+    return f"Seksjon {len(headings)}: {headings[-1][:260]}"
+
+
+def _source_attempts(
+    *,
+    claim: TruthClaim,
+    sources: list[TruthSource],
+) -> list[TruthSourceAttempt]:
+    """Explain what the verifier actually found without upgrading evidence."""
+    attempts: list[TruthSourceAttempt] = []
+    for source in sources[:20]:
+        supported = source.url in claim.source_urls and claim.status == "verified"
+        attempts.append(
+            TruthSourceAttempt(
+                title=source.title,
+                url=source.url,
+                publisher=source.publisher,
+                published_at=source.published_at,
+                retrieved_at=source.retrieved_at,
+                status="supported" if supported else "not_supported",
+                supports_claim=claim.claim if supported else "",
+                evidence=claim.evidence if supported else "Kilden ble registrert, men ble ikke brukt som støtte for denne påstanden.",
+            )
+        )
+    if not attempts:
+        attempts.append(
+            TruthSourceAttempt(
+                title="Ingen konkret kildeside funnet",
+                status="unavailable",
+                evidence="Søket ga ikke en dokumentert kildeside som kan godkjennes.",
+            )
+        )
+    return attempts
 
 
 def _clean_text(value: object, limit: int) -> str:
@@ -352,6 +407,12 @@ Krav:
   faglig forsvarlig replacement. Ikke dikt opp en erstatning.
 - Oppdiktede sitater, boktitler, forskere, sidetall og URL-er er forbudt.
 - Ved tvil: klassifiser som unsupported. Falsk trygghet er verre enn utelatelse.
+- Klassifiser content_type: fact, quote, number, mathematics, user_input,
+  instruction, creative eller interpretation. Kreative formuleringer og rene
+  instruksjoner er ikke faktapåstander, men uriktige premisser skal fortsatt
+  merkes unsupported. Matematikk skal merkes mathematics og må i tillegg
+  kontrolleres deterministisk av kvalitetspipelinen.
+- Oppgi hvilken overskrift/seksjon eller hvilket lysbilde påstanden tilhører i location.
 
 JSON:
 {{
@@ -364,7 +425,9 @@ JSON:
     "replacement": "tom ved keep/remove, ellers forsiktig erstatning",
     "source_urls": ["https://konkret-kildeside"],
     "evidence": "hva kilden faktisk dokumenterer",
-    "confidence": 0.0
+    "confidence": 0.0,
+    "content_type": "fact",
+    "location": "overskrift, seksjon eller lysbilde"
   }}]
 }}
 """
@@ -436,6 +499,12 @@ JSON:
         claim_text = _clean_text(raw.get("claim"), 1200)
         if not claim_text:
             continue
+        content_type = _clean_text(raw.get("content_type"), 40)
+        if content_type not in {
+            "fact", "quote", "number", "mathematics", "user_input",
+            "instruction", "creative", "interpretation",
+        }:
+            content_type = "fact"
         claims.append(
             TruthClaim(
                 claim=claim_text,
@@ -446,12 +515,18 @@ JSON:
                 source_urls=list(dict.fromkeys(cited)),
                 evidence=evidence,
                 confidence=confidence,
+                content_type=content_type,  # type: ignore[arg-type]
+                location=_claim_location(content, _exact_text(raw.get("exact_text"), 1200)),
             )
         )
         if len(claims) >= 120:
             break
 
     revised, removed, unresolved_edits = _apply_decisions(content, claims)
+    claims = [
+        claim.model_copy(update={"source_attempts": _source_attempts(claim=claim, sources=sources)})
+        for claim in claims
+    ]
     verified_count = sum(1 for claim in claims if claim.status == "verified")
     total = len(claims)
     coverage = round(verified_count * 100 / total) if total else 0
@@ -474,6 +549,7 @@ JSON:
     else:
         passport_status = "needs_review"
     passport = TruthPassport(
+        version="2.0",
         status=passport_status,  # type: ignore[arg-type]
         topic=topic,
         subject=subject,

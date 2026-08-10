@@ -28,6 +28,13 @@ from Skoleverksted.backend.platform.images import (
     resolve_image,
 )
 from Skoleverksted.backend.platform.queue import get_durable_job_queue
+from Skoleverksted.backend.platform.models import utc_now
+from Skoleverksted.backend.platform.quality_gate import (
+    content_digest,
+    require_export_ready,
+    run_quality_pipeline,
+    source_approval_reasons,
+)
 
 if __package__:
     from .agents import generate_lesson_content
@@ -122,6 +129,52 @@ def _cleanup_image(path: Optional[str]) -> None:
             logger.info(f"Cleaned up temporary image: {path}")
         except Exception as e:
             logger.warning(f"Failed to clean up image {path}: {e}")
+
+
+def _content_quality_document(content: dict) -> dict:
+    return {
+        "content": content.get("verification_content", ""),
+        "truth_passport": content.get("truth_passport") or {},
+        "quarantine": content.get("quarantine") or [],
+        "quality_rounds": content.get("quality_rounds") or [],
+        "quality_stop_reason": content.get("quality_stop_reason", ""),
+        "teacher_approved_at": None,
+        "approved_digest": "",
+    }
+
+
+def _require_norsk_documents(progress: dict, export_id: str, *, teacher: bool) -> None:
+    documents = progress.get("quality_documents") or []
+    if not documents:
+        raise HTTPException(status_code=409, detail="Eksportporten er lukket: kvalitetsdata mangler.")
+    for document in documents:
+        passport = document.get("truth_passport") or {}
+        content = str(document.get("content") or "")
+        quarantined = [item.get("original_text", "") for item in document.get("quarantine", [])]
+        if teacher:
+            try:
+                require_export_ready(
+                    export_id=export_id,
+                    content=content,
+                    verification_status=passport.get("status", "missing"),
+                    verified_revision=passport.get("content_revision", ""),
+                    verification_version=passport.get("version", ""),
+                    teacher_approved=bool(document.get("teacher_approved_at")),
+                    approved_revision=str(document.get("approved_digest") or ""),
+                    quarantined_texts=quarantined,
+                )
+            except PermissionError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        else:
+            reasons = source_approval_reasons(
+                content=content,
+                verification_status=passport.get("status", "missing"),
+                verified_revision=passport.get("content_revision", ""),
+                verification_version=passport.get("version", ""),
+                quarantined_texts=quarantined,
+            )
+            if reasons:
+                raise HTTPException(status_code=409, detail="Forhåndsvisning blokkert: " + "; ".join(reasons))
 
 
 def _materialize_pedagogical_image(
@@ -242,7 +295,12 @@ def generate_lesson_background(
         )
         update_progress(generation_id, 4, 4, f"Ferdig! PDF klar for nedlasting.{image_warning}")
         fname = _safe_filename(request.topic) + ".pdf"
-        merge_progress(generation_id, pdf_bytes=pdf_bytes, filename=fname)
+        merge_progress(
+            generation_id,
+            pdf_bytes=pdf_bytes,
+            filename=fname,
+            quality_documents=[_content_quality_document(content)],
+        )
 
         logger.info(f"PDF generated successfully: {fname} ({len(pdf_bytes)} bytes)")
 
@@ -459,6 +517,9 @@ class LessonResponse(BaseModel):
     source_grounded: bool = False
     source_name: Optional[str] = None
     truth_passport: Optional[dict] = None
+    quarantine: list[dict] = Field(default_factory=list)
+    quality_rounds: list[dict] = Field(default_factory=list)
+    quality_stop_reason: str = ""
     prompt_version: Optional[str] = None
 
 
@@ -522,7 +583,7 @@ def get_generation_status(generation_id: str, _auth: AuthPasswordDep):
 
 
 @app.get("/download-pdf/{generation_id}")
-def download_pdf(generation_id: str, _auth: AuthPasswordDep):
+def download_pdf(generation_id: str, _auth: AuthPasswordDep, preview: bool = False):
     """
     Download the completed PDF for a generation task.
 
@@ -535,6 +596,7 @@ def download_pdf(generation_id: str, _auth: AuthPasswordDep):
 
     if not is_pdf_ready(progress):
         raise HTTPException(status_code=202, detail="PDF not ready yet")
+    _require_norsk_documents(progress, "norsk.pdf", teacher=not preview)
 
     pdf_bytes = progress.get("pdf_bytes")
     filename = progress.get("filename", "lesson.pdf")
@@ -553,7 +615,7 @@ def download_pdf(generation_id: str, _auth: AuthPasswordDep):
 
 
 @app.get("/download-zip/{generation_id}")
-def download_zip(generation_id: str, _auth: AuthPasswordDep):
+def download_zip(generation_id: str, _auth: AuthPasswordDep, preview: bool = False):
     """
     Download a ZIP archive containing two PDFs (dual-version generation).
 
@@ -566,6 +628,7 @@ def download_zip(generation_id: str, _auth: AuthPasswordDep):
 
     if not is_zip_ready(progress):
         raise HTTPException(status_code=202, detail="ZIP not ready yet")
+    _require_norsk_documents(progress, "norsk.zip", teacher=not preview)
 
     zip_bytes = progress.get("zip_bytes")
     filename = progress.get("filename", "lessons.zip")
@@ -581,6 +644,24 @@ def download_zip(generation_id: str, _auth: AuthPasswordDep):
             "Content-Length": str(len(zip_bytes))
         }
     )
+
+
+@app.post("/generation/{generation_id}/approve")
+def approve_generation(generation_id: str, _auth: AuthPasswordDep):
+    """Bind the teacher's approval to every exact verified document revision."""
+    progress = get_progress(generation_id)
+    if progress is None:
+        raise HTTPException(status_code=404, detail="Generation task not found")
+    _require_norsk_documents(progress, "norsk.pdf", teacher=False)
+    approved_at = utc_now()
+    documents = []
+    for document in progress.get("quality_documents") or []:
+        revised = dict(document)
+        revised["teacher_approved_at"] = approved_at
+        revised["approved_digest"] = content_digest(str(document.get("content") or ""))
+        documents.append(revised)
+    merge_progress(generation_id, quality_documents=documents)
+    return {"status": "approved", "approved_at": approved_at, "documents": len(documents)}
 
 
 # ---------------------------------------------------------------------------
@@ -707,8 +788,12 @@ def generate_lesson_json_background(
                 "source_grounded": content.get("source_grounded", False),
                 "source_name": content.get("source_name"),
                 "truth_passport": content.get("truth_passport"),
+                "quarantine": content.get("quarantine", []),
+                "quality_rounds": content.get("quality_rounds", []),
+                "quality_stop_reason": content.get("quality_stop_reason", ""),
                 "prompt_version": content.get("prompt_version"),
             },
+            quality_documents=[_content_quality_document(content)],
         )
         # Publish the completed step only after json_data is persisted. This
         # prevents clients from observing "ready" in the tiny interval before
@@ -766,6 +851,35 @@ def generate_pdf_from_json_background(
 ):
     """Background task to generate PDF directly from JSON (skipping AI steps)."""
     try:
+        separator = "\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n"
+        language_separator = "\n\n<<<SKOLEVERKSTED_SPRÅKOPPGAVER>>>\n\n"
+        quality = run_quality_pipeline(
+            generator_id="norsk.preview_pdf",
+            content=(
+                f"{request.text}{separator}{request.worksheet}{language_separator}"
+                f"{json.dumps(request.language_exercises, ensure_ascii=False)}"
+            ),
+            topic=request.topic,
+            subject=request.subject,
+            level=request.level,
+        )
+        if not quality.source_approved:
+            raise ValueError("PDF-en ble blokkert av den globale kvalitetskontrollen.")
+        try:
+            request.text, remainder = quality.approved_content.split(separator, 1)
+            request.worksheet, language_payload = remainder.split(language_separator, 1)
+            request.language_exercises = json.loads(language_payload)
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("Kontrollert innhold kunne ikke deles trygt tilbake i PDF-feltene.") from exc
+        quality_document = {
+            "content": quality.approved_content,
+            "truth_passport": quality.passport.model_dump(mode="json"),
+            "quarantine": [item.model_dump(mode="json") for item in quality.quarantine],
+            "quality_rounds": [item.model_dump(mode="json") for item in quality.rounds],
+            "quality_stop_reason": quality.stop_reason,
+            "teacher_approved_at": None,
+            "approved_digest": "",
+        }
         update_progress(generation_id, 1, 3, "Behandler og optimaliserer bilde...")
         
         image_asset: Optional[ImageResult] = None
@@ -815,6 +929,7 @@ def generate_pdf_from_json_background(
             generation_id,
             pdf_bytes=pdf_bytes,
             filename=_safe_filename(request.topic) + ".pdf",
+            quality_documents=[quality_document],
         )
 
     except Exception as e:
@@ -858,10 +973,14 @@ _ADJACENT_LEVELS: Dict[str, tuple] = {
 }
 
 
-def _generate_single_pdf(request: "LessonRequest", level_override: str) -> tuple[bytes, str]:
+def _generate_single_pdf(
+    request: "LessonRequest",
+    level_override: str,
+    quality_generator_id: str,
+) -> tuple[bytes, str, dict]:
     """
     Synchronous helper that generates one complete PDF for a given level.
-    Returns (pdf_bytes, filename).
+    Returns (pdf_bytes, filename, quality_document).
     """
     import copy
     req = copy.copy(request)
@@ -876,6 +995,7 @@ def _generate_single_pdf(request: "LessonRequest", level_override: str) -> tuple
         series=req.series,
         source_text=req.source_text,
         source_name=req.source_name,
+        quality_generator_id=quality_generator_id,
     )
 
     req.level = level_override
@@ -903,7 +1023,7 @@ def _generate_single_pdf(request: "LessonRequest", level_override: str) -> tuple
         _cleanup_image(processed_image_path)
 
     filename = _safe_filename(req.topic) + f"_{level_override}.pdf"
-    return pdf_bytes, filename
+    return pdf_bytes, filename, _content_quality_document(content)
 
 
 def _generate_dual_background(generation_id: str, lesson_req: "LessonRequest"):
@@ -919,10 +1039,10 @@ def _generate_dual_background(generation_id: str, lesson_req: "LessonRequest"):
             f"Genererer versjoner for {level_a} og {level_b} (parallelt)...",
         )
 
-        fut_a = _executor.submit(_generate_single_pdf, lesson_req, level_a)
-        fut_b = _executor.submit(_generate_single_pdf, lesson_req, level_b)
-        pdf_a, name_a = fut_a.result()
-        pdf_b, name_b = fut_b.result()
+        fut_a = _executor.submit(_generate_single_pdf, lesson_req, level_a, "norsk.dual_level")
+        fut_b = _executor.submit(_generate_single_pdf, lesson_req, level_b, "norsk.dual_level")
+        pdf_a, name_a, quality_a = fut_a.result()
+        pdf_b, name_b, quality_b = fut_b.result()
 
         update_progress(generation_id, 3, 4, "Pakker PDF-er til ZIP...")
         zip_buffer = io.BytesIO()
@@ -936,6 +1056,7 @@ def _generate_dual_background(generation_id: str, lesson_req: "LessonRequest"):
             generation_id,
             zip_bytes=zip_bytes,
             filename=_safe_filename(lesson_req.topic) + "_dual.zip",
+            quality_documents=[quality_a, quality_b],
         )
         logger.info(f"Dual PDF ZIP generated: {len(zip_bytes)} bytes")
 
@@ -980,15 +1101,15 @@ def _generate_multi_level_background(generation_id: str, lesson_req: "MultiLevel
         )
 
         base = lesson_req.to_base_lesson_request(levels[0])
-        futures = [_executor.submit(_generate_single_pdf, base, lvl) for lvl in levels]
-        zip_parts: list[tuple[bytes, str]] = []
+        futures = [_executor.submit(_generate_single_pdf, base, lvl, "norsk.multi_level") for lvl in levels]
+        zip_parts: list[tuple[bytes, str, dict]] = []
         for fut in futures:
             zip_parts.append(fut.result())
 
         update_progress(generation_id, 3, 4, "Pakker PDF-er til ZIP...")
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            for pdf_bytes, name in zip_parts:
+            for pdf_bytes, name, _quality in zip_parts:
                 zf.writestr(name, pdf_bytes)
         zip_bytes = zip_buffer.getvalue()
 
@@ -997,6 +1118,7 @@ def _generate_multi_level_background(generation_id: str, lesson_req: "MultiLevel
             generation_id,
             zip_bytes=zip_bytes,
             filename=_safe_filename(lesson_req.topic) + "_flerniva.zip",
+            quality_documents=[quality for _pdf, _name, quality in zip_parts],
         )
         logger.info("Multi-level PDF ZIP generated: %s bytes (%s levels)", len(zip_bytes), n)
 

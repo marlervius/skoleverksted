@@ -53,6 +53,7 @@ export interface TruthSource {
   url: string;
   publisher: string;
   source_tier: "primary" | "authoritative" | "editorial" | "other";
+  published_at: string;
   retrieved_at: string;
   origin: "teacher" | "grounding" | "model";
   fetch_status: "provided" | "grounded" | "model_reported" | "fetched" | "source_unavailable";
@@ -68,6 +69,13 @@ export interface TruthClaim {
   source_urls: string[];
   evidence: string;
   confidence: number;
+  content_type: "fact" | "quote" | "number" | "mathematics" | "user_input" | "instruction" | "creative" | "interpretation";
+  location: string;
+  source_attempts: Array<{
+    title: string; url: string; publisher: string; published_at: string; retrieved_at: string;
+    status: "supported" | "not_supported" | "unavailable" | "not_evaluated";
+    supports_claim: string; evidence: string;
+  }>;
 }
 
 export interface TruthPassport {
@@ -101,6 +109,10 @@ export interface ThemePack {
   project: Project;
   tasks: ThemePackTask[];
   quality_passport: QualityPassport;
+  truth_passport?: TruthPassport | null;
+  quality_rounds?: TeachingArtifact["quality_rounds"];
+  quarantine?: TeachingArtifact["quarantine"];
+  quality_stop_reason?: string;
   created_at: string;
 }
 
@@ -368,7 +380,7 @@ export type TeachingArtifactStatus =
   | "superseded" | "cancelled";
 export type TeachingPackageStatus =
   | "draft" | "planning" | "generating" | "needs_review" | "needs_revision"
-  | "reviewed_with_issues" | "approved" | "archived";
+  | "reviewed_with_issues" | "approved" | "user_approved_with_exceptions" | "archived";
 
 export interface TeachingArtifactFile {
   format: "pdf" | "docx" | "pptx";
@@ -424,6 +436,20 @@ export interface TeachingArtifact {
   quality_passport: QualityPassport | null;
   verification_notes: string[];
   source_quality_notes: string[];
+  quality_rounds: Array<{
+    round_number: number; claims_found: number; claims_verified: number;
+    corrected_count: number; unresolved_count: number; changed: boolean;
+    status: "completed" | "no_progress" | "max_rounds" | "failed"; summary: string;
+  }>;
+  quarantine: Array<{
+    id: string; claim_id: string; content_type: TruthClaim["content_type"];
+    original_text: string; location: string; reason: string;
+    source_attempts: TruthClaim["source_attempts"]; suggested_replacement: string;
+    omission_consequence: string; status: "withheld" | "replaced" | "removed" | "resolved";
+    created_at: string;
+  }>;
+  quality_run_count: number;
+  quality_stop_reason: string;
   status: TeachingArtifactStatus;
   generation_token: string | null;
   artifact_job_id: string | null;
@@ -461,6 +487,15 @@ export interface TeachingPackage {
   approved_by: string;
   approved_revision: number;
   approved_digest: string;
+  approval_history: Array<{
+    action: "approved" | "approved_with_exceptions" | "revoked";
+    teacher: string;
+    at: string;
+    package_revision: number;
+    artifact_versions: Record<string, number>;
+    unresolved_claims: string[];
+    reason: string;
+  }>;
   created_at: string;
   updated_at: string;
 }
@@ -512,6 +547,13 @@ export interface YearPlan {
   periods: YearPlanPeriod[];
   notes: string;
   planning_source: "ai" | "fallback" | "manual";
+  truth_passport?: TruthPassport | null;
+  quality_rounds?: TeachingArtifact["quality_rounds"];
+  quarantine?: TeachingArtifact["quarantine"];
+  quality_stop_reason?: string;
+  content_revision?: string;
+  approved_at?: string | null;
+  approved_revision?: string;
   status: YearPlanStatus;
   created_at: string;
   updated_at: string;
@@ -583,9 +625,13 @@ export interface CompendiumChapter {
   content_revision: string;
   revision_summary: string[];
   repair_summary: RepairSummary | null;
+  quality_rounds: TeachingArtifact["quality_rounds"];
+  quarantine: TeachingArtifact["quarantine"];
+  quality_stop_reason: string;
   previous_content_markdown: string;
   revision_count: number;
   status: CompendiumChapterStatus;
+  confirm_omissions?: boolean;
   updated_at: string;
 }
 
@@ -749,6 +795,10 @@ export const updateYearPlan = (id: string, input: Partial<YearPlan>) =>
     method: "PATCH",
     body: JSON.stringify(input),
   });
+export const verifyYearPlan = (id: string) =>
+  requestJson<YearPlan>(`/year-plans/${encodeURIComponent(id)}/verify`, { method: "POST" });
+export const approveYearPlan = (id: string) =>
+  requestJson<YearPlan>(`/year-plans/${encodeURIComponent(id)}/approve`, { method: "POST" });
 export const updateYearPlanPeriod = (
   planId: string,
   periodId: string,
@@ -827,6 +877,12 @@ export const createTeachingPackage = (input: {
 export const getTeachingPackage = (id: string) =>
   requestJson<TeachingPackage>(`/teaching-packages/${encodeURIComponent(id)}`);
 
+export const updateTeachingPackage = (id: string, input: { sources?: TruthSource[]; source_brief?: string; audience?: string }) =>
+  requestJson<TeachingPackage>(`/teaching-packages/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+
 export const generateTeachingPackage = (id: string) =>
   requestJson<TeachingPackageJobAccepted>(`/teaching-packages/${encodeURIComponent(id)}/generate`, { method: "POST" });
 
@@ -848,6 +904,18 @@ export const verifyTeachingArtifact = (packageId: string, artifactId: string) =>
     { method: "POST" },
   );
 
+export const repairTeachingArtifact = (packageId: string, artifactId: string) =>
+  requestJson<TeachingArtifactJobAccepted>(
+    `/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}/repair`,
+    { method: "POST" },
+  );
+
+export const removeTeachingClaim = (packageId: string, artifactId: string, claimId: string) =>
+  requestJson<TeachingPackage>(
+    `/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}/claims/${encodeURIComponent(claimId)}/remove`,
+    { method: "POST" },
+  );
+
 export const approveTeachingArtifact = (packageId: string, artifactId: string, teacher = "local-teacher") =>
   requestJson<TeachingPackage>(
     `/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}/approve`,
@@ -858,6 +926,12 @@ export const approveTeachingPackage = (packageId: string, teacher = "local-teach
   requestJson<TeachingPackage>(
     `/teaching-packages/${encodeURIComponent(packageId)}/approve`,
     { method: "POST", body: JSON.stringify({ teacher }) },
+  );
+
+export const approveTeachingPackageWithOmissions = (packageId: string, teacher = "local-teacher", reason = "") =>
+  requestJson<TeachingPackage>(
+    `/teaching-packages/${encodeURIComponent(packageId)}/approve-with-exceptions`,
+    { method: "POST", body: JSON.stringify({ teacher, confirm: true, reason: reason || "Karantenelisten er gjennomgått; punktene skal utelates." }) },
   );
 
 export const teachingArtifactDownloadUrl = (packageId: string, artifactId: string, format: "pdf" | "docx" | "pptx") =>
@@ -970,6 +1044,8 @@ export const compendiumDownloadUrl = (compendiumId: string, artifactType: "pdf" 
   `${baseUrl()}/compendia/${encodeURIComponent(compendiumId)}/download/${artifactType}`;
 
 export async function downloadThemePackGuide(projectId: string): Promise<void> {
+  const approval = await fetch(`${baseUrl()}/theme-packs/${encodeURIComponent(projectId)}/teacher-guide/approve`, { method: "POST" });
+  if (!approval.ok) throw new Error(`Lærerveiledningen kunne ikke godkjennes (${approval.status}).`);
   const response = await fetch(`${baseUrl()}/theme-packs/${encodeURIComponent(projectId)}/teacher-guide`);
   if (!response.ok) throw new Error(`Kunne ikke laste ned lærerveiledningen (${response.status}).`);
   const blob = await response.blob();

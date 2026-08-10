@@ -68,6 +68,22 @@ export function PreviewModal({
           {previewData.truth_passport && (
             <TruthPassport passport={previewData.truth_passport} />
           )}
+          {(previewData.quarantine?.length ?? 0) > 0 && (
+            <section className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+              <h3 className="font-semibold text-amber-950">Utelatt i karantene</h3>
+              <p className="mt-1 text-sm text-amber-900">
+                Disse punktene er ikke med i teksten eller eksporten. Kontroller konsekvensen før godkjenning.
+              </p>
+              <ul className="mt-3 space-y-2 text-sm text-amber-950">
+                {previewData.quarantine!.map((item, index) => (
+                  <li key={String(item.claim_id ?? index)} className="rounded border border-amber-200 bg-white p-3">
+                    <p className="font-medium">{String(item.original_text ?? "Ukjent påstand")}</p>
+                    <p className="mt-1 text-xs">{String(item.reason ?? "Mangler sikker dokumentasjon")}</p>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {imageCandidates.length > 0 && (
             <section className="rounded-xl border border-stone-200 bg-stone-50 p-4 sm:p-5">

@@ -803,6 +803,7 @@ def generate_lesson_content(
     series: dict = None,
     source_text: str = None,
     source_name: str = None,
+    quality_generator_id: str = "norsk.learning_sheet",
 ) -> dict:
     """
     Generate complete lesson content using the AI agents.
@@ -1520,12 +1521,13 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
 
     # Shared evidence-first audit. Text and worksheet are checked together so
     # an unsupported claim cannot survive merely because it appears in a task.
-    from Skoleverksted.backend.platform.truth import audit_truth
+    from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
 
     truth_separator = "\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n"
     language_separator = "\n\n<<<SKOLEVERKSTED_SPRÅKOPPGAVER>>>\n\n"
     language_payload = json.dumps(language_exercises, ensure_ascii=False)
-    truth_audit = audit_truth(
+    quality_result = run_quality_pipeline(
+        generator_id=quality_generator_id,
         content=(
             f"{text_output}{truth_separator}{worksheet_output}"
             f"{language_separator}{language_payload}"
@@ -1534,6 +1536,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
         subject=subject,
         level=level,
     )
+    truth_audit = type("QualityAudit", (), {"content": quality_result.approved_content, "passport": quality_result.passport})()
     if truth_separator in truth_audit.content and language_separator in truth_audit.content:
         text_output, remainder = truth_audit.content.split(truth_separator, 1)
         worksheet_output, revised_language = remainder.split(language_separator, 1)
@@ -1573,6 +1576,10 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
         "source_grounded": bool(source_text and source_text.strip()),
         "source_name": source_name if source_text else None,
         "truth_passport": truth_audit.passport.model_dump(mode="json"),
+        "verification_content": truth_audit.content,
+        "quarantine": [item.model_dump(mode="json") for item in quality_result.quarantine],
+        "quality_rounds": [item.model_dump(mode="json") for item in quality_result.rounds],
+        "quality_stop_reason": quality_result.stop_reason,
         "prompt_version": os.getenv("PROMPT_VERSION", "norsk-v2-grounded"),
     }
 

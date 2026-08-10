@@ -81,4 +81,7 @@ export interface LessonResponse {
   image_candidates?: CommonsImageCandidate[];
   language_exercises?: LanguageExercisesPayload | null;
   truth_passport?: TruthPassport | null;
+  quarantine?: Array<Record<string, unknown>>;
+  quality_rounds?: Array<Record<string, unknown>>;
+  quality_stop_reason?: string;
 }

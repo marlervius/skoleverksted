@@ -275,6 +275,14 @@ class PipelineState(BaseModel):
     layout_report: LayoutReport = Field(default_factory=LayoutReport)
     content_quality: ContentQualityReport = Field(default_factory=ContentQualityReport)
     content_quality_attempts: int = 0
+    truth_passport: dict[str, Any] = Field(default_factory=dict)
+    quality_rounds: list[dict[str, Any]] = Field(default_factory=list)
+    quarantine: list[dict[str, Any]] = Field(default_factory=list)
+    quality_stop_reason: str = ""
+    verification_content: str = ""
+    source_approved: bool = False
+    teacher_approved_at: str = ""
+    approved_digest: str = ""
     author_retry_reason: str = Field(
         default="",
         description="Set by graph routers before author: 'math' | 'quality'",

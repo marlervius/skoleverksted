@@ -30,7 +30,8 @@ from .models import (
     TruthPassport,
     utc_now,
 )
-from .truth import audit_truth
+from .truth import TruthAudit, audit_truth
+from .quality_gate import run_quality_pipeline
 from .text_quality import TextQualityIssue, inspect_markdown
 
 
@@ -265,20 +266,24 @@ def _audit_chapter_material(
     level: str,
     provided_sources: list[CompendiumSource] | None = None,
     mutate_content: bool = True,
-) -> tuple[str, list[str], list[str], TruthPassport]:
+) -> tuple[str, list[str], list[str], TruthPassport, list[object], list[object], str]:
     audit_input = (
         f"{content.rstrip()}\n\n{_TRUTH_FACTS_MARKER}\n"
         + "\n".join(f"- {item}" for item in key_facts)
         + f"\n\n{_TRUTH_GLOSSARY_MARKER}\n"
         + "\n".join(f"- {item}" for item in glossary)
     )
-    truth_audit = audit_truth(
+    quality_result = run_quality_pipeline(
+        generator_id="platform.compendium",
         content=audit_input,
         topic=topic,
         subject=subject,
         level=level,
         provided_sources=provided_sources or [],
+        max_rounds=3 if mutate_content else 1,
+        audit=audit_truth,
     )
+    truth_audit = TruthAudit(content=quality_result.approved_content, passport=quality_result.passport)
 
     # Generation may use the truth layer's safe sentence edits, but repair has
     # already applied an explicit RepairPlan. A re-audit must therefore be an
@@ -292,7 +297,7 @@ def _audit_chapter_material(
                 "uten en eksplisitt reparasjonshandling."
             )
         truth_audit.passport.content_revision = content_revision(content)
-        return content, key_facts, glossary, truth_audit.passport
+        return content, key_facts, glossary, truth_audit.passport, quality_result.rounds, [], quality_result.stop_reason
 
     revised = truth_audit.content
     if (
@@ -304,7 +309,7 @@ def _audit_chapter_material(
             "Kontrollert kapittel kunne ikke deles trygt tilbake i dokumentfeltene."
         )
         truth_audit.passport.content_revision = content_revision(content)
-        return content, key_facts, glossary, truth_audit.passport
+        return content, key_facts, glossary, truth_audit.passport, quality_result.rounds, [], quality_result.stop_reason
 
     revised_content, remainder = revised.split(_TRUTH_FACTS_MARKER, 1)
     revised_facts, revised_glossary = remainder.split(_TRUTH_GLOSSARY_MARKER, 1)
@@ -326,6 +331,9 @@ def _audit_chapter_material(
         list_items(revised_facts, 30),
         list_items(revised_glossary, 30),
         truth_audit.passport,
+        quality_result.rounds,
+        quality_result.quarantine,
+        quality_result.stop_reason,
     )
 
 
@@ -834,6 +842,10 @@ def _failure_status(passport: TruthPassport, issues: list[TextQualityIssue]) -> 
         return "verification_failed"
     if passport.status == "source_unavailable":
         return "source_grounding_failed"
+    if passport.status in {"needs_review", "blocked"} and any(
+        claim.status != "verified" for claim in passport.claims
+    ):
+        return "source_grounding_failed"
     if passport.status == "not_evaluated":
         return "verification_failed"
     return None
@@ -992,7 +1004,7 @@ eller svake kilder for sentrale påstander.
         )
         key_facts = _strings(payload.get("key_facts"), 30)
         glossary = _strings(payload.get("glossary"), 30)
-        content, key_facts, glossary, truth_passport = _audit_chapter_material(
+        content, key_facts, glossary, truth_passport, quality_rounds, quarantine, quality_stop_reason = _audit_chapter_material(
             content=content,
             key_facts=key_facts,
             glossary=glossary,
@@ -1034,6 +1046,9 @@ eller svake kilder for sentrale påstander.
             truth_passport=truth_passport,
             revision_summary=[],
             repair_summary=None,
+            quality_rounds=quality_rounds,
+            quarantine=quarantine,
+            quality_stop_reason=quality_stop_reason,
             status="generated" if approved else (failure_status or "needs_revision"),
             updated_at=utc_now(),
         )
@@ -1852,7 +1867,7 @@ JSON:
 
     key_facts = _strings(payload.get("key_facts"), 30)
     glossary = _strings(payload.get("glossary"), 30)
-    repaired_content, key_facts, glossary, truth_passport = _audit_chapter_material(
+    repaired_content, key_facts, glossary, truth_passport, quality_rounds, quarantine, quality_stop_reason = _audit_chapter_material(
         content=repaired_content,
         key_facts=key_facts,
         glossary=glossary,
@@ -1881,6 +1896,8 @@ JSON:
     notes.extend(note for note in _quality_notes(quality_issues) if note not in notes)
     notes.extend(note for note in source_quality_notes if note not in notes)
     failure_status = _failure_status(truth_passport, quality_issues)
+    if unsafe and failure_status is None:
+        failure_status = "source_grounding_failed"
     if source_quality_notes and failure_status is None:
         failure_status = "source_grounding_failed"
     verified = (
@@ -1903,7 +1920,7 @@ JSON:
         # required teacher decision instead.
         verified = False
         if failure_status is None:
-            failure_status = "needs_revision"
+            failure_status = "source_grounding_failed"
     if not applied_changes:
         notes.append(
             "Automatisk kontroll fullført, men ingen sikre rettelser kunne gjennomføres."
@@ -1949,6 +1966,9 @@ JSON:
         truth_passport=truth_passport,
         revision_summary=changes[:30],
         repair_summary=repair_summary,
+        quality_rounds=[*chapter.quality_rounds, *quality_rounds][-20:],
+        quarantine=[*chapter.quarantine, *quarantine][-120:],
+        quality_stop_reason=quality_stop_reason,
         status=chapter_status,
         updated_at=utc_now(),
     )
