@@ -11,6 +11,7 @@ from Skoleverksted.backend.platform.models import (
     YearPlanPeriodUpdate,
 )
 from Skoleverksted.backend.platform.router import (
+    delete_year_plan,
     download_year_plan_material,
     generate_year_plan,
     save_year_plan_material,
@@ -95,6 +96,27 @@ class YearPlanApiTests(unittest.TestCase):
         downloaded = download_year_plan_material(plan.id, material.id)
         self.assertEqual(downloaded.body, pdf)
         self.assertIn("kilder.pdf", downloaded.headers["content-disposition"])
+
+    def test_delete_year_plan(self):
+        plan = generate_year_plan(
+            YearPlanGenerateRequest(
+                subject="Naturfag",
+                level="VG1",
+                school_year="2026-2027",
+                lessons_per_week=2,
+                lesson_minutes=45,
+                teaching_weeks=38,
+                number_of_periods=4,
+                competency_goals=[],
+                constraints="",
+                use_ai=False,
+            ),
+        )
+
+        result = delete_year_plan(plan.id)
+
+        self.assertEqual(result, {"deleted": True, "id": plan.id})
+        self.assertIsNone(self.store.get_year_plan(plan.id))
 
 
 if __name__ == "__main__":

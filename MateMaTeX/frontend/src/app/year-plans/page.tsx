@@ -10,8 +10,9 @@ import {
   Loader2,
   Plus,
   Sparkles,
+  Trash2,
 } from "lucide-react";
-import { listYearPlans, type YearPlan } from "@/lib/platform-api";
+import { deleteYearPlan, listYearPlans, type YearPlan } from "@/lib/platform-api";
 
 function progressFor(plan: YearPlan): number {
   if (!plan.periods.length) return 0;
@@ -28,6 +29,8 @@ export default function YearPlansPage() {
   const [plans, setPlans] = useState<YearPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deletingPlanId, setDeletingPlanId] = useState("");
 
   useEffect(() => {
     listYearPlans()
@@ -47,6 +50,23 @@ export default function YearPlansPage() {
       0,
     ),
   }), [plans]);
+
+  async function handleDelete(plan: YearPlan) {
+    const confirmed = window.confirm(
+      `Slette årsplanen «${plan.title}»?\n\nÅrsplanen, tilhørende læremidler og undervisningspakker slettes permanent.`,
+    );
+    if (!confirmed) return;
+    setDeletingPlanId(plan.id);
+    setDeleteError("");
+    try {
+      await deleteYearPlan(plan.id);
+      setPlans((current) => current.filter((item) => item.id !== plan.id));
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Kunne ikke slette årsplanen.");
+    } finally {
+      setDeletingPlanId("");
+    }
+  }
 
   return (
     <div className="mx-auto max-w-6xl space-y-7">
@@ -88,6 +108,7 @@ export default function YearPlansPage() {
         </div>
       )}
       {error && <div role="alert" className="card border-accent-red/30 text-accent-red">{error}</div>}
+      {deleteError && <div role="alert" className="card border-accent-red/30 text-accent-red">{deleteError}</div>}
 
       {!loading && !error && plans.length === 0 && (
         <section className="rounded-2xl border border-dashed border-border bg-surface p-10 text-center">
@@ -108,26 +129,42 @@ export default function YearPlansPage() {
           const progress = progressFor(plan);
           const materials = plan.periods.reduce((sum, period) => sum + period.materials.length, 0);
           return (
-            <Link key={plan.id} href={`/year-plans/${plan.id}`} className="card-interactive group block">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-xs font-medium uppercase tracking-wide text-text-muted">
-                    {plan.subject} · {plan.level} · {plan.school_year}
+            <article key={plan.id} className="card-interactive group">
+              <Link href={`/year-plans/${plan.id}`} className="block" aria-label={`Åpne ${plan.title}`}>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-medium uppercase tracking-wide text-text-muted">
+                      {plan.subject} · {plan.level} · {plan.school_year}
+                    </div>
+                    <h2 className="mt-1.5 text-xl font-semibold">{plan.title}</h2>
                   </div>
-                  <h2 className="mt-1.5 text-xl font-semibold">{plan.title}</h2>
+                  <span className="badge bg-accent-blue/10 text-accent-blue">{progress}%</span>
                 </div>
-                <span className="badge bg-accent-blue/10 text-accent-blue">{progress}%</span>
-              </div>
-              <div className="mt-5 h-2 overflow-hidden rounded-full bg-surface-elevated">
-                <div className="h-full rounded-full bg-accent-blue transition-all" style={{ width: `${progress}%` }} />
-              </div>
+                <div className="mt-5 h-2 overflow-hidden rounded-full bg-surface-elevated">
+                  <div className="h-full rounded-full bg-accent-blue transition-all" style={{ width: `${progress}%` }} />
+                </div>
+              </Link>
               <div className="mt-4 flex items-center justify-between text-sm text-text-secondary">
                 <span>{plan.periods.length} perioder · {materials} læremidler</span>
-                <span className="inline-flex items-center gap-1 font-medium text-text-primary">
-                  Åpne <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="btn-ghost !px-2.5 !py-1.5 text-accent-red"
+                    onClick={() => void handleDelete(plan)}
+                    disabled={Boolean(deletingPlanId)}
+                    aria-label={`Slett ${plan.title}`}
+                  >
+                    {deletingPlanId === plan.id
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Trash2 className="h-4 w-4" />}
+                    {deletingPlanId === plan.id ? "Sletter …" : "Slett"}
+                  </button>
+                  <Link href={`/year-plans/${plan.id}`} className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 font-medium text-text-primary hover:bg-surface-elevated">
+                    Åpne <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+                  </Link>
+                </div>
               </div>
-            </Link>
+            </article>
           );
         })}
       </section>

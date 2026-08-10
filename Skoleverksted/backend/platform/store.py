@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -538,6 +539,38 @@ class PlatformStore:
         with self._connection() as conn:
             rows = conn.execute(query, params).fetchall()
         return [YearPlan.model_validate_json(row["payload"]) for row in rows]
+
+    def delete_year_plan(self, plan_id: str) -> bool:
+        """Delete a plan and the files/packages that are owned by that plan.
+
+        Compendia remain independent library items even when they were once
+        projected into a plan. Teaching packages, on the other hand, cannot
+        exist without their plan and are removed together with it.
+        """
+        with self._lock, self._connection() as conn:
+            row = conn.execute("SELECT id FROM year_plans WHERE id=?", (plan_id,)).fetchone()
+            if row is None:
+                return False
+            package_rows = conn.execute(
+                "SELECT id FROM teaching_packages WHERE year_plan_id=?",
+                (plan_id,),
+            ).fetchall()
+            package_ids = [str(package_row["id"]) for package_row in package_rows]
+            conn.execute("DELETE FROM teaching_packages WHERE year_plan_id=?", (plan_id,))
+            conn.execute("DELETE FROM year_plans WHERE id=?", (plan_id,))
+
+        self._remove_managed_directory(self.files_dir, plan_id)
+        for package_id in package_ids:
+            self._remove_managed_directory(self.teaching_packages_dir, package_id)
+        return True
+
+    @staticmethod
+    def _remove_managed_directory(root: Path, child: str) -> None:
+        root_path = root.resolve()
+        target = (root_path / child).resolve()
+        if target.parent != root_path:
+            return
+        shutil.rmtree(target, ignore_errors=True)
 
     def _save_year_plan(self, plan: YearPlan) -> YearPlan:
         with self._lock, self._connection() as conn:

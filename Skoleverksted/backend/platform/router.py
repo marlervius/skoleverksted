@@ -784,6 +784,13 @@ def get_year_plan(plan_id: str):
     return plan
 
 
+@router.delete("/year-plans/{plan_id}")
+def delete_year_plan(plan_id: str):
+    if not get_platform_store().delete_year_plan(plan_id):
+        raise HTTPException(status_code=404, detail="Årsplanen finnes ikke.")
+    return {"deleted": True, "id": plan_id}
+
+
 @router.patch("/year-plans/{plan_id}", response_model=YearPlan)
 def update_year_plan(plan_id: str, request: YearPlanUpdate):
     plan = get_platform_store().update_year_plan(plan_id, request)
