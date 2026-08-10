@@ -27,6 +27,14 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from Skoleverksted.backend.platform.images import ImageResult, normalize_image_mode, resolve_image
+from Skoleverksted.backend.platform.models import utc_now
+from Skoleverksted.backend.platform.quality_gate import (
+    content_digest as quality_content_digest,
+    require_export_ready,
+    run_quality_pipeline,
+    source_approval_reasons,
+    verify_teacher_export,
+)
 
 if __package__:
     from . import config
@@ -397,7 +405,7 @@ async def _stream_job(job_id: str, request: Request) -> StreamingResponse:
 
 
 async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
-                        kind: str = "main") -> Response:
+                        kind: str = "main", preview: bool = False) -> Response:
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -415,6 +423,38 @@ async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
         pdf_bytes = job.pdf
         filename = job.filename or default_filename
 
+    if kind != "rapport":
+        passport = job.truth_passport or {}
+        quarantine = [
+            str(item.get("original_text") or "")
+            for item in job.quarantine
+            if item.get("status", "withheld") == "withheld"
+        ]
+        if preview:
+            reasons = source_approval_reasons(
+                content=job.verification_content,
+                verification_status=str(passport.get("status") or "missing"),
+                verified_revision=str(passport.get("content_revision") or ""),
+                verification_version=str(passport.get("version") or ""),
+                quarantined_texts=quarantine,
+            )
+            if reasons:
+                raise HTTPException(status_code=409, detail="Forhåndsvisningen er blokkert: " + "; ".join(reasons))
+        else:
+            try:
+                require_export_ready(
+                    export_id="fag.pdf",
+                    content=job.verification_content,
+                    verification_status=str(passport.get("status") or "missing"),
+                    verified_revision=str(passport.get("content_revision") or ""),
+                    verification_version=str(passport.get("version") or ""),
+                    teacher_approved=bool(job.teacher_approved_at),
+                    approved_revision=job.approved_digest,
+                    quarantined_texts=quarantine,
+                )
+            except PermissionError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     # The job is intentionally NOT popped here: a lesson job may have both a
     # student PDF and a teacher fact-report PDF that are downloaded separately.
     # TTL cleanup removes the job afterwards.
@@ -422,10 +462,35 @@ async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": f'{"inline" if preview or kind == "rapport" else "attachment"}; filename="{filename}"',
             "Content-Length": str(len(pdf_bytes)),
+            "X-Quality-Status": "review_only" if kind == "rapport" else ("source_approved" if preview else "export_ready"),
         },
     )
+
+
+@app.post("/generation/{job_id}/approve")
+def approve_generation(job_id: str):
+    """Record explicit teacher approval for the exact verified job text."""
+    job = get_job(job_id)
+    if not job or not job.done:
+        raise HTTPException(status_code=404, detail="Det ferdige dokumentet finnes ikke.")
+    passport = job.truth_passport or {}
+    reasons = source_approval_reasons(
+        content=job.verification_content,
+        verification_status=str(passport.get("status") or "missing"),
+        verified_revision=str(passport.get("content_revision") or ""),
+        verification_version=str(passport.get("version") or ""),
+        quarantined_texts=[
+            str(item.get("original_text") or "") for item in job.quarantine
+            if item.get("status", "withheld") == "withheld"
+        ],
+    )
+    if reasons:
+        raise HTTPException(status_code=409, detail="Dokumentet kan ikke lærer-godkjennes: " + "; ".join(reasons))
+    job.teacher_approved_at = utc_now()
+    job.approved_digest = quality_content_digest(job.verification_content)
+    return {"status": "teacher_approved", "approved_at": job.teacher_approved_at, "content_revision": job.approved_digest, "quarantined_count": len(job.quarantine)}
 
 
 # ── Source resolution (teacher-provided or NDLA) ─────────────────────────────
@@ -448,6 +513,39 @@ def _resolve_source(req, ctx: "JobContext") -> tuple[Optional[str], Optional[str
             return ndla["text"], f"NDLA: {ndla['title']}"
         ctx.push("Fant ingen passende NDLA-kilde — fortsetter uten kildeforankring.")
     return None, None
+
+
+def _verify_structured_output(
+    ctx: "JobContext",
+    *,
+    generator_id: str,
+    payload: dict,
+    topic: str,
+    subject: str,
+    level: str,
+) -> dict:
+    """Route assessment and sequence JSON through the shared quality engine."""
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    result = run_quality_pipeline(
+        generator_id=generator_id,
+        content=canonical,
+        topic=topic,
+        subject=subject,
+        level=level,
+    )
+    try:
+        verified_payload = json.loads(result.approved_content)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Kvalitetskontrollen kunne ikke bevare dokumentstrukturen.") from exc
+    if not isinstance(verified_payload, dict):
+        raise RuntimeError("Kvalitetskontrollen returnerte ikke et gyldig dokumentobjekt.")
+    if ctx.set_meta:
+        ctx.set_meta("verification_content", result.approved_content)
+        ctx.set_meta("truth_passport", result.passport.model_dump(mode="json"))
+        ctx.set_meta("quarantine", [item.model_dump(mode="json") for item in result.quarantine])
+        ctx.set_meta("quality_rounds", [item.model_dump(mode="json") for item in result.rounds])
+        ctx.set_meta("quality_stop_reason", result.stop_reason)
+    return verified_payload
 
 
 # ── Worker: standard læringsark ───────────────────────────────────────────────
@@ -483,6 +581,10 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("source_grounded", content.get("source_grounded"))
         ctx.set_meta("source_name", source_name)
         ctx.set_meta("truth_passport", content.get("truth_passport"))
+        ctx.set_meta("verification_content", content.get("verification_content"))
+        ctx.set_meta("quarantine", content.get("quarantine"))
+        ctx.set_meta("quality_rounds", content.get("quality_rounds"))
+        ctx.set_meta("quality_stop_reason", content.get("quality_stop_reason"))
         ctx.set_meta("prompt_version", content.get("prompt_version"))
 
     if normalize_image_mode(req.image_mode) != "none" and not req.image_data and not req.image_url_override:
@@ -654,12 +756,18 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
         source_text=source_text,
         interest=req.interest,
         progress_callback=ctx.push,
+        quality_generator_id="fag.differentiated",
     )
 
     if ctx.set_meta:
         ctx.set_meta("source_grounded", content.get("source_grounded"))
         ctx.set_meta("source_name", source_name)
         ctx.set_meta("prompt_version", content.get("prompt_version"))
+        ctx.set_meta("truth_passport", content.get("truth_passport"))
+        ctx.set_meta("verification_content", content.get("verification_content"))
+        ctx.set_meta("quarantine", content.get("quarantine"))
+        ctx.set_meta("quality_rounds", content.get("quality_rounds"))
+        ctx.set_meta("quality_stop_reason", content.get("quality_stop_reason"))
 
     ctx.push(
         "Bildecrewet planlegger og kvalitetssikrer ett pedagogisk bilde..."
@@ -741,7 +849,14 @@ def _prove_worker(ctx: JobContext) -> tuple[bytes, str]:
 
     try:
         ctx.push("Kompilerer prøve-PDF...")
-        prove_json = content.get("prove_json") or {}
+        prove_json = _verify_structured_output(
+            ctx,
+            generator_id="fag.assessment",
+            payload=content.get("prove_json") or {},
+            topic=req.topic,
+            subject=req.subject,
+            level=req.level,
+        )
         pdf_bytes = create_prove_pdf(
             prove_json=prove_json,
             topic=req.topic,
@@ -775,9 +890,17 @@ def _sequence_worker(ctx: JobContext) -> tuple[bytes, str]:
         progress_callback=ctx.push,
     )
 
+    sequence_json = _verify_structured_output(
+        ctx,
+        generator_id="fag.lesson_sequence",
+        payload=content.get("sequence_json") or {},
+        topic=req.topic,
+        subject=req.subject,
+        level=req.level,
+    )
     ctx.push("Kompilerer sekvensplan-PDF...")
     pdf_bytes = create_sequence_pdf(
-        sequence_json=content.get("sequence_json", {}),
+        sequence_json=sequence_json,
         topic=req.topic,
         level=req.level,
         subject=req.subject,
@@ -804,8 +927,8 @@ async def lesson_stream(job_id: str, request: Request):
 
 
 @app.get("/generate-lesson-download/{job_id}")
-async def download_lesson(job_id: str):
-    return await _download_job(job_id, "leksjon.pdf")
+async def download_lesson(job_id: str, preview: bool = False):
+    return await _download_job(job_id, "leksjon.pdf", preview=preview)
 
 
 @app.get("/generate-lesson-download-rapport/{job_id}")
@@ -847,8 +970,8 @@ async def prove_stream(job_id: str, request: Request):
 
 
 @app.get("/generate-prove-download/{job_id}")
-async def download_prove(job_id: str):
-    return await _download_job(job_id, "prove.pdf")
+async def download_prove(job_id: str, preview: bool = False):
+    return await _download_job(job_id, "prove.pdf", preview=preview)
 
 
 # ── Endpoints: sekvensplan ────────────────────────────────────────────────────
@@ -870,8 +993,8 @@ async def sequence_stream(job_id: str, request: Request):
 
 
 @app.get("/generate-sequence-download/{job_id}")
-async def download_sequence(job_id: str):
-    return await _download_job(job_id, "sekvensplan.pdf")
+async def download_sequence(job_id: str, preview: bool = False):
+    return await _download_job(job_id, "sekvensplan.pdf", preview=preview)
 
 
 # ── Legacy synchronous endpoints (kept for backwards-compat callers) ─────────
@@ -880,6 +1003,10 @@ async def download_sequence(job_id: str):
 @limiter.limit(config.RATE_LIMIT_GENERATE)
 async def generate_lesson_sync(request: Request, lesson_request: LessonRequest):
     """Synchronous lesson generation. Prefer /generate-lesson-start for UX."""
+    raise HTTPException(
+        status_code=409,
+        detail="Denne eldre direkteruten er stengt av kvalitetsporten. Bruk start/forhåndsvis/godkjenn-flyten.",
+    )
     request_id = str(uuid.uuid4())[:8]
     req_logger = RequestLogger(logger, {'request_id': request_id})
 
@@ -1037,6 +1164,20 @@ async def recompile_lesson(request: Request, req: RecompileRequest):
     req_logger = RequestLogger(logger, {'request_id': request_id})
     req_logger.info(f"Recompile request: topic={req.topic!r} level={req.level}")
 
+    separator = "\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n"
+    quality = await asyncio.to_thread(
+        run_quality_pipeline,
+        generator_id="fag.learning_sheet",
+        content=f"{req.text}{separator}{req.worksheet}",
+        topic=req.topic,
+        subject=req.subject,
+        level=req.level,
+    )
+    if not quality.source_approved or separator not in quality.approved_content:
+        raise HTTPException(status_code=409, detail="Forhåndsvisningen ble blokkert av kvalitetskontrollen.")
+    req.text, req.worksheet = quality.approved_content.split(separator, 1)
+    req.truth_verified = True
+
     def _compile() -> bytes:
         img_path = fetch_image_with_retry(req.image_url, None, req_logger)
         content_text = req.text
@@ -1092,6 +1233,7 @@ class DocxRequest(BaseModel):
     topic: str = Field(..., min_length=1, max_length=200)
     subject: str = Field(..., min_length=1, max_length=100)
     level: str = Field("VGS")
+    teacher_approved: bool = False
 
 
 @app.post("/generate-docx")
@@ -1101,6 +1243,21 @@ async def generate_docx(request: Request, req: DocxRequest):
     request_id = str(uuid.uuid4())[:8]
     req_logger = RequestLogger(logger, {'request_id': request_id})
     req_logger.info(f"Docx request: topic={req.topic!r} level={req.level}")
+
+    export_content = f"{req.text}\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n{req.worksheet}"
+    try:
+        await asyncio.to_thread(
+            verify_teacher_export,
+            generator_id="fag.docx",
+            export_id="fag.docx",
+            content=export_content,
+            topic=req.topic,
+            subject=req.subject,
+            level=req.level,
+            teacher_approved=req.teacher_approved,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     try:
         docx_bytes = await asyncio.to_thread(

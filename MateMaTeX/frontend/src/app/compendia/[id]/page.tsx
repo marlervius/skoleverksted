@@ -504,6 +504,14 @@ function ChapterCard({
             </div>
           )}
 
+          {chapter.quarantine.length > 0 && (
+            <div className="mt-4 rounded-lg border border-accent-orange/30 bg-accent-orange/5 p-3 text-sm">
+              <h4 className="flex items-center gap-2 font-semibold"><ShieldAlert className="h-4 w-4 text-accent-orange" /> Karantene – utelatt fra dokumentet</h4>
+              <p className="mt-1 text-xs text-text-secondary">Punktene er synlige her for lærerens kontroll, men finnes ikke i godkjent tekst eller eksport.</p>
+              <div className="mt-3 space-y-2">{chapter.quarantine.map((item) => <article key={item.id} className="rounded-md border border-border bg-surface p-3"><p className="text-xs font-medium">{item.location} · {item.content_type}</p><p className="mt-1">{item.original_text}</p><p className="mt-1 text-xs text-text-secondary">{item.reason}</p>{item.suggested_replacement && <p className="mt-1 text-xs text-text-secondary">Forslag: {item.suggested_replacement}</p>}</article>)}</div>
+            </div>
+          )}
+
           {chapter.revision_summary.length > 0 && (
             <div className="mt-4 rounded-lg border border-accent-green/25 bg-accent-green/5 p-3 text-sm">
               <h4 className="flex items-center gap-2 font-semibold">
@@ -560,7 +568,7 @@ function ChapterCard({
                 className="btn-primary"
                 disabled={working || chapter.status === "approved" || !truthVerified}
                 title={!truthVerified ? "Kapittelet må ha grønt faktapass før det kan godkjennes" : ""}
-                onClick={() => void run("approve", () => updateCompendiumChapter(compendium.id, chapter.id, { status: "approved" }))}
+                onClick={() => void run("approve", () => updateCompendiumChapter(compendium.id, chapter.id, { status: "approved", confirm_omissions: chapter.quarantine.length > 0 }))}
               >
                 {localBusy === "approve" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                 {chapter.status === "approved" ? "Kapittel godkjent" : truthVerified ? "Godkjenn kapittel" : "Venter på grønt faktapass"}

@@ -11,7 +11,8 @@ import time
 from datetime import datetime, timezone
 from typing import Iterable
 
-from .models import Job, TeachingArtifact, TeachingArtifactFile, TeachingPackage
+from .models import Job, RepairChange, TeachingArtifact, TeachingArtifactFile, TeachingPackage
+from .quality_gate import run_quality_pipeline
 from .queue import get_durable_job_queue
 from .store import StaleTeachingArtifactError, get_platform_store
 from .teaching_package import (
@@ -28,6 +29,9 @@ from .truth import audit_truth
 
 class TeachingJobCancelled(RuntimeError):
     pass
+
+
+MAX_QUALITY_REPAIR_ROUNDS = 3
 
 
 def _now_epoch(value: str) -> float:
@@ -55,33 +59,69 @@ def _set_artifact_claim(package: TeachingPackage, artifact_id: str, job: Job) ->
     return with_revision_digest(package)
 
 
-def _verify_content(package: TeachingPackage, artifact: TeachingArtifact) -> TeachingArtifact:
-    """Run the existing truth and quality gates against this exact content."""
-    audit = audit_truth(
-        content=artifact.content_markdown,
+def _quality_changes(content_after: str, passport) -> list[RepairChange]:
+    changes: list[RepairChange] = []
+    for claim in passport.claims:
+        if claim.status == "verified":
+            continue
+        applied = bool(claim.exact_text and claim.exact_text not in content_after)
+        changes.append(
+            RepairChange(
+                issue_id=claim.id,
+                action=claim.action,
+                result="applied" if applied else "manual_review",
+                before=claim.exact_text or claim.claim,
+                after=claim.replacement if applied else "",
+                reason=(
+                    "Påstanden ble endret av fagredaktøren og kontrolleres på nytt."
+                    if applied
+                    else "Påstanden kunne ikke endres sikkert automatisk."
+                ),
+                source_refs=claim.source_urls,
+            )
+        )
+    return changes
+
+
+def _verify_content(
+    package: TeachingPackage,
+    artifact: TeachingArtifact,
+    *,
+    repair: bool = True,
+) -> TeachingArtifact:
+    """Submit exact artifact text to the one global verification engine."""
+    original = artifact.content_markdown
+    result = run_quality_pipeline(
+        generator_id=f"platform.teaching_package.{artifact.artifact_type}",
+        content=original,
         topic=package.plan.theme,
         subject=package.subject,
         level=package.level,
         provided_sources=artifact.sources or package.plan.sources,
+        max_rounds=MAX_QUALITY_REPAIR_ROUNDS if repair else 1,
+        audit=audit_truth,
     )
-    content = audit.content
-    revision = content_digest(content)
-    passport = audit.passport.model_copy(update={"content_revision": revision})
+    content = result.approved_content
+    final_passport = result.passport
+    if content != artifact.content_markdown:
+        artifact.previous_content_markdown = artifact.content_markdown
+        artifact.revision_count += 1
     artifact.content_markdown = content
-    artifact.content_revision = revision
-    artifact.truth_passport = passport
+    artifact.content_revision = content_digest(content)
+    artifact.truth_passport = final_passport
+    if final_passport.sources:
+        artifact.sources = list(final_passport.sources)
+    artifact.quality_rounds = [*artifact.quality_rounds, *result.rounds][-20:]
+    artifact.quarantine = [*artifact.quarantine, *result.quarantine][-120:]
+    artifact.quality_run_count += 1
+    artifact.quality_stop_reason = result.stop_reason
     artifact.quality_passport = build_quality(package, artifact, compiled=False)
     artifact.source_quality_notes = source_notes(artifact.sources or package.plan.sources)
-    artifact.verification_notes = list(passport.limitations)
-    if passport.status == "verification_failed":
+    artifact.verification_notes = list(final_passport.limitations)
+    if final_passport.status == "verification_failed":
         artifact.status = "verification_failed"
-    elif passport.status == "source_unavailable":
-        artifact.status = "source_grounding_failed"
-    elif artifact.quality_passport.overall_status == "failed":
-        artifact.status = "language_quality_failed"
-    elif artifact.source_quality_notes:
-        artifact.status = "source_grounding_failed"
     else:
+        # source_unavailable is a repair/review state, never a permanent dead end.
         artifact.status = "needs_review"
     return artifact
 
@@ -133,7 +173,14 @@ def _fail_artifact(package_id: str, artifact_id: str, job: Job, status: str, rea
     )
 
 
-def run_artifact_job(package_id: str, artifact_id: str, job_id: str, *, verify_only: bool = False) -> None:
+def run_artifact_job(
+    package_id: str,
+    artifact_id: str,
+    job_id: str,
+    *,
+    verify_only: bool = False,
+    quality_repair: bool = True,
+) -> None:
     store = get_platform_store()
     gate = get_durable_job_queue()
     job = store.get_job(job_id)
@@ -158,9 +205,9 @@ def run_artifact_job(package_id: str, artifact_id: str, job_id: str, *, verify_o
                 artifact.content_markdown = draft_content(package, artifact.artifact_type)
                 artifact.content_revision = content_digest(artifact.content_markdown)
                 artifact.previous_content_markdown = artifact.previous_content_markdown or ""
-            artifact = _verify_content(package, artifact)
+            artifact = _verify_content(package, artifact, repair=quality_repair)
             rendered: dict[str, bytes] = {}
-            if not verify_only:
+            if not verify_only or quality_repair or not artifact.files:
                 rendered = render_artifact(package, artifact)
                 artifact.files = [
                     TeachingArtifactFile.model_validate(item)
@@ -168,6 +215,8 @@ def run_artifact_job(package_id: str, artifact_id: str, job_id: str, *, verify_o
                 ]
                 artifact.artifact_version += 1
                 artifact.quality_passport = build_quality(package, artifact, compiled=True)
+                if artifact.status == "needs_review" and artifact.quality_passport.overall_status == "failed":
+                    artifact.status = "language_quality_failed"
             artifact.generation_token = None
             artifact.updated_at = datetime.now(timezone.utc).isoformat()
             package_status = aggregate_package_status(package)
@@ -271,11 +320,18 @@ def start_package_worker(package_id: str, package_job_id: str, artifact_job_ids:
     ).start()
 
 
-def start_artifact_worker(package_id: str, artifact_id: str, job_id: str, *, verify_only: bool = False) -> None:
+def start_artifact_worker(
+    package_id: str,
+    artifact_id: str,
+    job_id: str,
+    *,
+    verify_only: bool = False,
+    quality_repair: bool = True,
+) -> None:
     threading.Thread(
         target=run_artifact_job,
         args=(package_id, artifact_id, job_id),
-        kwargs={"verify_only": verify_only},
+        kwargs={"verify_only": verify_only, "quality_repair": quality_repair},
         name=f"teaching-artifact-{artifact_id[:8]}",
         daemon=True,
     ).start()

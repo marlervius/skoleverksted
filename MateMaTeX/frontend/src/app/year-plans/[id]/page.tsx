@@ -25,10 +25,12 @@ import {
   X,
 } from "lucide-react";
 import {
+  approveYearPlan,
   getYearPlan,
   updateYearPlan,
   updateYearPlanMaterial,
   updateYearPlanPeriod,
+  verifyYearPlan,
   yearPlanMaterialDownloadUrl,
   type MaterialKind,
   type MaterialStatus,
@@ -38,6 +40,7 @@ import {
   type YearPlanPeriodStatus,
 } from "@/lib/platform-api";
 import { isMathematicsSubject, mathematicsGenerationHref } from "@/lib/mathematics-year-plan";
+import { TruthPassport } from "@/components/truth-passport";
 
 const periodLabels: Record<YearPlanPeriodStatus, string> = {
   not_started: "Ikke startet",
@@ -263,7 +266,13 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
     if (!plan) return;
     setSavingId("plan");
     try {
-      setPlan(await updateYearPlan(plan.id, { status: plan.status === "active" ? "draft" : "active" }));
+      if (plan.status === "active") {
+        setPlan(await updateYearPlan(plan.id, { status: "draft" }));
+      } else {
+        const verified = await verifyYearPlan(plan.id);
+        const approved = await approveYearPlan(verified.id);
+        setPlan(await updateYearPlan(approved.id, { status: "active" }));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Kunne ikke oppdatere årsplanen.");
     } finally {
@@ -308,6 +317,20 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
           <div className="text-sm"><strong>{stats.approved}/{stats.materials}</strong> <span className="text-text-muted">godkjent</span></div>
         </div>
       </header>
+
+      {plan.truth_passport ? (
+        <TruthPassport passport={plan.truth_passport} />
+      ) : (
+        <div className="card border-accent-orange/30 text-sm text-accent-orange">
+          Planen er eldre eller endret. Den globale kontrollen kjøres når du velger «Ta planen i bruk».
+        </div>
+      )}
+      {(plan.quarantine?.length ?? 0) > 0 && (
+        <div className="card border-accent-orange/30 text-sm">
+          <h2 className="font-semibold">Utelatt fra årsplanen</h2>
+          <ul className="mt-2 space-y-1">{plan.quarantine!.map((item) => <li key={item.id}>{item.original_text} — {item.reason}</li>)}</ul>
+        </div>
+      )}
 
       {error && <div role="alert" className="card flex items-center gap-2 border-accent-red/30 text-sm text-accent-red"><AlertCircle className="h-4 w-4" />{error}</div>}
 

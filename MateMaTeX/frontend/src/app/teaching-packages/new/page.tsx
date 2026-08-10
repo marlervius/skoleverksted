@@ -72,6 +72,7 @@ function NewTeachingPackageForm() {
             url,
             publisher: "",
             source_tier: "other",
+            published_at: "",
             retrieved_at: new Date().toISOString(),
             origin: "teacher",
             fetch_status: "provided",

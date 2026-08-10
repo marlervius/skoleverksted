@@ -39,6 +39,12 @@ from app.auth import get_current_user, require_stream_access
 from app.config import get_config, get_settings
 from app.job_store import cleanup_old_snapshots, evict_terminal_jobs, get_job_memory, persist_terminal_job, resolve_job
 from Skoleverksted.backend.platform.queue import get_durable_job_queue
+from Skoleverksted.backend.platform.models import utc_now
+from Skoleverksted.backend.platform.quality_gate import (
+    content_digest as quality_content_digest,
+    require_export_ready,
+    source_approval_reasons,
+)
 from app.pipeline.cancel import cancel_job, clear_cancel
 from app.logging_config import configure_logging
 from app.models.state import GenerationRequest, PipelineState, PipelineStatus
@@ -471,6 +477,12 @@ async def get_result(
         "warning_reason": state.warning_reason,
         "math_verification": state.math_verification.model_dump(),
         "content_quality": state.content_quality.model_dump(),
+        "truth_passport": state.truth_passport,
+        "quality_rounds": state.quality_rounds,
+        "quarantine": state.quarantine,
+        "quality_stop_reason": state.quality_stop_reason,
+        "source_approved": state.source_approved,
+        "teacher_approved_at": state.teacher_approved_at,
         "latex_compilation": state.latex_compilation.model_dump(),
         "layout_report": state.layout_report.model_dump(),
         "layout_fix_attempts": state.layout_fix_attempts,
@@ -482,7 +494,7 @@ async def get_result(
 
 
 @app.get("/generate/{job_id}/pdf")
-async def get_job_pdf(job_id: str, user_id: str = Depends(get_current_user)):
+async def get_job_pdf(job_id: str, preview: bool = False, user_id: str = Depends(get_current_user)):
     """
     Return the compiled PDF for a completed job.
 
@@ -495,6 +507,37 @@ async def get_job_pdf(job_id: str, user_id: str = Depends(get_current_user)):
     _authorize_job(state, user_id)
     if state.status in (PipelineStatus.RUNNING, PipelineStatus.PENDING):
         raise HTTPException(status_code=202, detail="Job still running")
+
+    reasons = source_approval_reasons(
+        content=state.verification_content,
+        verification_status=str(state.truth_passport.get("status") or "missing"),
+        verified_revision=str(state.truth_passport.get("content_revision") or ""),
+        verification_version=str(state.truth_passport.get("version") or ""),
+        quarantined_texts=[
+            str(item.get("original_text") or "") for item in state.quarantine
+            if item.get("status", "withheld") == "withheld"
+        ],
+    )
+    if preview:
+        if reasons:
+            raise HTTPException(status_code=409, detail="Forhåndsvisningen er blokkert: " + "; ".join(reasons))
+    else:
+        try:
+            require_export_ready(
+                export_id="matematikk.pdf",
+                content=state.verification_content,
+                verification_status=str(state.truth_passport.get("status") or "missing"),
+                verified_revision=str(state.truth_passport.get("content_revision") or ""),
+                verification_version=str(state.truth_passport.get("version") or ""),
+                teacher_approved=bool(state.teacher_approved_at),
+                approved_revision=state.approved_digest,
+                quarantined_texts=[
+                    str(item.get("original_text") or "") for item in state.quarantine
+                    if item.get("status", "withheld") == "withheld"
+                ],
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if state.pdf_base64:
         try:
@@ -541,6 +584,29 @@ async def get_job_pdf(job_id: str, user_id: str = Depends(get_current_user)):
         filename=f"matematex_{job_id[:8]}.pdf",
         headers={"Cache-Control": "private, max-age=0, must-revalidate"},
     )
+
+
+@app.post("/generate/{job_id}/approve")
+async def approve_job(job_id: str, user_id: str = Depends(get_current_user)):
+    state = resolve_job(job_id, _jobs)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    _authorize_job(state, user_id)
+    if state.status in (PipelineStatus.RUNNING, PipelineStatus.PENDING, PipelineStatus.FAILED):
+        raise HTTPException(status_code=409, detail="Dokumentet er ikke klart for lærergodkjenning.")
+    reasons = source_approval_reasons(
+        content=state.verification_content,
+        verification_status=str(state.truth_passport.get("status") or "missing"),
+        verified_revision=str(state.truth_passport.get("content_revision") or ""),
+        verification_version=str(state.truth_passport.get("version") or ""),
+        quarantined_texts=[str(item.get("original_text") or "") for item in state.quarantine if item.get("status", "withheld") == "withheld"],
+    )
+    if reasons:
+        raise HTTPException(status_code=409, detail="Dokumentet kan ikke lærer-godkjennes: " + "; ".join(reasons))
+    state.teacher_approved_at = utc_now()
+    state.approved_digest = quality_content_digest(state.verification_content)
+    persist_terminal_job(state)
+    return {"status": "teacher_approved", "approved_at": state.teacher_approved_at, "content_revision": state.approved_digest, "quarantined_count": len(state.quarantine)}
 
 
 @app.post("/verify-latex")

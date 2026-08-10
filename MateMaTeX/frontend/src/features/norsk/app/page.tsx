@@ -605,7 +605,7 @@ export default function HomeContent() {
 
           if (progressData.step === 3) {
             pollingRef.current = false;
-            await downloadPDF(id);
+            await downloadPreviewFile(id, false);
           } else if (progressData.step === -1) {
             pollingRef.current = false;
             throw new Error(progressData.message);
@@ -793,9 +793,9 @@ export default function HomeContent() {
       if (progressData.step === 4) {
         pollingRef.current = false;
         if (dual) {
-          await downloadZip(gId);
+          await downloadPreviewFile(gId, true);
         } else {
-          await downloadPDF(gId);
+          await downloadPreviewFile(gId, false);
         }
       } else if (progressData.step === -1) {
         pollingRef.current = false;
@@ -879,8 +879,24 @@ export default function HomeContent() {
     window.URL.revokeObjectURL(objectUrl);
   }
 
+  async function downloadPreviewFile(gId: string, zip: boolean) {
+    await downloadFile(
+      `${apiUrl}/${zip ? "download-zip" : "download-pdf"}/${gId}?preview=true`,
+      zip ? "FORHÅNDSVISNING_leksjoner.zip" : "FORHÅNDSVISNING_leksjon.pdf",
+    );
+    setStatus("success");
+    setProgress(null);
+    pollingRef.current = false;
+  }
+
+  async function approveExactGeneration(gId: string) {
+    const res = await authFetch(`${apiUrl}/generation/${gId}/approve`, { method: "POST" });
+    if (!res.ok) await throwFromResponse(res);
+  }
+
   const downloadPDF = async (gId: string) => {
     try {
+      await approveExactGeneration(gId);
       await downloadFile(`${apiUrl}/download-pdf/${gId}`, "leksjon.pdf");
       setStatus("success");
       setProgress(null);
@@ -899,6 +915,7 @@ export default function HomeContent() {
 
   const downloadZip = async (gId: string) => {
     try {
+      await approveExactGeneration(gId);
       await downloadFile(`${apiUrl}/download-zip/${gId}`, "leksjoner_dual.zip");
       setStatus("success");
       setProgress(null);
@@ -1525,7 +1542,12 @@ export default function HomeContent() {
                   </button>
                 )}
                 <button
-                  type="submit"
+                    type={status === "success" ? "button" : "submit"}
+                    onClick={
+                      status === "success" && generationId
+                        ? () => (isDual ? downloadZip(generationId) : downloadPDF(generationId))
+                        : undefined
+                    }
                   disabled={!isFormValid || status === "loading"}
                   className={`
                     flex-1 py-3.5 px-6 rounded-lg font-semibold text-base
@@ -1545,7 +1567,7 @@ export default function HomeContent() {
                   {status === "loading" ? (
                     <><Loader2 className="w-5 h-5 animate-spin" /><span>Genererer...</span></>
                   ) : status === "success" ? (
-                    <><CheckCircle2 className="w-5 h-5" /><span>{isDual ? "ZIP lastet ned!" : "PDF lastet ned!"}</span></>
+                    <><CheckCircle2 className="w-5 h-5" /><span>{isDual ? "Godkjenn og last ned ZIP" : "Godkjenn og last ned PDF"}</span></>
                   ) : (
                     <><Sparkles className="w-5 h-5" /><span>{
                       dualVersion

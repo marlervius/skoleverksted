@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, BookOpenText, Calculator, CheckCircle2, Download, Languages, Loader2, PackageOpen, Sparkles } from "lucide-react";
 import { QualityPassport } from "@/components/quality-passport";
+import { TruthPassport } from "@/components/truth-passport";
 import { createThemePack, downloadThemePackGuide, listPlatformJobs, type PlatformJob, type ThemePack, type ThemePackInput } from "@/lib/platform-api";
 
 const initialForm: ThemePackInput = {
@@ -85,6 +86,15 @@ export default function ThemePackPage() {
           })}
         </div>
         <QualityPassport passport={pack.quality_passport} />
+        {pack.truth_passport && <TruthPassport passport={pack.truth_passport} />}
+        {(pack.quarantine?.length ?? 0) > 0 && (
+          <div className="rounded-xl border border-accent-orange/30 bg-accent-orange/5 p-4 text-sm">
+            <h2 className="font-semibold">Utelatt fra lærerveiledningen</h2>
+            <ul className="mt-2 space-y-2">
+              {pack.quarantine!.map((item) => <li key={item.id}><strong>{item.location}:</strong> {item.original_text} — {item.reason}</li>)}
+            </ul>
+          </div>
+        )}
         <div className="flex flex-wrap gap-3">
           <button className="btn-primary" onClick={() => void downloadThemePackGuide(pack.project.id)}><Download className="h-4 w-4" /> Last ned lærerveiledning</button>
           <Link href={`/projects/${pack.project.id}`} className="btn-secondary">Se prosjektet</Link>

@@ -104,12 +104,12 @@ export function GenerationStatus({
           </div>
           <div>
             <p className="text-accent-800 font-medium">
-              {isDual ? "ZIP-en er klar!" : "PDF-en er klar!"}
+              {isDual ? "ZIP-forhåndsvisningen er klar" : "PDF-forhåndsvisningen er klar"}
             </p>
             <p className="text-stone-500 text-sm mt-1">
               {isDual
-                ? "ZIP-arkivet med to PDF-er er lastet ned til datamaskinen din."
-                : "Filen er lastet ned til datamaskinen din."}
+                ? "Kontroller filene, og velg deretter «Godkjenn og last ned ZIP»."
+                : "Kontroller filen, og velg deretter «Godkjenn og last ned PDF»."}
             </p>
           </div>
         </div>
