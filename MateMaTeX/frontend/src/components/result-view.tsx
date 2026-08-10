@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -46,8 +47,39 @@ import {
 import { agentLabel } from "@/lib/agent-labels";
 import { PdfViewer } from "@/components/pdf-viewer";
 import { ExportModal } from "@/components/export-modal";
+import { saveYearPlanMaterial, type MaterialKind } from "@/lib/platform-api";
+import {
+  readMathematicsYearPlanContext,
+  type MathematicsYearPlanContext,
+} from "@/lib/mathematics-year-plan";
 
 type Tab = "document" | "editor" | "differentiation";
+
+const yearPlanMaterialLabels: Partial<Record<MaterialKind, string>> = {
+  learning_sheet: "Teori og oppgaver",
+  worksheet: "Oppgaveark",
+  exercise_sheet: "Oppgaveark",
+  assessment: "Prøve",
+  lesson_sequence: "Hefte",
+  differentiated: "Differensiert materiell",
+};
+
+function pdfBlobFromBase64(value: string): Blob {
+  const payload = value.includes(",") ? value.slice(value.indexOf(",") + 1) : value;
+  const bytes = Uint8Array.from(atob(payload), (character) => character.charCodeAt(0));
+  return new Blob([bytes], { type: "application/pdf" });
+}
+
+function safePdfFilename(value: string): string {
+  const stem = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase()
+    .slice(0, 70);
+  return `${stem || "matematikkmateriell"}.pdf`;
+}
 
 export function ResultView() {
   const result = useAppStore((s) => s.result);
@@ -69,6 +101,9 @@ export function ResultView() {
     classFit: false,
     mathReviewed: false,
   });
+  const [yearPlanContext, setYearPlanContext] = useState<MathematicsYearPlanContext | null>(null);
+  const [yearPlanSaveStatus, setYearPlanSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [yearPlanSaveMessage, setYearPlanSaveMessage] = useState("");
 
   // Differentiation
   const [diffData, setDiffData] = useState<{
@@ -128,6 +163,10 @@ export function ResultView() {
     if (!result?.jobId) return;
     setIsFavorite(isJobFavorite(result.jobId));
   }, [result?.jobId]);
+
+  useEffect(() => {
+    setYearPlanContext(readMathematicsYearPlanContext(new URLSearchParams(window.location.search)));
+  }, []);
 
   const selectedCompetencyGoals = useMemo(
     () => result?.generationMeta?.competencyGoals || [],
@@ -241,6 +280,53 @@ export function ResultView() {
     approvalChecks.language &&
     approvalChecks.classFit &&
     (!hasMathIssues || approvalChecks.mathReviewed);
+
+  const handleSaveToYearPlan = async () => {
+    if (!yearPlanContext || !canShare || !isSuccess) return;
+    setYearPlanSaveStatus("saving");
+    setYearPlanSaveMessage("");
+    let temporaryPdfUrl = "";
+    try {
+      let blob: Blob;
+      if (result.pdfBase64) {
+        blob = pdfBlobFromBase64(result.pdfBase64);
+      } else if (result.jobId) {
+        temporaryPdfUrl = await fetchJobPdfObjectUrl(result.jobId);
+        const response = await fetch(temporaryPdfUrl);
+        if (!response.ok) throw new Error("Kunne ikke hente den ferdige PDF-en.");
+        blob = await response.blob();
+      } else {
+        const exported = await exportPdf({ latex_content: result.fullDocument });
+        if (!exported.success || !exported.content_base64) {
+          throw new Error((exported.errors || []).join(" ") || "Kunne ikke lage PDF for årsplanen.");
+        }
+        blob = pdfBlobFromBase64(exported.content_base64);
+      }
+
+      const materialLabel = yearPlanMaterialLabels[yearPlanContext.materialKind] || "Matematikkmateriell";
+      const title = `${materialLabel}: ${yearPlanContext.topic}`;
+      const verificationNote = isVerifiedFasit
+        ? `MateMaTeX verifiserte ${result.mathVerification.claimsChecked} matematiske påstander uten avvik.`
+        : "MateMaTeX-resultatet er manuelt gjennomgått og godkjent av lærer.";
+      await saveYearPlanMaterial({
+        planId: yearPlanContext.planId,
+        periodId: yearPlanContext.periodId,
+        title,
+        kind: yearPlanContext.materialKind,
+        filename: safePdfFilename(title),
+        blob,
+        status: "approved",
+        notes: verificationNote,
+      });
+      setYearPlanSaveStatus("saved");
+      setYearPlanSaveMessage("PDF-en er godkjent og lagret på riktig periode i årsplanen.");
+    } catch (error) {
+      setYearPlanSaveStatus("error");
+      setYearPlanSaveMessage(error instanceof Error ? error.message : "Kunne ikke lagre i årsplanen.");
+    } finally {
+      if (temporaryPdfUrl) URL.revokeObjectURL(temporaryPdfUrl);
+    }
+  };
 
   /* ---- Export handlers ---- */
   const handleExport = async (format: string) => {
@@ -1274,6 +1360,39 @@ export function ResultView() {
                   )}
                 </div>
               </div>
+              {yearPlanContext && isSuccess && (
+                <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-accent-blue/20 bg-accent-blue/5 p-3">
+                  <div className="min-w-56 flex-1">
+                    <p className="text-xs font-semibold text-text-primary">Koblet til årsplanen</p>
+                    <p className="mt-1 text-xs text-text-secondary">
+                      Fullfør kvalitetssjekken for å godkjenne og lagre PDF-en på perioden «{yearPlanContext.topic}».
+                    </p>
+                    {yearPlanSaveMessage && (
+                      <p
+                        className={`mt-1 text-xs ${yearPlanSaveStatus === "error" ? "text-accent-red" : "text-accent-green"}`}
+                        role={yearPlanSaveStatus === "error" ? "alert" : "status"}
+                      >
+                        {yearPlanSaveMessage}
+                      </p>
+                    )}
+                  </div>
+                  {yearPlanSaveStatus === "saved" ? (
+                    <Link className="btn-secondary" href={`/year-plans/${yearPlanContext.planId}`}>
+                      <CheckCircle2 size={14} /> Tilbake til årsplanen
+                    </Link>
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => void handleSaveToYearPlan()}
+                      disabled={!canShare || yearPlanSaveStatus === "saving"}
+                      title={!canShare ? "Fullfør kvalitetssjekken først" : undefined}
+                    >
+                      <CheckCircle2 size={14} />
+                      {yearPlanSaveStatus === "saving" ? "Lagrer …" : "Godkjenn og lagre i årsplanen"}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <ExportModal

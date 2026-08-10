@@ -10,6 +10,12 @@ export const SUBJECTS = [
   { value: "Kroppsøving", label: "Kroppsøving", icon: "🏃" },
 ];
 
+export const YEAR_PLAN_SUBJECTS = SUBJECTS.map((subject) =>
+  subject.value === "Matematikk"
+    ? { ...subject, label: "Matematikk (MateMaTeX)" }
+    : subject,
+);
+
 export const LEVELS = [
   { value: "VG1", label: "VG1", description: "Første året" },
   { value: "VG2", label: "VG2", description: "Andre året" },

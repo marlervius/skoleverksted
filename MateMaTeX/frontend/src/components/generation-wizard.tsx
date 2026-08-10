@@ -26,6 +26,7 @@ import {
 } from "@/lib/user-preferences";
 import { getProject } from "@/lib/platform-api";
 import { loadLocal, saveLocal } from "@/lib/private-storage";
+import { readCompetencyGoals } from "@/lib/mathematics-year-plan";
 
 /* -----------------------------------------------------------------------
    Data
@@ -195,6 +196,8 @@ export function GenerationWizard() {
     const topicParam = params.get("topic");
     const gradeParam = params.get("grade") || params.get("level");
     const languageLevelParam = params.get("languageLevel");
+    const competencyGoalsParam = readCompetencyGoals(params);
+    const extraInstructionsParam = params.get("extraInstructions");
     const projectId = params.get("project");
     const defaultGrade =
       prefs.grade ||
@@ -208,6 +211,13 @@ export function GenerationWizard() {
       materialType: template
         ? materialTypeFromTemplate(template)
         : materialTypeParam || prefs.materialType,
+      competencyGoals: competencyGoalsParam.length > 0
+        ? competencyGoalsParam
+        : Array.isArray(draft.competencyGoals)
+          ? draft.competencyGoals.filter((goal): goal is string => typeof goal === "string")
+          : [],
+      extraInstructions: extraInstructionsParam
+        || (typeof draft.extraInstructions === "string" ? draft.extraInstructions : ""),
     });
     if (projectId) {
       void getProject(projectId).then((project) => {
