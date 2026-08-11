@@ -39,6 +39,22 @@ export interface MathematicsYearPlanContext {
   topic: string;
 }
 
+export interface MathematicsYearPlanPrefill extends MathematicsYearPlanContext {
+  grade: string;
+  materialType: string;
+  competencyGoals: string[];
+  extraInstructions: string;
+}
+
+export interface MathematicsMaterialPreset {
+  includeTheory: boolean;
+  includeExamples: boolean;
+  includeExercises: boolean;
+  includeSolutions: boolean;
+}
+
+export const MATEMATEX_SETTINGS_STEP = 2;
+
 export function isMathematicsSubject(subject: string): boolean {
   return subject.trim().toLocaleLowerCase("nb-NO") === "matematikk";
 }
@@ -53,13 +69,34 @@ export function mathematicsMaterialType(kind: MaterialKind): string {
   return materialTypeMap[kind] || "arbeidsark";
 }
 
-function periodInstructions(period: YearPlanPeriod): string {
+export function mathematicsMaterialPreset(kind: MaterialKind): MathematicsMaterialPreset {
+  if (kind === "worksheet" || kind === "exercise_sheet" || kind === "assessment") {
+    return {
+      includeTheory: false,
+      includeExamples: false,
+      includeExercises: true,
+      includeSolutions: true,
+    };
+  }
+  return {
+    includeTheory: true,
+    includeExamples: true,
+    includeExercises: true,
+    includeSolutions: true,
+  };
+}
+
+function periodInstructions(plan: YearPlan, period: YearPlanPeriod): string {
   return [
+    `Årsplan: ${plan.title}`,
+    `Fag og nivå: ${plan.subject}, ${plan.level}`,
+    `Periode: ${period.title} (${period.duration_weeks} uker, ${period.lesson_count} undervisningstimer)`,
     period.overview,
     period.learning_goals.length ? `Læringsmål: ${period.learning_goals.join("; ")}` : "",
     period.key_concepts.length ? `Sentrale begreper: ${period.key_concepts.join(", ")}` : "",
     period.suggested_activities.length ? `Foreslåtte aktiviteter: ${period.suggested_activities.join("; ")}` : "",
     period.assessment ? `Vurdering: ${period.assessment}` : "",
+    period.teacher_notes ? `Lærerens notater: ${period.teacher_notes}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -77,7 +114,7 @@ export function mathematicsGenerationHref(
     period: period.id,
     materialKind: kind,
     competencyGoals: JSON.stringify(period.competency_goals),
-    extraInstructions: periodInstructions(period),
+    extraInstructions: periodInstructions(plan, period),
   });
   return `/matematikk?${query.toString()}`;
 }
@@ -104,4 +141,19 @@ export function readCompetencyGoals(params: URLSearchParams): string[] {
   } catch {
     return [];
   }
+}
+
+export function readMathematicsYearPlanPrefill(
+  params: URLSearchParams,
+): MathematicsYearPlanPrefill | null {
+  const context = readMathematicsYearPlanContext(params);
+  const grade = params.get("grade")?.trim() || "";
+  if (!context || !supportedLevels.has(grade)) return null;
+  return {
+    ...context,
+    grade,
+    materialType: mathematicsMaterialType(context.materialKind),
+    competencyGoals: readCompetencyGoals(params),
+    extraInstructions: params.get("extraInstructions")?.trim() || "",
+  };
 }

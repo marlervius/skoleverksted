@@ -4,9 +4,12 @@ import {
   isMathematicsSubject,
   mathematicsGenerationHref,
   mathematicsGradeForLevel,
+  mathematicsMaterialPreset,
   mathematicsMaterialType,
+  MATEMATEX_SETTINGS_STEP,
   readCompetencyGoals,
   readMathematicsYearPlanContext,
+  readMathematicsYearPlanPrefill,
 } from "./mathematics-year-plan";
 
 const period: YearPlanPeriod = {
@@ -80,11 +83,42 @@ describe("mathematics year-plan integration", () => {
     expect(params.get("period")).toBe("period-2");
     expect(readCompetencyGoals(params)).toEqual(period.competency_goals);
     expect(params.get("extraInstructions")).toContain("Derivere polynomer");
+    expect(params.get("extraInstructions")).toContain("Matematikk VG2");
+    expect(params.get("extraInstructions")).toContain("4 uker, 12 undervisningstimer");
     expect(readMathematicsYearPlanContext(params)).toEqual({
       planId: "plan-1",
       periodId: "period-2",
       materialKind: "assessment",
       topic: "Derivasjon",
+    });
+    expect(readMathematicsYearPlanPrefill(params)).toEqual({
+      planId: "plan-1",
+      periodId: "period-2",
+      materialKind: "assessment",
+      topic: "Derivasjon",
+      grade: "VG2 R1",
+      materialType: "prøve",
+      competencyGoals: period.competency_goals,
+      extraInstructions: params.get("extraInstructions"),
+    });
+  });
+
+  it("opens a complete annual-plan handoff on the settings step with authoritative content choices", () => {
+    const params = new URLSearchParams(
+      mathematicsGenerationHref(plan, period, "learning_sheet").split("?")[1],
+    );
+    const prefill = readMathematicsYearPlanPrefill(params);
+
+    expect(MATEMATEX_SETTINGS_STEP).toBe(2);
+    expect(prefill?.grade).toBe("VG2 R1");
+    expect(prefill?.topic).toBe("Derivasjon");
+    expect(prefill?.materialType).toBe("kapittel");
+    expect(prefill?.competencyGoals).toEqual(period.competency_goals);
+    expect(mathematicsMaterialPreset("learning_sheet")).toEqual({
+      includeTheory: true,
+      includeExamples: true,
+      includeExercises: true,
+      includeSolutions: true,
     });
   });
 
@@ -92,6 +126,9 @@ describe("mathematics year-plan integration", () => {
     expect(readMathematicsYearPlanContext(new URLSearchParams("yearPlan=plan-1"))).toBeNull();
     expect(readMathematicsYearPlanContext(new URLSearchParams(
       "yearPlan=plan-1&period=period-2&topic=Test&materialKind=other",
+    ))).toBeNull();
+    expect(readMathematicsYearPlanPrefill(new URLSearchParams(
+      "yearPlan=plan-1&period=period-2&topic=Test&materialKind=assessment&grade=ukjent",
     ))).toBeNull();
     expect(readCompetencyGoals(new URLSearchParams("competencyGoals=not-json"))).toEqual([]);
   });

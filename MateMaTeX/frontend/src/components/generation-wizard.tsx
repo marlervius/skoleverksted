@@ -26,7 +26,13 @@ import {
 } from "@/lib/user-preferences";
 import { getProject } from "@/lib/platform-api";
 import { loadLocal, saveLocal } from "@/lib/private-storage";
-import { readCompetencyGoals } from "@/lib/mathematics-year-plan";
+import {
+  mathematicsMaterialPreset,
+  MATEMATEX_SETTINGS_STEP,
+  readCompetencyGoals,
+  readMathematicsYearPlanPrefill,
+  type MathematicsYearPlanPrefill,
+} from "@/lib/mathematics-year-plan";
 
 /* -----------------------------------------------------------------------
    Data
@@ -179,6 +185,9 @@ export function GenerationWizard() {
   );
   const [estimateLoading, setEstimateLoading] = useState(false);
   const [showAllGrades, setShowAllGrades] = useState(false);
+  const [yearPlanPrefill, setYearPlanPrefill] = useState<MathematicsYearPlanPrefill | null>(null);
+
+  const totalSteps = 3;
 
   const visibleGrades = useMemo(() => {
     if (showAllGrades || LAUNCH_GRADES.length === 0) return GRADES;
@@ -198,27 +207,44 @@ export function GenerationWizard() {
     const languageLevelParam = params.get("languageLevel");
     const competencyGoalsParam = readCompetencyGoals(params);
     const extraInstructionsParam = params.get("extraInstructions");
+    const annualPlanPrefill = readMathematicsYearPlanPrefill(params);
     const projectId = params.get("project");
     const defaultGrade =
       prefs.grade ||
       (LAUNCH_GRADES.length > 0 ? LAUNCH_GRADES[0] : GRADES[0]?.value) ||
       "VG1 1T";
+    const selectedGrade = annualPlanPrefill?.grade || gradeParam || defaultGrade;
+    const annualPlanMaterialPreset = annualPlanPrefill
+      ? mathematicsMaterialPreset(annualPlanPrefill.materialKind)
+      : {};
     setRequest({
       ...(draft as Partial<typeof request>),
-      grade: gradeParam || defaultGrade,
-      topic: topicParam || (typeof draft.topic === "string" ? draft.topic : ""),
+      grade: selectedGrade,
+      topic: annualPlanPrefill?.topic || topicParam || (typeof draft.topic === "string" ? draft.topic : ""),
       languageLevel: languageLevelParam?.toLowerCase() || prefs.languageLevel,
-      materialType: template
+      materialType: annualPlanPrefill?.materialType || (template
         ? materialTypeFromTemplate(template)
-        : materialTypeParam || prefs.materialType,
-      competencyGoals: competencyGoalsParam.length > 0
+        : materialTypeParam || prefs.materialType),
+      competencyGoals: annualPlanPrefill
+        ? annualPlanPrefill.competencyGoals
+        : competencyGoalsParam.length > 0
         ? competencyGoalsParam
         : Array.isArray(draft.competencyGoals)
           ? draft.competencyGoals.filter((goal): goal is string => typeof goal === "string")
           : [],
-      extraInstructions: extraInstructionsParam
-        || (typeof draft.extraInstructions === "string" ? draft.extraInstructions : ""),
+      extraInstructions: annualPlanPrefill
+        ? annualPlanPrefill.extraInstructions
+        : extraInstructionsParam || (typeof draft.extraInstructions === "string" ? draft.extraInstructions : ""),
+      ...annualPlanMaterialPreset,
     });
+    if (annualPlanPrefill) {
+      setYearPlanPrefill(annualPlanPrefill);
+      setDirection(1);
+      setStep(MATEMATEX_SETTINGS_STEP);
+      setShowAllGrades(!LAUNCH_GRADES.includes(selectedGrade));
+    } else {
+      setYearPlanPrefill(null);
+    }
     if (projectId) {
       void getProject(projectId).then((project) => {
         const source = typeof project.metadata?.source_text === "string" ? project.metadata.source_text : "";
@@ -239,8 +265,6 @@ export function GenerationWizard() {
       closeActiveStream();
     };
   }, []);
-
-  const totalSteps = 3;
 
   const filteredGoals: CompetencyGoal[] = useMemo(
     () => searchGoals(request.grade, goalSearch),
@@ -679,6 +703,21 @@ export function GenerationWizard() {
               exit="exit"
               transition={{ duration: 0.25, ease: "easeInOut" }}
             >
+              {yearPlanPrefill && (
+                <div className="mb-5 rounded-xl border border-accent-green/30 bg-accent-green/5 p-4">
+                  <div className="flex items-start gap-3">
+                    <Sparkles className="mt-0.5 h-5 w-5 shrink-0 text-accent-green" />
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-accent-green">Klar fra årsplanen</p>
+                      <h2 className="mt-1 font-semibold text-text-primary">{request.grade} · {request.topic}</h2>
+                      <p className="mt-1 text-xs leading-relaxed text-text-secondary">
+                        {request.competencyGoals.length} kompetansemål og periodens oversikt, læringsmål,
+                        aktiviteter og vurdering er tatt med. Kontroller eventuelle valg og start produksjonen.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
               <h2 className="font-display text-2xl mb-2 text-center">
                 Type og innstillinger
               </h2>
@@ -696,6 +735,7 @@ export function GenerationWizard() {
                   <button
                     type="button"
                     key={type.value}
+                    aria-pressed={request.materialType === type.value}
                     onClick={() => setRequest({ materialType: type.value })}
                     className={`card-interactive !p-4 text-center relative ${
                       request.materialType === type.value
@@ -995,7 +1035,7 @@ export function GenerationWizard() {
               className="btn-primary !px-8 shadow-lg shadow-accent-blue/20 disabled:opacity-40 disabled:shadow-none"
             >
               <Sparkles size={16} />
-              Generer materiale
+              {yearPlanPrefill ? "Start produksjonen" : "Generer materiale"}
             </button>
           </div>
         )}
