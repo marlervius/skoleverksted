@@ -87,6 +87,7 @@ def _safe_summary(payload: Any) -> dict[str, Any]:
     fields = (
         "topic", "theme", "subject", "level", "grade", "material_type",
         "package_id", "artifact_id", "artifact_type", "package_revision",
+        "school_year", "number_of_periods",
     )
 
     def value(field: str) -> Any:

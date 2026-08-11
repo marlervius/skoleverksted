@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import logging
+import hashlib
 import io
+import logging
 import zipfile
 from urllib.parse import quote, urlencode
 from uuid import uuid4
@@ -33,6 +34,7 @@ from .models import (
     YearPlan,
     YearPlanCreate,
     YearPlanGenerateRequest,
+    YearPlanJobAccepted,
     YearPlanMaterialCreate,
     YearPlanMaterialUpdate,
     YearPlanPeriodUpdate,
@@ -59,7 +61,7 @@ from .quality_gate import content_digest as gate_content_digest, require_export_
 from .repair import RepairConflictError, get_repair_service
 from .store import get_platform_store
 from .queue import get_durable_job_queue
-from .year_planner import build_year_plan
+from .year_plan_jobs import start_year_plan_worker
 from .truth import TruthAudit
 from .teaching_package import (
     ARTIFACT_TITLES,
@@ -1085,46 +1087,46 @@ def create_year_plan(request: YearPlanCreate):
     return get_platform_store().create_year_plan(request)
 
 
-@router.post("/year-plans/generate", response_model=YearPlan, status_code=201)
-def generate_year_plan(request: YearPlanGenerateRequest):
-    proposal = build_year_plan(request)
-    canonical = proposal.model_dump_json(exclude={
-        "truth_passport", "quality_rounds", "quarantine", "quality_stop_reason",
-        "content_revision", "approved_at", "approved_revision",
-    })
-    deterministic_audit = None
-    if not request.use_ai:
-        deterministic_audit = lambda **kwargs: TruthAudit(
-            content=kwargs["content"],
-            passport=TruthPassport(
-                version="2.0",
-                status="verified",
-                topic=proposal.title,
-                subject=proposal.subject,
-                coverage_percent=100,
-                summary="Deterministisk reserveplan; rammer og mål er lærerinput.",
-            ),
+@router.post("/year-plans/generate", response_model=YearPlanJobAccepted, status_code=202)
+def generate_year_plan(payload: YearPlanGenerateRequest, request: Request):
+    """Register generation before any model call and return immediately."""
+    operation_id = _operation_id(request)
+    operation_digest = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()[:24]
+    job_id = f"year-plan:{operation_digest}"
+    store = get_platform_store()
+    queue = get_durable_job_queue()
+    existing = store.get_job(job_id)
+    active = {"queued", "planning", "generating", "verifying", "rendering"}
+    if existing and existing.status in active:
+        plan_id = str(existing.result_summary.get("plan_id") or "") or None
+        return YearPlanJobAccepted(
+            job_id=existing.id,
+            status=existing.status,
+            status_url=f"/api/platform/jobs/{quote(existing.id, safe='')}",
+            plan_id=plan_id,
         )
-    quality = run_quality_pipeline(
-        generator_id="platform.year_plan",
-        content=canonical,
-        topic=proposal.title,
-        subject=proposal.subject,
-        level=proposal.level,
-        **({"audit": deterministic_audit} if deterministic_audit else {}),
+    if existing and existing.status == "completed":
+        plan_id = str(existing.result_summary.get("plan_id") or "") or None
+        if plan_id and store.get_year_plan(plan_id) is not None:
+            return YearPlanJobAccepted(
+                job_id=existing.id,
+                status=existing.status,
+                status_url=f"/api/platform/jobs/{quote(existing.id, safe='')}",
+                plan_id=plan_id,
+            )
+
+    job = queue.enqueue(
+        job_id,
+        module="platform",
+        kind="year_plan_generation",
+        payload=payload,
     )
-    if not quality.source_approved:
-        raise HTTPException(status_code=409, detail="Årsplanen ble blokkert av den globale kvalitetskontrollen.")
-    try:
-        proposal = YearPlanCreate.model_validate_json(quality.approved_content)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail="Kontrollert årsplan kunne ikke leses som sikker struktur.") from exc
-    proposal.truth_passport = quality.passport
-    proposal.quality_rounds = quality.rounds
-    proposal.quarantine = quality.quarantine
-    proposal.quality_stop_reason = quality.stop_reason
-    proposal.content_revision = gate_content_digest(quality.approved_content)
-    return get_platform_store().create_year_plan(proposal)
+    start_year_plan_worker(job.id, payload)
+    return YearPlanJobAccepted(
+        job_id=job.id,
+        status=job.status,
+        status_url=f"/api/platform/jobs/{quote(job.id, safe='')}",
+    )
 
 
 @router.post("/year-plans/{plan_id}/approve", response_model=YearPlan)

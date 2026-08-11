@@ -13,11 +13,11 @@ from Skoleverksted.backend.platform.models import (
 from Skoleverksted.backend.platform.router import (
     delete_year_plan,
     download_year_plan_material,
-    generate_year_plan,
     save_year_plan_material,
     update_year_plan_period,
 )
 from Skoleverksted.backend.platform.store import PlatformStore
+from Skoleverksted.backend.platform.year_plan_jobs import build_verified_year_plan
 
 
 class YearPlanApiTests(unittest.TestCase):
@@ -35,8 +35,8 @@ class YearPlanApiTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_generate_edit_save_and_download_material(self):
-        plan = generate_year_plan(
-            YearPlanGenerateRequest(
+        plan = self.store.create_year_plan(
+            build_verified_year_plan(YearPlanGenerateRequest(
                 subject="Historie",
                 level="VG2",
                 school_year="2026-2027",
@@ -47,7 +47,7 @@ class YearPlanApiTests(unittest.TestCase):
                 competency_goals=["utforske fortiden gjennom kilder"],
                 constraints="",
                 use_ai=False,
-            ),
+            )),
         )
         self.assertEqual(len(plan.periods), 8)
 
@@ -98,8 +98,8 @@ class YearPlanApiTests(unittest.TestCase):
         self.assertIn("kilder.pdf", downloaded.headers["content-disposition"])
 
     def test_delete_year_plan(self):
-        plan = generate_year_plan(
-            YearPlanGenerateRequest(
+        plan = self.store.create_year_plan(
+            build_verified_year_plan(YearPlanGenerateRequest(
                 subject="Naturfag",
                 level="VG1",
                 school_year="2026-2027",
@@ -110,7 +110,7 @@ class YearPlanApiTests(unittest.TestCase):
                 competency_goals=[],
                 constraints="",
                 use_ai=False,
-            ),
+            )),
         )
 
         result = delete_year_plan(plan.id)
