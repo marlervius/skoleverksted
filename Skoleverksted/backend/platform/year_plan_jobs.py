@@ -10,7 +10,12 @@ from __future__ import annotations
 import logging
 import threading
 
-from .models import TruthPassport, YearPlanCreate, YearPlanGenerateRequest
+from .models import (
+    QualityQuarantineItem,
+    TruthPassport,
+    YearPlanCreate,
+    YearPlanGenerateRequest,
+)
 from .quality_gate import content_digest, run_quality_pipeline
 from .queue import get_durable_job_queue
 from .store import get_platform_store
@@ -25,6 +30,42 @@ class YearPlanGenerationError(RuntimeError):
     """A teacher-safe generation failure."""
 
 
+_AI_FALLBACK_REASON = (
+    "AI-utkastet bestod ikke kildesjekken og ble forkastet. "
+    "Planen du ser er en kontrollert reserveplan basert på lærerens mål og faste rammer."
+)
+
+
+def _mark_safe_fallback(plan: YearPlanCreate) -> YearPlanCreate:
+    """Make the fail-closed fallback visible without retaining AI text."""
+    plan.quality_stop_reason = _AI_FALLBACK_REASON
+    plan.quarantine = [
+        QualityQuarantineItem(
+            content_type="interpretation",
+            original_text="AI-generert årsplanutkast",
+            location="Automatisk årsplanlegging",
+            reason=(
+                "Utkastet kunne ikke kildegodkjennes etter den automatiske "
+                "revisjonsløkken og er derfor ikke lagret."
+            ),
+            suggested_replacement="Kontrollert, deterministisk reserveplan",
+            omission_consequence=(
+                "Ingen tekst fra det avviste AI-utkastet er med i årsplanen. "
+                "Lærerens innsendte kompetansemål er bevart."
+            ),
+            status="removed",
+        ),
+        *plan.quarantine,
+    ]
+    if plan.truth_passport is not None:
+        plan.truth_passport.summary = (
+            "AI-utkastet ble forkastet av kildesjekken. Lagret plan er en "
+            "deterministisk reserveplan med lærerens egne mål og uten "
+            "ukontrollert AI-tekst."
+        )
+    return plan
+
+
 def _verify_year_plan(
     proposal: YearPlanCreate,
     request: YearPlanGenerateRequest,
@@ -34,7 +75,7 @@ def _verify_year_plan(
         "content_revision", "approved_at", "approved_revision",
     })
     deterministic_audit = None
-    if not request.use_ai:
+    if proposal.planning_source == "fallback":
         deterministic_audit = lambda **kwargs: TruthAudit(
             content=kwargs["content"],
             passport=TruthPassport(
@@ -55,6 +96,16 @@ def _verify_year_plan(
         **({"audit": deterministic_audit} if deterministic_audit else {}),
     )
     if not quality.source_approved:
+        if request.use_ai:
+            logger.warning(
+                "AI-utkastet til årsplanen %s ble blokkert; bygger kontrollert reserveplan.",
+                proposal.title,
+            )
+            fallback_request = request.model_copy(update={"use_ai": False})
+            fallback = build_year_plan(fallback_request)
+            if _AI_FALLBACK_REASON not in fallback.notes:
+                fallback.notes = f"{_AI_FALLBACK_REASON} {fallback.notes}".strip()
+            return _mark_safe_fallback(_verify_year_plan(fallback, fallback_request))
         raise YearPlanGenerationError(
             "Årsplanen kunne ikke kildegodkjennes automatisk. Prøv igjen; ingen ukontrollert plan ble lagret."
         )
@@ -122,9 +173,19 @@ def run_year_plan_job(job_id: str, request: YearPlanGenerateRequest) -> None:
                     "subject": plan.subject,
                     "level": plan.level,
                     "school_year": plan.school_year,
+                    "planning_source": plan.planning_source,
                 },
             )
-            queue.finish(job_id, message="Årsplanen er ferdig generert og kildekontrollert.")
+            if plan.planning_source == "fallback":
+                queue.finish(
+                    job_id,
+                    message=(
+                        "AI-utkastet ble forkastet. En trygg reserveplan er "
+                        "lagret med lærerens kompetansemål."
+                    ),
+                )
+            else:
+                queue.finish(job_id, message="Årsplanen er ferdig generert og kildekontrollert.")
     except YearPlanGenerationError as exc:
         queue.fail(job_id, str(exc))
     except Exception:
