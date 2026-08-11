@@ -10,9 +10,11 @@ from starlette.requests import Request
 
 from Skoleverksted.backend.platform import router as router_module
 from Skoleverksted.backend.platform.models import Job, YearPlanGenerateRequest
+from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline as real_quality_pipeline
 from Skoleverksted.backend.platform.router import generate_year_plan
 from Skoleverksted.backend.platform.store import PlatformStore
-from Skoleverksted.backend.platform.year_plan_jobs import run_year_plan_job
+from Skoleverksted.backend.platform.year_planner import build_year_plan as real_build_year_plan
+from Skoleverksted.backend.platform.year_plan_jobs import build_verified_year_plan, run_year_plan_job
 
 
 class FakeQueue:
@@ -119,31 +121,139 @@ def test_worker_completes_after_the_registering_request_has_returned():
         assert plan.truth_passport.status == "verified"
 
 
-def test_worker_never_saves_a_plan_that_quality_control_blocks():
+def _fake_ai_plan(request: YearPlanGenerateRequest):
+    plan = real_build_year_plan(request.model_copy(update={"use_ai": False}))
+    if request.use_ai:
+        plan.planning_source = "ai"
+        plan.periods[0].overview = "Uverifisert tekst fra AI-utkastet."
+    return plan
+
+
+def test_worker_discards_blocked_ai_draft_and_saves_safe_fallback():
     with tempfile.TemporaryDirectory() as temp_dir:
         store = PlatformStore(Path(temp_dir) / "platform.sqlite3")
         queue = FakeQueue(store)
+        request = year_plan_request().model_copy(update={"use_ai": True})
         job = queue.enqueue(
             "year-plan:blocked",
             module="platform",
             kind="year_plan_generation",
-            payload=year_plan_request(),
+            payload=request,
+        )
+
+        def quality_pipeline(**kwargs):
+            if "audit" not in kwargs:
+                return SimpleNamespace(source_approved=False)
+            return real_quality_pipeline(**kwargs)
+
+        with (
+            patch("Skoleverksted.backend.platform.year_plan_jobs.get_platform_store", return_value=store),
+            patch("Skoleverksted.backend.platform.year_plan_jobs.get_durable_job_queue", return_value=queue),
+            patch(
+                "Skoleverksted.backend.platform.year_plan_jobs.build_year_plan",
+                side_effect=_fake_ai_plan,
+            ),
+            patch(
+                "Skoleverksted.backend.platform.year_plan_jobs.run_quality_pipeline",
+                side_effect=quality_pipeline,
+            ),
+        ):
+            run_year_plan_job(job.id, request)
+
+        finished = store.get_job(job.id)
+        assert finished is not None
+        assert finished.status == "completed"
+        assert "trygg reserveplan" in finished.message
+        plan = store.list_year_plans()[0]
+        assert plan.planning_source == "fallback"
+        assert plan.truth_passport is not None
+        assert plan.truth_passport.status == "verified"
+        assert "Uverifisert tekst fra AI-utkastet" not in plan.model_dump_json()
+        assert "forkastet" in plan.notes
+        assert plan.quarantine[0].original_text == "AI-generert årsplanutkast"
+        assert plan.quarantine[0].status == "removed"
+
+
+def test_worker_still_fails_closed_when_safe_fallback_is_blocked():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        store = PlatformStore(Path(temp_dir) / "platform.sqlite3")
+        queue = FakeQueue(store)
+        request = year_plan_request().model_copy(update={"use_ai": True})
+        job = queue.enqueue(
+            "year-plan:fallback-blocked",
+            module="platform",
+            kind="year_plan_generation",
+            payload=request,
         )
         with (
             patch("Skoleverksted.backend.platform.year_plan_jobs.get_platform_store", return_value=store),
             patch("Skoleverksted.backend.platform.year_plan_jobs.get_durable_job_queue", return_value=queue),
             patch(
+                "Skoleverksted.backend.platform.year_plan_jobs.build_year_plan",
+                side_effect=_fake_ai_plan,
+            ),
+            patch(
                 "Skoleverksted.backend.platform.year_plan_jobs.run_quality_pipeline",
                 return_value=SimpleNamespace(source_approved=False),
             ),
         ):
-            run_year_plan_job(job.id, year_plan_request())
+            run_year_plan_job(job.id, request)
 
         failed = store.get_job(job.id)
         assert failed is not None
         assert failed.status == "failed"
         assert "kildegodkjennes" in failed.message
         assert store.list_year_plans() == []
+
+
+def test_mathematics_plan_keeps_teacher_goals_when_ai_draft_is_rejected():
+    goals = [
+        "rekne ut stigningstalet til ein lineær funksjon og bruke det til å forklare omgrep",
+        "utforske samanhengen mellom konstant prosentvis endring og vekstfaktor",
+        "hente ut og tolke relevant informasjon frå tekstar om kjøp og sal",
+        "planleggje, utføre og presentere eit utforskande arbeid knytt til personleg økonomi",
+        "bruke funksjonar i modellering og argumentere for framgangsmåtar og resultat",
+        "modellere situasjonar knytte til reelle datasett og presentere resultata",
+        "utforske matematiske eigenskapar og samanhengar ved å bruke programmering",
+    ]
+    request = YearPlanGenerateRequest(
+        subject="Matematikk",
+        level="10. trinn",
+        school_year="2026-2027",
+        lessons_per_week=3,
+        lesson_minutes=45,
+        teaching_weeks=38,
+        number_of_periods=9,
+        competency_goals=goals,
+        constraints="",
+        use_ai=True,
+    )
+
+    def quality_pipeline(**kwargs):
+        if "audit" not in kwargs:
+            return SimpleNamespace(source_approved=False)
+        return real_quality_pipeline(**kwargs)
+
+    with (
+        patch(
+            "Skoleverksted.backend.platform.year_plan_jobs.build_year_plan",
+            side_effect=_fake_ai_plan,
+        ),
+        patch(
+            "Skoleverksted.backend.platform.year_plan_jobs.run_quality_pipeline",
+            side_effect=quality_pipeline,
+        ),
+    ):
+        plan = build_verified_year_plan(request)
+
+    period_goals = {goal for period in plan.periods for goal in period.competency_goals}
+    assert plan.planning_source == "fallback"
+    assert len(plan.periods) == 9
+    assert plan.competency_goals == goals
+    assert period_goals == set(goals)
+    assert "Uverifisert tekst fra AI-utkastet" not in plan.model_dump_json()
+    assert plan.truth_passport is not None
+    assert plan.truth_passport.status == "verified"
 
 
 def test_http_flow_returns_202_then_exposes_the_completed_plan():

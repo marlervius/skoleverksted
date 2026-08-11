@@ -21,6 +21,7 @@ import {
   Presentation,
   RefreshCw,
   Save,
+  ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
@@ -323,6 +324,19 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
           <div className="text-sm"><strong>{stats.approved}/{stats.materials}</strong> <span className="text-text-muted">godkjent</span></div>
         </div>
       </header>
+
+      {plan.planning_source === "fallback" && (
+        <div role="status" className="card flex items-start gap-3 border-accent-orange/30 bg-accent-orange/5 text-sm">
+          <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-accent-orange" />
+          <div>
+            <h2 className="font-semibold text-text-primary">Trygg reserveplan</h2>
+            <p className="mt-1 text-text-secondary">
+              AI-utkastet bestod ikke hele kontrollen og er ikke med. Denne planen bruker faste,
+              kontrollerte rammer og bevarer kompetansemålene du skrev inn. Du kan redigere alle perioder før bruk.
+            </p>
+          </div>
+        </div>
+      )}
 
       {plan.truth_passport ? (
         <TruthPassport passport={plan.truth_passport} />
