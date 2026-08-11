@@ -460,6 +460,13 @@ class YearPlanGenerateRequest(BaseModel):
     use_ai: bool = True
 
 
+class YearPlanJobAccepted(BaseModel):
+    job_id: str
+    status: JobStatus
+    status_url: str
+    plan_id: str | None = None
+
+
 class YearPlanCreate(BaseModel):
     title: str = Field(min_length=2, max_length=180)
     subject: str = Field(min_length=2, max_length=120)

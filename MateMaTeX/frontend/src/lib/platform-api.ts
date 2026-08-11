@@ -149,6 +149,13 @@ export interface PlatformJob {
   updated_at: string;
 }
 
+export interface YearPlanJobAccepted {
+  job_id: string;
+  status: string;
+  status_url: string;
+  plan_id: string | null;
+}
+
 export type RepairJobStatus =
   | "queued"
   | "running"
@@ -742,7 +749,7 @@ async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 150_
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new PlatformApiError(
-        "Handlingen tok for lang tid og ble avbrutt. Kapittelet er ikke endret; prøv igjen.",
+        "Serveren rakk ikke å svare innen tidsgrensen. Prøv igjen; lagret arbeid blir ikke overskrevet.",
         { status: 408, code: "request_timeout", retryable: true },
       );
     }
@@ -768,6 +775,8 @@ export const listProjects = (limit = 50) => requestJson<Project[]>(`/projects?li
 export const getProject = (id: string) => requestJson<Project>(`/projects/${encodeURIComponent(id)}`);
 export const listPlatformJobs = (limit = 100, projectId?: string) =>
   requestJson<PlatformJob[]>(`/jobs?limit=${limit}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`);
+export const getPlatformJob = (jobId: string) =>
+  requestJson<PlatformJob>(`/jobs/${encodeURIComponent(jobId)}`, undefined, 20_000);
 export const listQueue = (limit = 100) => requestJson<PlatformJob[]>(`/queue?limit=${limit}`);
 export const cancelPlatformJob = (jobId: string) =>
   requestJson<PlatformJob>(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
@@ -789,11 +798,12 @@ export const deleteYearPlan = (id: string) =>
   requestJson<{ deleted: true; id: string }>(`/year-plans/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
-export const generateYearPlan = (input: YearPlanGenerateInput) =>
-  requestJson<YearPlan>("/year-plans/generate", {
+export const generateYearPlan = (input: YearPlanGenerateInput, operationId: string) =>
+  requestJson<YearPlanJobAccepted>("/year-plans/generate", {
     method: "POST",
     body: JSON.stringify(input),
-  });
+    headers: { "x-operation-id": operationId },
+  }, 30_000);
 export const updateYearPlan = (id: string, input: Partial<YearPlan>) =>
   requestJson<YearPlan>(`/year-plans/${encodeURIComponent(id)}`, {
     method: "PATCH",

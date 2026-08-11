@@ -269,7 +269,13 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
       if (plan.status === "active") {
         setPlan(await updateYearPlan(plan.id, { status: "draft" }));
       } else {
-        const verified = await verifyYearPlan(plan.id);
+        const passportIsCurrent = Boolean(
+          plan.truth_passport?.status === "verified"
+          && plan.truth_passport.version === "2.0"
+          && plan.content_revision
+          && plan.truth_passport.content_revision === plan.content_revision,
+        );
+        const verified = passportIsCurrent ? plan : await verifyYearPlan(plan.id);
         const approved = await approveYearPlan(verified.id);
         setPlan(await updateYearPlan(approved.id, { status: "active" }));
       }

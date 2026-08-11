@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitRepairJob,
   deleteYearPlan,
+  generateYearPlan,
   getChapterRepairJob,
+  getPlatformJob,
   isActiveRepairStatus,
   isTerminalRepairStatus,
   projectTasks,
@@ -200,5 +202,60 @@ describe("year plan client", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toContain("/year-plans/plan%2F1");
     expect(init.method).toBe("DELETE");
+  });
+
+  it("registers generation with a stable operation id", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({
+      job_id: "year-plan:abc",
+      status: "queued",
+      status_url: "/api/platform/jobs/year-plan%3Aabc",
+      plan_id: null,
+    }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const accepted = await generateYearPlan({
+      subject: "Matematikk",
+      level: "FOV modul 4",
+      school_year: "2026-2027",
+      lessons_per_week: 4,
+      lesson_minutes: 45,
+      teaching_weeks: 38,
+      number_of_periods: 9,
+      competency_goals: [],
+      constraints: "",
+      use_ai: true,
+    }, "operation-42");
+
+    expect(accepted.job_id).toBe("year-plan:abc");
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["x-operation-id"]).toBe("operation-42");
+  });
+
+  it("reads progress through the small job-status endpoint", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({
+      id: "year-plan:abc",
+      module: "platform",
+      kind: "year_plan_generation",
+      status: "verifying",
+      progress: 50,
+      message: "Kontrollerer fakta",
+      project_id: null,
+      request_summary: {},
+      result_summary: {},
+      quality_passport: {},
+      queue_position: null,
+      retryable: true,
+      attempt: 1,
+      created_at: "2026-08-11T00:00:00Z",
+      updated_at: "2026-08-11T00:00:01Z",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const job = await getPlatformJob("year-plan:abc");
+
+    expect(job.status).toBe("verifying");
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain("year-plan%3Aabc");
   });
 });

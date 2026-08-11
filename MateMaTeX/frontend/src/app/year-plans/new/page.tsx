@@ -1,12 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CalendarRange, Clock3, Loader2, Sparkles } from "lucide-react";
 import { YEAR_PLAN_LEVELS, YEAR_PLAN_SUBJECTS } from "@/features/fag/components/constants";
-import { generateYearPlan } from "@/lib/platform-api";
+import { generateYearPlan, getPlatformJob, PlatformApiError } from "@/lib/platform-api";
 import { isMathematicsSubject, MATEMATEX_YEAR_PLAN_LEVELS } from "@/lib/mathematics-year-plan";
+
+const PENDING_YEAR_PLAN_KEY = "skoleverksted:pending-year-plan";
+const ACTIVE_JOB_STATUSES = new Set(["queued", "planning", "generating", "verifying", "rendering"]);
+
+function newOperationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `year-plan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
 
 function suggestedSchoolYear(): string {
   const now = new Date();
@@ -27,7 +39,82 @@ export default function NewYearPlanPage() {
   const [constraints, setConstraints] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [jobMessage, setJobMessage] = useState("");
+  const [jobProgress, setJobProgress] = useState(0);
+  const mountedRef = useRef(true);
+  const watchedJobRef = useRef("");
+  const operationIdRef = useRef("");
   const totalLessons = useMemo(() => lessonsPerWeek * teachingWeeks, [lessonsPerWeek, teachingWeeks]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    try {
+      const pending = JSON.parse(window.localStorage.getItem(PENDING_YEAR_PLAN_KEY) || "{}") as {
+        jobId?: string;
+        operationId?: string;
+      };
+      operationIdRef.current = pending.operationId || "";
+      if (pending.jobId) {
+        setLoading(true);
+        setJobMessage("Henter status for årsplanen …");
+        void watchJob(pending.jobId);
+      }
+    } catch {
+      window.localStorage.removeItem(PENDING_YEAR_PLAN_KEY);
+    }
+    return () => {
+      mountedRef.current = false;
+    };
+  // watchJob intentionally starts only once when the page is mounted.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function watchJob(jobId: string) {
+    if (watchedJobRef.current === jobId) return;
+    watchedJobRef.current = jobId;
+    let networkFailures = 0;
+    try {
+      for (;;) {
+        if (!mountedRef.current) return;
+        try {
+          const job = await getPlatformJob(jobId);
+          networkFailures = 0;
+          if (!mountedRef.current) return;
+          setJobMessage(job.message || "Årsplanen behandles …");
+          setJobProgress(job.progress);
+          if (job.status === "completed") {
+            const planId = typeof job.result_summary.plan_id === "string" ? job.result_summary.plan_id : "";
+            if (!planId) throw new Error("Årsplanjobben ble ferdig, men planen kunne ikke åpnes.");
+            window.localStorage.removeItem(PENDING_YEAR_PLAN_KEY);
+            operationIdRef.current = "";
+            router.push(`/year-plans/${planId}`);
+            return;
+          }
+          if (!ACTIVE_JOB_STATUSES.has(job.status)) {
+            throw new Error(job.message || "Årsplanen kunne ikke ferdigstilles. Prøv igjen.");
+          }
+          await wait(2500);
+        } catch (err) {
+          if (!(err instanceof PlatformApiError) || !err.retryable) throw err;
+          networkFailures += 1;
+          if (mountedRef.current) {
+            setJobMessage("Årsplanjobben fortsetter på serveren. Prøver å hente status på nytt …");
+          }
+          await wait(Math.min(10_000, 2000 + networkFailures * 1000));
+        }
+      }
+    } catch (err) {
+      if (!mountedRef.current) return;
+      window.localStorage.removeItem(PENDING_YEAR_PLAN_KEY);
+      operationIdRef.current = "";
+      setError(err instanceof Error ? err.message : "Kunne ikke lage årsplanen.");
+      setLoading(false);
+      setJobMessage("");
+      setJobProgress(0);
+    } finally {
+      if (watchedJobRef.current === jobId) watchedJobRef.current = "";
+    }
+  }
   const mathematicsSelected = isMathematicsSubject(subject);
   const availableLevels = mathematicsSelected ? MATEMATEX_YEAR_PLAN_LEVELS : YEAR_PLAN_LEVELS;
 
@@ -45,8 +132,13 @@ export default function NewYearPlanPage() {
     event.preventDefault();
     setLoading(true);
     setError("");
+    setJobProgress(0);
+    setJobMessage("Registrerer årsplanjobben …");
     try {
-      const plan = await generateYearPlan({
+      const operationId = operationIdRef.current || newOperationId();
+      operationIdRef.current = operationId;
+      window.localStorage.setItem(PENDING_YEAR_PLAN_KEY, JSON.stringify({ operationId }));
+      const accepted = await generateYearPlan({
         subject,
         level,
         school_year: schoolYear,
@@ -57,11 +149,23 @@ export default function NewYearPlanPage() {
         competency_goals: goals.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
         constraints,
         use_ai: true,
-      });
-      router.push(`/year-plans/${plan.id}`);
+      }, operationId);
+      if (accepted.plan_id) {
+        window.localStorage.removeItem(PENDING_YEAR_PLAN_KEY);
+        operationIdRef.current = "";
+        router.push(`/year-plans/${accepted.plan_id}`);
+        return;
+      }
+      window.localStorage.setItem(PENDING_YEAR_PLAN_KEY, JSON.stringify({
+        operationId,
+        jobId: accepted.job_id,
+      }));
+      setJobMessage("Årsplanen er registrert. AI-crewet planlegger og kildekontrollerer …");
+      await watchJob(accepted.job_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Kunne ikke lage årsplanen.");
       setLoading(false);
+      setJobMessage("");
     }
   }
 
@@ -150,6 +254,18 @@ export default function NewYearPlanPage() {
             />
           </div>
         </section>
+
+        {loading && jobMessage && (
+          <div role="status" className="card border-accent-blue/30 text-sm">
+            <div className="flex items-center gap-2 font-medium text-text-primary">
+              <Loader2 className="h-4 w-4 animate-spin text-accent-blue" /> {jobMessage}
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-elevated">
+              <div className="h-full rounded-full bg-accent-blue transition-all" style={{ width: `${Math.max(3, jobProgress)}%` }} />
+            </div>
+            <p className="mt-2 text-xs text-text-muted">Jobben er lagret på serveren. Du kan forlate siden og komme tilbake senere.</p>
+          </div>
+        )}
 
         {error && <div role="alert" className="card border-accent-red/30 text-sm text-accent-red">{error}</div>}
 
