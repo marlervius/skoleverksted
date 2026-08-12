@@ -180,31 +180,19 @@ def _remove_exact_claim_from_json(content: str, exact: str) -> tuple[str, bool]:
     if not exact:
         return content, False
 
-    occurrences = 0
-
-    def count_occurrences(value: object) -> None:
-        nonlocal occurrences
-        if isinstance(value, str):
-            occurrences += value.count(exact)
-        elif isinstance(value, list):
-            for item in value:
-                count_occurrences(item)
-        elif isinstance(value, dict):
-            for item in value.values():
-                count_occurrences(item)
-
-    count_occurrences(payload)
-    if occurrences != 1:
-        return content, False
-
     removed = False
     withheld_notice = "[Utelatt: denne delen kunne ikke kildeverifiseres.]"
 
     def revise(value: object) -> object:
         nonlocal removed
         if isinstance(value, str) and exact in value:
+            # A unique, complete sentence can be removed precisely.  If the
+            # fragment is repeated (inside this field or elsewhere in the JSON)
+            # there is no safe single target, so withhold every affected field.
+            # This is intentionally conservative: losing surrounding prose is
+            # preferable to leaking one unresolved claim into student material.
             revised, applied = _remove_exact_claim(value, exact)
-            if applied:
+            if applied and content.count(exact) == 1:
                 removed = True
                 return revised
             # A model can return only an entity or phrase as ``exact_text``.

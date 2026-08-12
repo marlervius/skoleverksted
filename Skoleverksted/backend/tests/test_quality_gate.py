@@ -302,6 +302,47 @@ def test_claim_removed_by_auditor_is_reaudited_instead_of_left_blocking():
     assert len(result.quarantine) == 1
 
 
+def test_repeated_unsafe_fragment_withholds_every_affected_json_field():
+    original = json.dumps(
+        {
+            "text": "Kilder må alltid være kritiske. Trygg innledning.",
+            "worksheet": "Forklar hvorfor kilder må alltid være kritiske.",
+            "teacher_key": "Trygg veiledning.",
+        },
+        ensure_ascii=False,
+    )
+    repeated = TruthClaim(
+        claim="Kilder må alltid være kritiske.",
+        exact_text="må alltid være kritiske",
+        status="unsupported",
+        action="remove",
+        content_type="fact",
+        location="Fagtekst og oppgaver",
+    )
+    responses = deque([
+        _audit(original, [repeated], status="source_unavailable"),
+        _audit("", [], status="source_unavailable"),
+    ])
+
+    result = run_quality_pipeline(
+        generator_id="fag.learning_sheet",
+        content=original,
+        topic="Kildekritikk",
+        subject="Historie",
+        level="VG2",
+        max_rounds=1,
+        audit=lambda **_kwargs: responses.popleft(),
+    )
+
+    payload = json.loads(result.approved_content)
+    assert result.source_approved
+    assert len(result.quarantine) == 1
+    assert "må alltid være kritiske" not in result.approved_content
+    assert "Utelatt" in payload["text"]
+    assert "Utelatt" in payload["worksheet"]
+    assert payload["teacher_key"] == "Trygg veiledning."
+
+
 def test_fabricated_or_irrelevant_source_does_not_resolve_claim():
     claim = TruthClaim(
         claim="Påstand",
