@@ -97,7 +97,7 @@ export default function Home() {
     selectedGoal, includeFasit, antallUker, timerPerUke,
     status, errorMessage, elapsedSeconds, progressMessage,
     previewUrl, previewBlob, previewFilename, rapportBlob, rapportFilename, showPreview,
-    basisText, generatedImageUrl, worksheetText, faktarapportText, languageExercises, warnings, sourceGrounded, sourceName, truthPassport, showEditPanel,
+    basisText, generatedImageUrl, worksheetText, faktarapportText, languageExercises, warnings, sourceGrounded, sourceName, truthPassport, showEditPanel, qualityStopReason, quarantine,
     imageCandidates, imageCandidatesLoading,
   } = state;
 
@@ -430,6 +430,23 @@ export default function Home() {
         signal: controller.signal, onProgress,
       });
       stopTimer();
+      if (result.qualityStatus === "needs_teacher_review") {
+        dispatch({
+          type: "GENERATION_REVIEW",
+          basisText: result.basisText ?? basisText,
+          imageUrl: result.imageUrl ?? imageUrlOverride,
+          worksheetText: result.worksheetText,
+          faktarapportText: result.faktarapportText,
+          languageExercises: result.languageExercises,
+          warnings: result.warnings,
+          sourceGrounded: result.sourceGrounded,
+          sourceName: result.sourceName,
+          truthPassport: result.truthPassport,
+          qualityStopReason: result.qualityStopReason,
+          quarantine: result.quarantine,
+        });
+        return;
+      }
       dispatch({
         type: "GENERATION_SUCCESS",
         blob: result.blob,
@@ -649,6 +666,23 @@ export default function Home() {
         }
 
         stopTimer();
+        if (result.qualityStatus === "needs_teacher_review") {
+          dispatch({
+            type: "GENERATION_REVIEW",
+            basisText: result.basisText,
+            imageUrl: result.imageUrl,
+            worksheetText: result.worksheetText,
+            faktarapportText: result.faktarapportText,
+            languageExercises: result.languageExercises,
+            warnings: result.warnings,
+            sourceGrounded: result.sourceGrounded,
+            sourceName: result.sourceName,
+            truthPassport: result.truthPassport,
+            qualityStopReason: result.qualityStopReason,
+            quarantine: result.quarantine,
+          });
+          return;
+        }
         dispatch({
           type: "GENERATION_SUCCESS",
           blob: result.blob,
@@ -1534,6 +1568,43 @@ export default function Home() {
                     <X className="w-5 h-5" aria-hidden="true" />
                     Avbryt
                   </button>
+                </div>
+              ) : status === "review" ? (
+                <div className="flex flex-col gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
+                  <div>
+                    <p className="font-semibold text-amber-950">Lærerkontroll kreves før PDF kan frigis</p>
+                    <p className="mt-1 text-sm text-amber-900">
+                      Kildekontrollen er avsluttet kontrollert og lukket. Rediger teksten eller oppgavene,
+                      og kjør kildekontrollen på nytt. Ingen PDF er opprettet eller gjort tilgjengelig.
+                    </p>
+                    <p className="mt-2 text-xs font-mono text-amber-800">Stoppårsak: {qualityStopReason || "truth_layer_unresolved_claims"}</p>
+                  </div>
+                  {truthPassport && <TruthPassport passport={truthPassport} />}
+                  {quarantine.length > 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-white p-3 text-sm text-amber-950">
+                      <p className="font-semibold">Karantene ({quarantine.length})</p>
+                      <ul className="mt-1 list-disc space-y-1 pl-5">
+                        {quarantine.slice(0, 8).map((item, index) => (
+                          <li key={index}>{String(item.original_text || "Uverifisert påstand")}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {showEditPanel && basisText !== null && worksheetText !== null && (
+                    <div className="space-y-3 rounded-lg border border-amber-200 bg-white p-3">
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium text-stone-700">Fagtekst</label>
+                        <textarea value={basisText} onChange={(e) => dispatch({ type: "SET_BASIS_TEXT", text: e.target.value })} rows={8} className="input-field text-sm leading-relaxed resize-y" />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium text-stone-700">Arbeidsark</label>
+                        <textarea value={worksheetText} onChange={(e) => dispatch({ type: "SET_WORKSHEET_TEXT", text: e.target.value })} rows={8} className="input-field text-sm leading-relaxed resize-y" />
+                      </div>
+                      <button type="button" onClick={handleOppdaterPdf} className="btn-primary w-full py-3 px-4 text-sm">
+                        Kjør kildekontroll på nytt
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : status === "success" && previewBlob ? (
                 <div className="flex flex-col gap-2.5">

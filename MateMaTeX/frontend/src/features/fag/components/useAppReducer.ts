@@ -59,6 +59,8 @@ export interface AppState {
   sourceGrounded: boolean | null;
   sourceName: string | null;
   truthPassport: TruthPassport | null;
+  qualityStopReason: string;
+  quarantine: Array<Record<string, unknown>>;
   showEditPanel: boolean;
   imageCandidates: ImageCandidate[];
   imageCandidatesLoading: boolean;
@@ -105,6 +107,8 @@ export const initialState: AppState = {
   sourceGrounded: null,
   sourceName: null,
   truthPassport: null,
+  qualityStopReason: "",
+  quarantine: [],
   showEditPanel: false,
   imageCandidates: [],
   imageCandidatesLoading: false,
@@ -139,6 +143,7 @@ export type AppAction =
   | { type: "GENERATION_START" }
   | { type: "GENERATION_PROGRESS"; message: string }
   | { type: "GENERATION_SUCCESS"; blob: Blob; url: string; filename: string; basisText?: string; imageUrl?: string; worksheetText?: string; faktarapportText?: string; languageExercises?: Record<string, unknown>; warnings?: string[]; sourceGrounded?: boolean; sourceName?: string; truthPassport?: TruthPassport; rapportBlob?: Blob; rapportFilename?: string }
+  | { type: "GENERATION_REVIEW"; basisText?: string; imageUrl?: string; worksheetText?: string; faktarapportText?: string; languageExercises?: Record<string, unknown>; warnings?: string[]; sourceGrounded?: boolean; sourceName?: string; truthPassport?: TruthPassport; qualityStopReason?: string; quarantine?: Array<Record<string, unknown>> }
   | { type: "SET_BASIS_TEXT"; text: string }
   | { type: "SET_WORKSHEET_TEXT"; text: string }
   | { type: "TOGGLE_EDIT_PANEL" }
@@ -242,6 +247,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         previewBlob: null,
         rapportBlob: null,
         truthPassport: null,
+        qualityStopReason: "",
+        quarantine: [],
       };
     case "GENERATION_PROGRESS":
       return { ...state, progressMessage: action.message };
@@ -265,7 +272,30 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         sourceGrounded: action.sourceGrounded ?? null,
         sourceName: action.sourceName ?? null,
         truthPassport: action.truthPassport ?? state.truthPassport,
+        qualityStopReason: "",
+        quarantine: [],
         showEditPanel: false,
+      };
+    case "GENERATION_REVIEW":
+      return {
+        ...state,
+        status: "review",
+        progressMessage: "",
+        showPreview: false,
+        previewBlob: null,
+        previewUrl: null,
+        basisText: action.basisText ?? state.basisText,
+        generatedImageUrl: action.imageUrl ?? state.generatedImageUrl,
+        worksheetText: action.worksheetText ?? state.worksheetText,
+        faktarapportText: action.faktarapportText ?? state.faktarapportText,
+        languageExercises: action.languageExercises ?? state.languageExercises,
+        warnings: action.warnings ?? [],
+        sourceGrounded: action.sourceGrounded ?? null,
+        sourceName: action.sourceName ?? null,
+        truthPassport: action.truthPassport ?? state.truthPassport,
+        qualityStopReason: action.qualityStopReason ?? "truth_layer_unresolved_claims",
+        quarantine: action.quarantine ?? [],
+        showEditPanel: true,
       };
     case "SET_BASIS_TEXT":
       return {
@@ -296,7 +326,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "GENERATION_ERROR":
       return { ...state, status: "error", errorMessage: action.message, progressMessage: "" };
     case "GENERATION_CANCEL":
-      return { ...state, status: "idle", progressMessage: "" };
+      return { ...state, status: "idle", progressMessage: "", errorMessage: "" };
     case "GENERATION_IDLE":
       return { ...state, status: "idle" };
     case "SHOW_PREVIEW":

@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from Skoleverksted.backend.platform import compendium_renderer
 from Skoleverksted.backend.platform.compendium import (
     _extract_json,
+    _call_google_json,
     _teacher_sources,
     _source_quality_notes,
     _source_payload,
@@ -97,6 +98,42 @@ def test_json_extractor_uses_the_first_complete_object():
         "Grounding metadata: {ikke del av svaret}"
     )
     assert payload["content_markdown"] == "## Kapittel"
+
+
+def test_truth_model_call_uses_sdk_timeout_and_bounded_afc(monkeypatch):
+    from google import genai
+
+    captured: dict[str, object] = {}
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            captured["config"] = kwargs["config"]
+            return type("Response", (), {"text": '{"claims": [], "summary": "ok"}'})()
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured["http_options"] = kwargs["http_options"]
+            self.models = FakeModels()
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setattr(genai, "Client", FakeClient)
+    _call_google_json(
+        "test",
+        grounded=True,
+        response_schema={"type": "object"},
+        timeout_seconds=0.2,
+        max_attempts=1,
+    )
+
+    http_options = captured["http_options"]
+    config = captured["config"]
+    assert http_options.timeout == 200
+    assert config.automatic_function_calling.maximum_remote_calls == 1
+    assert config.automatic_function_calling.disable is False
+    assert captured["closed"] is True
 
 
 def test_source_payload_keeps_canonical_pages_and_drops_search_redirects():

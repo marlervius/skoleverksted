@@ -22,7 +22,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from Skoleverksted.backend.platform.queue import get_durable_job_queue
+from Skoleverksted.backend.platform.queue import JobCancelled, get_durable_job_queue
 
 if __package__:
     from .media_manager import image_processor
@@ -36,11 +36,24 @@ else:
 logger = logging.getLogger(__name__)
 
 
+class GenerationCancelled(RuntimeError):
+    """Internal signal used to finish a user-cancelled job exactly once."""
+
+
+TERMINAL_JOB_STATUSES = frozenset({
+    "source_approved",
+    "needs_teacher_review",
+    "failed",
+    "cancelled",
+})
+
+
 # ── Job store ─────────────────────────────────────────────────────────────────
 
 @dataclass
 class Job:
     queue: asyncio.Queue
+    loop: Optional[asyncio.AbstractEventLoop] = None
     created_at: float = field(default_factory=time.time)
     pdf: Optional[bytes] = None
     filename: Optional[str] = None
@@ -50,6 +63,10 @@ class Job:
     rapport_filename: Optional[str] = None
     error: Optional[str] = None
     done: bool = False
+    status: str = "queued"
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    terminal_event_sent: bool = False
+    progress: dict[str, Any] = field(default_factory=dict)
     verification_content: str = ""
     truth_passport: dict[str, Any] = field(default_factory=dict)
     quarantine: list[dict[str, Any]] = field(default_factory=list)
@@ -111,8 +128,12 @@ def register_job() -> tuple[str, asyncio.Queue]:
     """Create a new job, return its id and queue."""
     job_id = str(uuid.uuid4())
     queue: asyncio.Queue = asyncio.Queue()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
     with _jobs_lock:
-        _jobs[job_id] = Job(queue=queue)
+        _jobs[job_id] = Job(queue=queue, loop=loop)
     return job_id, queue
 
 
@@ -124,6 +145,35 @@ def get_job(job_id: str) -> Optional[Job]:
 def pop_job(job_id: str) -> Optional[Job]:
     with _jobs_lock:
         return _jobs.pop(job_id, None)
+
+
+def is_job_cancelled(job_id: str) -> bool:
+    job = get_job(job_id)
+    return bool(job and (job.cancel_event.is_set() or job.status == "cancelled"))
+
+
+def cancel_job(job_id: str) -> Optional[Job]:
+    """Mark a job cancelled immediately; repeated calls are idempotent."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return None
+        if job.status in TERMINAL_JOB_STATUSES:
+            return job
+        job.cancel_event.set()
+        job.status = "cancelled"
+        job.done = True
+        job.pdf = None
+        job.rapport_pdf = None
+        if not job.terminal_event_sent:
+            job.terminal_event_sent = True
+            event = {"type": "cancelled", "status": "cancelled", "message": "Genereringen er avbrutt."}
+            if job.loop and not job.loop.is_closed():
+                job.loop.call_soon_threadsafe(job.queue.put_nowait, event)
+            else:
+                job.queue.put_nowait(event)
+    logger.info("job_cancelled", extra={"job_id": job_id})
+    return job
 
 
 # ── Image fetch with explicit retry logging ───────────────────────────────────
@@ -190,6 +240,8 @@ class JobContext:
     request_payload: Any
     cache_key: Optional[str] = None
     set_meta: Optional[Callable[[str, Any], None]] = None
+    cancel_check: Optional[Callable[[], bool]] = None
+    meta: Optional[dict[str, Any]] = None
 
 
 def compute_cache_key(prefix: str, payload: Any) -> str:
@@ -226,7 +278,8 @@ def run_job_in_thread(
     - Holds a per-cache-key lock so two simultaneous identical requests
       do not both invoke the (expensive) worker.
     """
-    loop = asyncio.get_event_loop()
+    job = get_job(job_id)
+    loop = job.loop if job and job.loop else asyncio.get_event_loop()
 
     req_logger = RequestLogger(logger, {'request_id': job_id[:8]})
     durable_queue = get_durable_job_queue()
@@ -247,12 +300,22 @@ def run_job_in_thread(
         except RuntimeError:
             pass
 
-    def push(msg: str) -> None:
-        schedule_event({"type": "progress", "message": msg})
+    def push(msg: str, **details: Any) -> None:
+        with _jobs_lock:
+            current_job = _jobs.get(job_id)
+            if current_job:
+                current_job.progress = dict(details)
+        schedule_event({"type": "progress", "message": msg, **details})
 
     def thread_main() -> None:
         job_start = time.time()
         try:
+            if is_job_cancelled(job_id):
+                raise GenerationCancelled("job cancelled before worker start")
+            with _jobs_lock:
+                current_job = _jobs.get(job_id)
+                if current_job:
+                    current_job.status = "generating"
             pdf_bytes: Optional[bytes] = None
             filename: Optional[str] = None
             job_meta: dict = {}
@@ -273,7 +336,7 @@ def run_job_in_thread(
                         filename = value["filename"]
                     for key in (
                         "verification_content", "truth_passport", "quarantine",
-                        "quality_rounds", "quality_stop_reason",
+                        "quality_rounds", "quality_stop_reason", "quality_status",
                     ):
                         if key in value:
                             job_meta[key] = value[key]
@@ -291,6 +354,7 @@ def run_job_in_thread(
                     "quarantine": job_meta.get("quarantine", []),
                     "quality_rounds": job_meta.get("quality_rounds", []),
                     "quality_stop_reason": job_meta.get("quality_stop_reason", ""),
+                    "quality_status": job_meta.get("quality_status", "source_approved"),
                 }
 
             # ── Cache check / lock ──
@@ -311,12 +375,17 @@ def run_job_in_thread(
                                 push=push, req_logger=req_logger,
                                 request_payload=request_payload, cache_key=cache_key,
                                 set_meta=set_meta_fn,
+                                cancel_check=lambda: is_job_cancelled(job_id),
+                                meta=job_meta,
                             )
                             _t = time.time()
                             pdf_bytes, filename = worker(ctx)
                             worker_duration = time.time() - _t
+                            if is_job_cancelled(job_id):
+                                raise GenerationCancelled("job cancelled during worker")
                             try:
-                                cache.set(cache_key, _cache_value(), expire=config.CACHE_TTL_SECONDS)
+                                if job_meta.get("quality_status", "source_approved") == "source_approved":
+                                    cache.set(cache_key, _cache_value(), expire=config.CACHE_TTL_SECONDS)
                             except Exception as e:
                                 req_logger.warning(f"Failed to write cache: {e}")
             else:
@@ -325,10 +394,15 @@ def run_job_in_thread(
                     push=push, req_logger=req_logger,
                     request_payload=request_payload, cache_key=None,
                     set_meta=set_meta_fn,
+                    cancel_check=lambda: is_job_cancelled(job_id),
+                    meta=job_meta,
                 )
                 _t = time.time()
                 pdf_bytes, filename = worker(ctx)
                 worker_duration = time.time() - _t
+
+            if is_job_cancelled(job_id):
+                raise GenerationCancelled("job cancelled after worker")
 
             if filename is None:
                 # Cache hit: derive filename from request payload's topic
@@ -338,10 +412,13 @@ def run_job_in_thread(
                                for c in str(topic)).strip()[:50]
                 filename = f"{safe}_{level}.pdf" if level else f"{safe}.pdf"
 
+            quality_status = str(job_meta.get("quality_status") or "source_approved")
+            if quality_status not in {"source_approved", "needs_teacher_review"}:
+                quality_status = "source_approved"
             with _jobs_lock:
                 job = _jobs.get(job_id)
                 if job:
-                    job.pdf = pdf_bytes
+                    job.pdf = pdf_bytes if quality_status == "source_approved" else None
                     job.filename = filename
                     job.rapport_pdf = job_meta.get("rapport_pdf")
                     job.rapport_filename = job_meta.get("rapport_filename")
@@ -350,6 +427,7 @@ def run_job_in_thread(
                     job.quarantine = list(job_meta.get("quarantine") or [])
                     job.quality_rounds = list(job_meta.get("quality_rounds") or [])
                     job.quality_stop_reason = str(job_meta.get("quality_stop_reason") or "")
+                    job.status = quality_status
                     job.done = True
 
             total_duration = time.time() - job_start
@@ -362,7 +440,11 @@ def run_job_in_thread(
                 },
             )
 
-            done_event: dict = {"type": "done", "filename": filename}
+            done_event: dict = {
+                "type": "done" if quality_status == "source_approved" else "needs_teacher_review",
+                "status": quality_status,
+                "filename": filename,
+            }
             for field in ("basis_text", "image_url", "image_metadata", "worksheet_text",
                           "faktarapport_text", "language_exercises", "warnings",
                           "truth_passport",
@@ -377,9 +459,42 @@ def run_job_in_thread(
             # Tell the UI a separate teacher guide exists (bytes
             # themselves never go over SSE).
             done_event["has_faktarapport"] = bool(job_meta.get("rapport_pdf"))
+            done_event["quality_status"] = quality_status
             schedule_event(done_event)
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+                if job:
+                    job.terminal_event_sent = True
+            logger.info(
+                "job_completed",
+                extra={"job_id": job_id, "status": quality_status, "duration_s": round(total_duration, 2)},
+            )
 
+        except GenerationCancelled:
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+                already_sent = bool(job and job.terminal_event_sent)
+                if job:
+                    job.cancel_event.set()
+                    job.status = "cancelled"
+                    job.done = True
+            if not already_sent:
+                schedule_event({"type": "cancelled", "status": "cancelled", "message": "Genereringen er avbrutt."})
+            logger.info("job_cancelled", extra={"job_id": job_id})
         except Exception as e:
+            # A provider cancellation exception must not be translated into a
+            # failed job after the API has already marked it cancelled.
+            if is_job_cancelled(job_id):
+                with _jobs_lock:
+                    job = _jobs.get(job_id)
+                    already_sent = bool(job and job.terminal_event_sent)
+                    if job:
+                        job.status = "cancelled"
+                        job.done = True
+                if not already_sent:
+                    schedule_event({"type": "cancelled", "status": "cancelled", "message": "Genereringen er avbrutt."})
+                logger.info("job_cancelled", extra={"job_id": job_id, "stage": "provider"})
+                return
             err_str = str(e)
             # Friendly message for Gemini quota exhaustion (429)
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
@@ -416,18 +531,37 @@ def run_job_in_thread(
                 job = _jobs.get(job_id)
                 if job:
                     job.error = f"{err_msg} (request_id: {job_id[:8]})"
+                    job.status = "failed"
                     job.done = True
-            schedule_event({"type": "error", "message": f"{err_msg} (request_id: {job_id[:8]})"})
+            schedule_event({
+                "type": "error",
+                "status": "failed",
+                "message": f"{err_msg} (request_id: {job_id[:8]})",
+            })
 
     def queued_thread_main() -> None:
         def announce(position: int) -> None:
             push(f"Venter i kø (plass {position}) …")
 
-        with durable_queue.claim(job_id, on_wait=announce, auto_complete=False):
-            thread_main()
+        try:
+            with durable_queue.claim(
+                job_id,
+                on_wait=announce,
+                auto_complete=False,
+                cancel_check=lambda: is_job_cancelled(job_id),
+            ):
+                thread_main()
+        except JobCancelled:
+            durable_queue.cancel(job_id)
+            logger.info("job_cancelled", extra={"job_id": job_id, "stage": "queue"})
+            return
         job = get_job(job_id)
         if job and job.error:
             durable_queue.fail(job_id, job.error)
+        elif job and job.status == "cancelled":
+            durable_queue.cancel(job_id)
+        elif job and job.status == "needs_teacher_review":
+            durable_queue.finish(job_id, message="Krever lærergjennomgang")
         elif job and job.done:
             durable_queue.finish(job_id)
 

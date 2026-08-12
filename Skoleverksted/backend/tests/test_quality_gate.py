@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import deque
+import threading
+import time
 
 import pytest
 
@@ -12,6 +14,7 @@ from Skoleverksted.backend.platform.quality_gate import (
     require_export_ready,
     run_quality_pipeline,
 )
+from Skoleverksted.backend.platform.quality_runtime import QualityLayerCancelled
 from Skoleverksted.backend.platform.truth import TruthAudit
 
 
@@ -295,6 +298,54 @@ def test_revision_loop_stops_without_progress():
     assert calls == 2
     assert result.rounds[-1].status == "no_progress"
     assert not result.source_approved
+
+
+def test_hanging_audit_terminates_with_teacher_review_and_timeout_reason():
+    def hanging_audit(**_kwargs):
+        time.sleep(5)
+        return _audit("Tekst som aldri rekker å bli kontrollert.", [])
+
+    started = time.monotonic()
+    result = run_quality_pipeline(
+        generator_id="fag.learning_sheet",
+        content="Tekst som aldri rekker å bli kontrollert.",
+        topic="Tema",
+        subject="Historie",
+        level="VG2",
+        timeout_seconds=0.05,
+        audit=hanging_audit,
+    )
+
+    assert time.monotonic() - started < 1
+    assert result.quality_status == "needs_teacher_review"
+    assert result.stop_reason == "truth_layer_timeout"
+    assert not result.source_approved
+
+
+def test_cancellation_stops_the_quality_layer_before_another_round():
+    cancelled = threading.Event()
+
+    def audit_that_waits(**_kwargs):
+        while not cancelled.is_set():
+            time.sleep(0.01)
+        return _audit("Tekst.", [])
+
+    def cancel_soon():
+        time.sleep(0.05)
+        cancelled.set()
+
+    threading.Thread(target=cancel_soon, daemon=True).start()
+    with pytest.raises(QualityLayerCancelled):
+        run_quality_pipeline(
+            generator_id="fag.learning_sheet",
+            content="Dette er tekst som venter på kansellering og er lang nok.",
+            topic="Tema",
+            subject="Historie",
+            level="VG2",
+            timeout_seconds=1,
+            cancel_check=cancelled.is_set,
+            audit=audit_that_waits,
+        )
 
 
 def test_every_known_generator_and_export_family_has_a_contract():

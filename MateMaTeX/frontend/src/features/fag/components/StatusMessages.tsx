@@ -16,6 +16,7 @@ interface StatusMessagesProps {
 const ALL_PROGRESS_STEPS = [
   "Genererer fagtekst og søker etter bilde...",
   "Analyserer og strukturerer innhold...",
+  "Kontrollerer påstander",
   "Henter og optimaliserer bilde...",
   "Kompilerer PDF...",
 ];
@@ -29,6 +30,7 @@ function buildVisibleSteps(current: string): string[] {
 }
 
 function stepIndex(msg: string): number {
+  if (msg.startsWith("Kontrollerer påstander")) return 2;
   return ALL_PROGRESS_STEPS.findIndex((s) => s === msg);
 }
 
@@ -79,7 +81,7 @@ export const StatusMessages = React.memo(function StatusMessages({
             </div>
 
             <p className="text-stone-400 text-xs mt-2 font-mono">
-              {elapsedSeconds > 0 ? `${elapsedSeconds}s` : "Starter..."}
+              {elapsedSeconds > 0 ? `${elapsedSeconds}s · maks. ca. 2 minutter` : "Starter · maks. ca. 2 minutter"}
             </p>
           </div>
         </div>
@@ -110,6 +112,15 @@ export const StatusMessages = React.memo(function StatusMessages({
             </button>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (status === "review") {
+    return (
+      <div className="mt-6 rounded-lg border border-amber-300 bg-amber-50 p-4" role="status" aria-live="polite">
+        <p className="font-medium text-amber-950">Kildekontrollen krever lærergjennomgang</p>
+        <p className="mt-1 text-sm text-amber-900">Materialet er tilgjengelig i kontrollbildet. PDF blir ikke frigitt før en ny kontroll er grønn.</p>
       </div>
     );
   }

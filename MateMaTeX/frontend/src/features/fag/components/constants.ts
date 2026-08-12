@@ -28,7 +28,7 @@ export const LANGUAGE_LEVELS = [
   { value: "B1", label: "B1 - Mellomnivå", description: "Forenklet språk" },
 ];
 
-export type Status = "idle" | "loading" | "success" | "error";
+export type Status = "idle" | "loading" | "success" | "review" | "error";
 
 export type AppMode = "laeringsark" | "differensiert" | "prove" | "sekvens";
 

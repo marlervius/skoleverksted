@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import logging
 import operator
 import re
+import time
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
@@ -22,10 +24,41 @@ from .models import (
     TruthPassport,
     TruthSource,
 )
-from .truth import TruthAudit, audit_truth
+from .truth import TruthAudit, _blocked_passport, audit_truth
+from .quality_runtime import (
+    QualityLayerCancelled,
+    QualityLayerTimeout,
+    env_float,
+    env_int,
+    run_bounded_sync,
+)
 
 
-MAX_REVISION_ROUNDS = 3
+logger = logging.getLogger(__name__)
+
+DEFAULT_MODEL_CALL_TIMEOUT_SECONDS = 45.0
+DEFAULT_MAX_MODEL_ATTEMPTS = 2
+DEFAULT_TRUTH_LAYER_TIMEOUT_SECONDS = 120.0
+DEFAULT_MAX_REVISION_ROUNDS = 2
+
+
+def quality_model_timeout_seconds() -> float:
+    return env_float("QUALITY_GATE_MODEL_TIMEOUT_SECONDS", DEFAULT_MODEL_CALL_TIMEOUT_SECONDS)
+
+
+def quality_layer_timeout_seconds() -> float:
+    return env_float("QUALITY_GATE_TIMEOUT_SECONDS", DEFAULT_TRUTH_LAYER_TIMEOUT_SECONDS)
+
+
+def quality_max_model_attempts() -> int:
+    return env_int("QUALITY_GATE_MAX_MODEL_ATTEMPTS", DEFAULT_MAX_MODEL_ATTEMPTS, maximum=2)
+
+
+def quality_max_revision_rounds() -> int:
+    return env_int("QUALITY_GATE_MAX_REVISION_ROUNDS", DEFAULT_MAX_REVISION_ROUNDS, maximum=2)
+
+
+MAX_REVISION_ROUNDS = DEFAULT_MAX_REVISION_ROUNDS
 
 # This is the contract surface.  A new generator must be registered here and
 # covered by the contract test before it can be shipped through the unified app.
@@ -199,6 +232,11 @@ class QualityGateResult:
         unresolved = [claim for claim in self.passport.claims if not claim_is_resolved(claim)]
         return not unresolved and not self.deterministic_failures and self.passport.status == "verified"
 
+    @property
+    def quality_status(self) -> str:
+        """Terminal product status; never infer approval from partial content."""
+        return "source_approved" if self.source_approved else "needs_teacher_review"
+
 
 def verify_teacher_export(
     *,
@@ -249,32 +287,114 @@ def run_quality_pipeline(
     subject: str,
     level: str,
     provided_sources: Iterable[object] = (),
-    max_rounds: int = MAX_REVISION_ROUNDS,
+    max_rounds: int | None = None,
     audit: Callable[..., TruthAudit] = audit_truth,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[dict[str, object]], None] | None = None,
+    request_id: str = "",
+    timeout_seconds: float | None = None,
 ) -> QualityGateResult:
     if generator_id not in GENERATOR_CONTRACTS:
         raise ValueError(f"Generatoren mangler global verifikasjonskontrakt: {generator_id}")
     if not content.strip():
         raise ValueError("Tomt innhold kan ikke passere kvalitetspipelinen.")
-    max_rounds = max(1, min(MAX_REVISION_ROUNDS, max_rounds))
+    configured_rounds = quality_max_revision_rounds()
+    max_rounds = max(1, min(configured_rounds, max_rounds or configured_rounds))
+    total_budget = timeout_seconds or quality_layer_timeout_seconds()
+    deadline = time.monotonic() + total_budget
     current = content
     seen: set[str] = set()
     rounds: list[QualityRevisionRound] = []
     final: TruthPassport | None = None
     stop_reason = ""
     previous_score = (-1, 10**9)
+    budget_exhausted = False
+
+    def emit_progress(message: str, *, round_number: int, claims_found: int = 0,
+                      claims_verified: int = 0, quarantined: int = 0) -> None:
+        remaining = max(0.0, deadline - time.monotonic())
+        event: dict[str, object] = {
+            "message": message,
+            "step": "truth_layer",
+            "revision_round": round_number,
+            "max_revision_rounds": max_rounds,
+            "claims_checked": claims_found,
+            "claims_verified": claims_verified,
+            "claims_quarantined": quarantined,
+            "remaining_seconds": round(remaining, 1),
+        }
+        if progress_callback:
+            progress_callback(event)
+
+    def invoke_audit(*, round_number: int) -> TruthAudit:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise QualityLayerTimeout("truth layer budget exhausted")
+        if cancel_check and cancel_check():
+            raise QualityLayerCancelled("truth layer cancelled")
+        kwargs: dict[str, object] = {
+            "content": current,
+            "topic": topic,
+            "subject": subject,
+            "level": level,
+            "provided_sources": provided_sources,
+        }
+        # Keep custom deterministic test auditors backwards-compatible while
+        # giving the production auditor the cancellation/request context.
+        if audit is audit_truth:
+            kwargs.update(
+                cancel_check=cancel_check,
+                call_timeout_seconds=min(quality_model_timeout_seconds(), remaining),
+                max_attempts=quality_max_model_attempts(),
+                request_id=request_id,
+            )
+        emit_progress(
+            f"Kontrollerer påstander – runde {round_number} av {max_rounds}",
+            round_number=round_number,
+        )
+        return run_bounded_sync(
+            lambda: audit(**kwargs),
+            timeout_seconds=min(quality_model_timeout_seconds(), remaining),
+            cancel_check=cancel_check,
+            operation_name=f"truth audit round {round_number}",
+        )
+
+    logger.info(
+        "quality_gate_started",
+        extra={
+            "request_id": request_id,
+            "generator_id": generator_id,
+            "model_call_timeout_s": quality_model_timeout_seconds(),
+            "max_model_attempts": quality_max_model_attempts(),
+            "max_revision_rounds": max_rounds,
+            "budget_s": total_budget,
+        },
+    )
 
     for round_number in range(1, max_rounds + 1):
         before = content_digest(current)
         repeated_revision = before in seen
         seen.add(before)
-        outcome = audit(
-            content=current,
-            topic=topic,
-            subject=subject,
-            level=level,
-            provided_sources=provided_sources,
+        logger.info(
+            "verification_round_started",
+            extra={"request_id": request_id, "round_number": round_number},
         )
+        try:
+            outcome = invoke_audit(round_number=round_number)
+        except QualityLayerCancelled:
+            logger.info(
+                "job_cancelled",
+                extra={"request_id": request_id, "stage": "truth_layer", "round_number": round_number},
+            )
+            raise
+        except QualityLayerTimeout:
+            budget_exhausted = True
+            stop_reason = "truth_layer_timeout"
+            logger.warning(
+                "quality_gate_budget_exhausted",
+                extra={"request_id": request_id, "round_number": round_number},
+            )
+            break
         next_content = outcome.content
         final = outcome.passport.model_copy(update={"version": "2.0", "content_revision": content_digest(next_content)})
         unresolved = [claim for claim in final.claims if not claim_is_resolved(claim)]
@@ -309,14 +429,34 @@ def run_quality_pipeline(
                 changes=changes,
             )
         )
+        logger.info(
+            "verification_round_completed",
+            extra={
+                "request_id": request_id,
+                "round_number": round_number,
+                "claims_found": len(final.claims),
+                "claims_verified": verified,
+                "claims_quarantined": 0,
+            },
+        )
+        emit_progress(
+            f"{verified} av {len(final.claims)} påstander verifisert",
+            round_number=round_number,
+            claims_found=len(final.claims),
+            claims_verified=verified,
+        )
         current = next_content
         previous_score = score
         if not unresolved or status == "no_progress":
             break
 
     if final is None:
-        outcome = audit(content=current, topic=topic, subject=subject, level=level, provided_sources=provided_sources)
-        final = outcome.passport.model_copy(update={"version": "2.0", "content_revision": content_digest(current)})
+        final = _blocked_passport(
+            topic,
+            subject,
+            "Automatisk faktakontroll nådde tidsgrensen før den kunne evaluere innholdet.",
+            status="verification_failed",
+        )
 
     quarantine: list[QualityQuarantineItem] = []
     unsafe: list[TruthClaim] = []
@@ -340,15 +480,19 @@ def run_quality_pipeline(
             unsafe.append(claim)
 
     # The final controller always checks the exact export candidate again.
-    if quarantine:
-        final_outcome = audit(
-            content=current,
-            topic=topic,
-            subject=subject,
-            level=level,
-            provided_sources=provided_sources,
-        )
-        final = final_outcome.passport.model_copy(update={"version": "2.0", "content_revision": content_digest(current)})
+    if quarantine and not budget_exhausted:
+        try:
+            final_outcome = invoke_audit(round_number=len(rounds) + 1)
+            final = final_outcome.passport.model_copy(
+                update={"version": "2.0", "content_revision": content_digest(current)}
+            )
+        except QualityLayerCancelled:
+            logger.info("job_cancelled", extra={"request_id": request_id, "stage": "truth_layer"})
+            raise
+        except QualityLayerTimeout:
+            budget_exhausted = True
+            stop_reason = "truth_layer_timeout"
+            logger.warning("quality_gate_budget_exhausted", extra={"request_id": request_id})
     if unsafe:
         final.status = "needs_review"
         final.limitations = list(dict.fromkeys([
@@ -371,14 +515,41 @@ def run_quality_pipeline(
             *final.limitations,
             f"{len(failures)} matematisk(e) likhet(er) feilet deterministisk kontroll.",
         ]))
-    return QualityGateResult(
+    if budget_exhausted:
+        final.status = "needs_review"
+        final.limitations = list(dict.fromkeys([
+            *final.limitations,
+            "Sannhetslaget nådde tidsgrensen. Uverifisert innhold krever lærerkontroll.",
+        ]))
+    if stop_reason == "":
+        if unsafe or [claim for claim in final.claims if not claim_is_resolved(claim)]:
+            stop_reason = "truth_layer_unresolved_claims"
+        else:
+            stop_reason = "source_approved"
+    result = QualityGateResult(
         approved_content=current,
         passport=final,
         rounds=rounds,
         quarantine=quarantine,
-        stop_reason=stop_reason or "Kontrollen er ferdig.",
+        stop_reason=stop_reason,
         deterministic_failures=failures,
     )
+    if result.source_approved:
+        logger.info(
+            "quality_gate_completed",
+            extra={"request_id": request_id, "status": result.quality_status, "rounds": len(rounds)},
+        )
+    else:
+        logger.info(
+            "teacher_review_returned",
+            extra={
+                "request_id": request_id,
+                "status": result.quality_status,
+                "stop_reason": result.stop_reason,
+                "quarantined": len(quarantine),
+            },
+        )
+    return result
 
 
 def require_export_ready(

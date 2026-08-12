@@ -45,6 +45,9 @@ interface GenerateLessonResult {
   rapportBlob?: Blob;
   rapportFilename?: string;
   lintIssues?: string[];
+  qualityStatus?: "source_approved" | "needs_teacher_review" | "failed" | "cancelled";
+  qualityStopReason?: string;
+  quarantine?: Array<Record<string, unknown>>;
 }
 
 export async function generateLesson(
@@ -152,11 +155,20 @@ async function runSseJob(
   let capturedTruthPassport: TruthPassport | undefined;
   let capturedHasFaktarapport = false;
   let capturedLintIssues: string[] | undefined;
+  let capturedQualityStatus: GenerateLessonResult["qualityStatus"];
+  let capturedQualityStopReason: string | undefined;
+  let capturedQuarantine: Array<Record<string, unknown>> | undefined;
 
   await new Promise<void>((resolve, reject) => {
     const eventSource = new EventSource(streamUrl(job_id));
     const abortHandler = () => {
       eventSource.close();
+      // AbortSignal cancellation must also reach the backend. The request is
+      // deliberately independent of the already-aborted signal.
+      void fetch(`${API_URL}/generate/${encodeURIComponent(job_id)}`, {
+        method: "DELETE",
+        headers: projectHeaders(),
+      }).catch(() => undefined);
       reject(new DOMException("AbortError", "AbortError"));
     };
     signal?.addEventListener("abort", abortHandler);
@@ -166,7 +178,7 @@ async function runSseJob(
         const data = JSON.parse(event.data);
         if (data.type === "progress" && onProgress) {
           onProgress(data.message);
-        } else if (data.type === "done") {
+        } else if (data.type === "done" || data.type === "needs_teacher_review") {
           capturedBasisText = data.basis_text ?? undefined;
           capturedImageUrl = data.image_url ?? undefined;
           capturedWorksheetText = data.worksheet_text ?? undefined;
@@ -178,9 +190,16 @@ async function runSseJob(
           capturedTruthPassport = data.truth_passport ?? undefined;
           capturedHasFaktarapport = Boolean(data.has_faktarapport);
           capturedLintIssues = data.lint_issues ?? undefined;
+          capturedQualityStatus = data.quality_status ?? (data.type === "needs_teacher_review" ? "needs_teacher_review" : "source_approved");
+          capturedQualityStopReason = data.quality_stop_reason ?? undefined;
+          capturedQuarantine = data.quarantine ?? undefined;
           signal?.removeEventListener("abort", abortHandler);
           eventSource.close();
           resolve();
+        } else if (data.type === "cancelled") {
+          signal?.removeEventListener("abort", abortHandler);
+          eventSource.close();
+          reject(new DOMException("AbortError", "AbortError"));
         } else if (data.type === "error") {
           signal?.removeEventListener("abort", abortHandler);
           eventSource.close();
@@ -199,11 +218,35 @@ async function runSseJob(
   });
 
   const finalDownloadUrl = downloadUrl(job_id);
+  if (capturedQualityStatus === "needs_teacher_review") {
+    return {
+      blob: new Blob(),
+      filename: defaultFilename,
+      basisText: capturedBasisText,
+      imageUrl: capturedImageUrl,
+      worksheetText: capturedWorksheetText,
+      faktarapportText: capturedFaktarapportText,
+      languageExercises: capturedLanguageExercises,
+      warnings: capturedWarnings,
+      sourceGrounded: capturedSourceGrounded,
+      sourceName: capturedSourceName,
+      truthPassport: capturedTruthPassport,
+      lintIssues: capturedLintIssues,
+      qualityStatus: capturedQualityStatus,
+      qualityStopReason: capturedQualityStopReason,
+      quarantine: capturedQuarantine,
+    };
+  }
   const previewUrl = `${finalDownloadUrl}${finalDownloadUrl.includes("?") ? "&" : "?"}preview=true`;
   const dlRes = await fetch(previewUrl, { signal });
   if (!dlRes.ok) {
     const errorData = await dlRes.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Serverfeil: ${dlRes.status}`);
+    const detail = errorData.detail;
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : detail?.message || `Serverfeil: ${dlRes.status}`,
+    );
   }
 
   const blob = await dlRes.blob();
@@ -250,6 +293,9 @@ async function runSseJob(
     sourceGrounded: capturedSourceGrounded,
     sourceName: capturedSourceName,
     truthPassport: capturedTruthPassport,
+    qualityStatus: capturedQualityStatus ?? "source_approved",
+    qualityStopReason: capturedQualityStopReason,
+    quarantine: capturedQuarantine,
   };
 }
 

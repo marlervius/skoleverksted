@@ -14,6 +14,7 @@ from VGS_KI.backend.job_manager import (
     safe_filename,
     _jobs,
     _jobs_lock,
+    cancel_job,
 )
 
 
@@ -169,3 +170,33 @@ def test_unknown_error_shows_norwegian_message_with_reference():
 def test_quota_error_keeps_its_helpful_message():
     message = _run_failing_job(RuntimeError("429 RESOURCE_EXHAUSTED, retry in 42 seconds"))
     assert "42 sekunder" in message
+
+
+def test_cancel_marks_job_terminal_and_emits_cancelled_event():
+    async def _run() -> None:
+        job_id, queue = register_job()
+        started = threading.Event()
+
+        def cancellable_worker(ctx):
+            started.set()
+            while not ctx.cancel_check():
+                time.sleep(0.01)
+            return b"must-not-be-served", "blocked.pdf"
+
+        run_job_in_thread(job_id, queue, object(), cancellable_worker)
+        assert await asyncio.to_thread(started.wait, 5)
+        cancelled = cancel_job(job_id)
+        assert cancelled is not None
+        assert cancelled.status == "cancelled"
+        event = None
+        for _ in range(10):
+            candidate = await asyncio.wait_for(queue.get(), timeout=5)
+            if candidate.get("type") == "cancelled":
+                event = candidate
+                break
+        assert event is not None
+        await asyncio.sleep(0.05)
+        assert get_job(job_id).status == "cancelled"
+        assert get_job(job_id).done
+
+    asyncio.run(_run())

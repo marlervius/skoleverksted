@@ -37,15 +37,11 @@ if not google_api_key:
         "Get your API key from https://aistudio.google.com/apikey"
     )
 
-logger.info(f"Using model: {model_name}")
-logger.info(f"API key configured (ending in ...{google_api_key[-4:]})")
+logger.info("Using model: %s", model_name)
+logger.info("google_api_key_configured source=GOOGLE_API_KEY")
 
 # Configure the genai library with API key
 genai.configure(api_key=google_api_key)
-
-# Set environment variables for LiteLLM fallback
-os.environ["GEMINI_API_KEY"] = google_api_key
-os.environ["GOOGLE_API_KEY"] = google_api_key
 
 # Use CrewAI's LLM with explicit lowercase model name
 llm = LLM(
@@ -878,7 +874,19 @@ def _retry_english_fix(payload, leak_words: list[str]):
         return None
 
 
-def generate_lesson_content(topic: str, subject: str, level: str, language_level: str = None, options: dict[str, bool] = None, description: str = None, source_text: str = None, basis_text: str = None, interest: str = None, progress_callback=None, quality_generator_id: str = "fag.learning_sheet") -> dict:
+def _forward_quality_progress(progress_callback, event: dict[str, object]) -> None:
+    """Keep legacy one-argument callbacks while exposing structured progress."""
+    if not progress_callback:
+        return
+    message = str(event.get("message") or "Kontrollerer påstander …")
+    details = {key: value for key, value in event.items() if key != "message"}
+    try:
+        progress_callback(message, **details)
+    except TypeError:
+        progress_callback(message)
+
+
+def generate_lesson_content(topic: str, subject: str, level: str, language_level: str = None, options: dict[str, bool] = None, description: str = None, source_text: str = None, basis_text: str = None, interest: str = None, progress_callback=None, quality_generator_id: str = "fag.learning_sheet", cancel_check=None, request_id: str = "") -> dict:
     """
     Generate complete lesson content using the AI agents.
     
@@ -2524,6 +2532,12 @@ Hold fasiten praktisk og under 450 ord."""
         topic=topic,
         subject=subject,
         level=level,
+        cancel_check=cancel_check,
+        request_id=request_id,
+        progress_callback=(
+            lambda event: _forward_quality_progress(progress_callback, event)
+            if progress_callback else None
+        ),
     )
     truth_audit = type("QualityAudit", (), {"content": quality_result.approved_content, "passport": quality_result.passport})()
     try:
@@ -2595,6 +2609,7 @@ Hold fasiten praktisk og under 450 ord."""
         "quarantine": [item.model_dump(mode="json") for item in quality_result.quarantine],
         "quality_rounds": [item.model_dump(mode="json") for item in quality_result.rounds],
         "quality_stop_reason": quality_result.stop_reason,
+        "quality_status": quality_result.quality_status,
         "prompt_version": PROMPT_VERSION,
     }
 
