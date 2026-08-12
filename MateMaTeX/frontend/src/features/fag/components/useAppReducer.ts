@@ -2,7 +2,7 @@ import type { Status, LessonOptions, AppMode, StudentProfile } from "./constants
 import { DEFAULT_OPTIONS } from "./constants";
 import type { CompetencyGoal, ImageCandidate } from "./api";
 import type { ImageMode } from "@/components/image-mode-picker";
-import type { TruthPassport } from "@/lib/platform-api";
+import type { TeachingArtifact, TruthPassport } from "@/lib/platform-api";
 
 /** Result of one profile's generation in a batch run. */
 export interface ProfileResult {
@@ -59,6 +59,8 @@ export interface AppState {
   sourceGrounded: boolean | null;
   sourceName: string | null;
   truthPassport: TruthPassport | null;
+  qualityQuarantine: TeachingArtifact["quarantine"];
+  qualityStopReason: string;
   showEditPanel: boolean;
   imageCandidates: ImageCandidate[];
   imageCandidatesLoading: boolean;
@@ -105,6 +107,8 @@ export const initialState: AppState = {
   sourceGrounded: null,
   sourceName: null,
   truthPassport: null,
+  qualityQuarantine: [],
+  qualityStopReason: "",
   showEditPanel: false,
   imageCandidates: [],
   imageCandidatesLoading: false,
@@ -138,7 +142,7 @@ export type AppAction =
   | { type: "SET_TIMER_PER_UKE"; n: number }
   | { type: "GENERATION_START" }
   | { type: "GENERATION_PROGRESS"; message: string }
-  | { type: "GENERATION_SUCCESS"; blob: Blob; url: string; filename: string; basisText?: string; imageUrl?: string; worksheetText?: string; faktarapportText?: string; languageExercises?: Record<string, unknown>; warnings?: string[]; sourceGrounded?: boolean; sourceName?: string; truthPassport?: TruthPassport; rapportBlob?: Blob; rapportFilename?: string }
+  | { type: "GENERATION_SUCCESS"; blob: Blob; url: string; filename: string; basisText?: string; imageUrl?: string; worksheetText?: string; faktarapportText?: string; languageExercises?: Record<string, unknown>; warnings?: string[]; sourceGrounded?: boolean; sourceName?: string; truthPassport?: TruthPassport; qualityQuarantine?: TeachingArtifact["quarantine"]; qualityStopReason?: string; rapportBlob?: Blob; rapportFilename?: string }
   | { type: "SET_BASIS_TEXT"; text: string }
   | { type: "SET_WORKSHEET_TEXT"; text: string }
   | { type: "TOGGLE_EDIT_PANEL" }
@@ -242,6 +246,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         previewBlob: null,
         rapportBlob: null,
         truthPassport: null,
+        qualityQuarantine: [],
+        qualityStopReason: "",
       };
     case "GENERATION_PROGRESS":
       return { ...state, progressMessage: action.message };
@@ -265,6 +271,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         sourceGrounded: action.sourceGrounded ?? null,
         sourceName: action.sourceName ?? null,
         truthPassport: action.truthPassport ?? state.truthPassport,
+        qualityQuarantine: action.qualityQuarantine ?? [],
+        qualityStopReason: action.qualityStopReason ?? "",
         showEditPanel: false,
       };
     case "SET_BASIS_TEXT":

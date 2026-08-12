@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import deque
 
 import pytest
@@ -115,6 +116,93 @@ def test_unsupported_claim_is_quarantined_and_never_exported():
     assert len(result.quarantine) == 1
     assert "Månen" not in result.approved_content
     assert "Månen" in result.quarantine[0].original_text
+
+
+def test_source_unavailable_without_an_audited_claim_register_stays_blocked():
+    content = (
+        "## Oppgave\nSammenlign to perspektiver og begrunn svaret ditt. "
+        "Bruk fagbegreper og vis tydelig hvordan du tenker."
+    )
+
+    result = run_quality_pipeline(
+        generator_id="fag.learning_sheet",
+        content=content,
+        topic="Perspektiver",
+        subject="Historie",
+        level="VG2",
+        audit=lambda **kwargs: _audit(kwargs["content"], [], status="source_unavailable"),
+    )
+
+    assert not result.source_approved
+    assert result.passport.status == "source_unavailable"
+    assert result.approved_content == content
+
+
+def test_source_unavailable_instruction_only_content_is_safe_to_preview():
+    content = (
+        "## Oppgave\nSammenlign to perspektiver og begrunn svaret ditt. "
+        "Bruk fagbegreper og vis tydelig hvordan du tenker."
+    )
+    instruction = TruthClaim(
+        claim="Sammenlign to perspektiver.",
+        exact_text="Sammenlign to perspektiver og begrunn svaret ditt.",
+        status="verified",
+        action="keep",
+        content_type="instruction",
+    )
+
+    result = run_quality_pipeline(
+        generator_id="fag.learning_sheet",
+        content=content,
+        topic="Perspektiver",
+        subject="Historie",
+        level="VG2",
+        audit=lambda **kwargs: _audit(
+            kwargs["content"], [instruction], status="source_unavailable"
+        ),
+    )
+
+    assert result.source_approved
+    assert result.passport.status == "verified"
+
+
+def test_unsupported_claim_inside_json_is_removed_before_preview():
+    original = json.dumps(
+        {
+            "text": "Trygg innledning. Den hemmelige avtalen ble signert på Månen. Trygg avslutning.",
+            "worksheet": "Drøft kildenes troverdighet.",
+        },
+        ensure_ascii=False,
+    )
+    unsafe = TruthClaim(
+        claim="Avtalen ble signert på Månen.",
+        exact_text="signert på Månen",
+        status="unsupported",
+        action="remove",
+        content_type="fact",
+        location="Hovedtekst",
+    )
+    responses = deque([
+        _audit(original, [unsafe], status="source_unavailable"),
+        _audit("", [], status="source_unavailable"),
+    ])
+
+    result = run_quality_pipeline(
+        generator_id="fag.learning_sheet",
+        content=original,
+        topic="Kildekritikk",
+        subject="Historie",
+        level="VG2",
+        max_rounds=1,
+        audit=lambda **kwargs: responses.popleft(),
+    )
+
+    payload = json.loads(result.approved_content)
+    assert result.source_approved
+    assert len(result.quarantine) == 1
+    assert "Månen" not in payload["text"]
+    assert "Utelatt" in payload["text"]
+    assert payload["worksheet"] == "Drøft kildenes troverdighet."
 
 
 def test_fabricated_or_irrelevant_source_does_not_resolve_claim():

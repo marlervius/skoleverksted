@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import operator
 import re
 from dataclasses import dataclass
@@ -159,6 +160,70 @@ def _remove_exact_claim(content: str, exact: str) -> tuple[str, bool]:
         after = after[1:].lstrip(" \t")
     joiner = "\n" if before.endswith(("\n", "\r")) or after.startswith(("\n", "\r")) else " "
     return (before.rstrip() + joiner + after.lstrip()).strip(), True
+
+
+def _remove_exact_claim_from_json(content: str, exact: str) -> tuple[str, bool]:
+    """Remove one unambiguous claim from a JSON string value.
+
+    Several generators submit structured JSON as their canonical verification
+    document.  Treating that serialization as prose makes a perfectly complete
+    sentence look unsafe to remove because it is surrounded by JSON quotes.  We
+    therefore inspect string *values*, apply the same sentence-boundary rules
+    there, and serialize the otherwise unchanged structure again.
+    """
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return content, False
+
+    exact = exact.strip()
+    if not exact:
+        return content, False
+
+    occurrences = 0
+
+    def count_occurrences(value: object) -> None:
+        nonlocal occurrences
+        if isinstance(value, str):
+            occurrences += value.count(exact)
+        elif isinstance(value, list):
+            for item in value:
+                count_occurrences(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                count_occurrences(item)
+
+    count_occurrences(payload)
+    if occurrences != 1:
+        return content, False
+
+    removed = False
+    withheld_notice = "[Utelatt: denne delen kunne ikke kildeverifiseres.]"
+
+    def revise(value: object) -> object:
+        nonlocal removed
+        if isinstance(value, str) and exact in value:
+            revised, applied = _remove_exact_claim(value, exact)
+            if applied:
+                removed = True
+                return revised
+            # A model can return only an entity or phrase as ``exact_text``.
+            # Removing that fragment may change the meaning of the surrounding
+            # sentence, so quarantine the complete JSON field instead.  This
+            # deliberately sacrifices some safe prose rather than leaking an
+            # unresolved claim into student material.
+            removed = True
+            return withheld_notice
+        if isinstance(value, list):
+            return [revise(item) for item in value]
+        if isinstance(value, dict):
+            return {key: revise(item) for key, item in value.items()}
+        return value
+
+    revised_payload = revise(payload)
+    if not removed:
+        return content, False
+    return json.dumps(revised_payload, ensure_ascii=False), True
 
 
 def _changes(content_after: str, claims: Iterable[TruthClaim]) -> list[RepairChange]:
@@ -322,6 +387,8 @@ def run_quality_pipeline(
     unsafe: list[TruthClaim] = []
     for claim in [item for item in final.claims if not claim_is_resolved(item)]:
         revised, removed = _remove_exact_claim(current, claim.exact_text)
+        if not removed:
+            revised, removed = _remove_exact_claim_from_json(current, claim.exact_text)
         if removed:
             current = revised
             quarantine.append(
@@ -356,8 +423,16 @@ def run_quality_pipeline(
             "Minst én uløst påstand kunne ikke skilles trygt fra teksten og må redigeres av læreren.",
         ]))
     elif (
-        final.status not in {"verification_failed", "source_unavailable", "blocked"}
+        final.status not in {"verification_failed", "blocked"}
         and not [claim for claim in final.claims if not claim_is_resolved(claim)]
+        and (
+            final.status != "source_unavailable"
+            or bool(quarantine)
+            or (
+                bool(final.claims)
+                and not any(claim_requires_evidence(claim) for claim in final.claims)
+            )
+        )
     ):
         # Non-factual documents and documents cleaned by quarantine are valid
         # without inventing a source.  Evidence-bearing claims remain subject

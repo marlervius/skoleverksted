@@ -97,7 +97,7 @@ export default function Home() {
     selectedGoal, includeFasit, antallUker, timerPerUke,
     status, errorMessage, elapsedSeconds, progressMessage,
     previewUrl, previewBlob, previewFilename, rapportBlob, rapportFilename, showPreview,
-    basisText, generatedImageUrl, worksheetText, faktarapportText, languageExercises, warnings, sourceGrounded, sourceName, truthPassport, showEditPanel,
+    basisText, generatedImageUrl, worksheetText, faktarapportText, languageExercises, warnings, sourceGrounded, sourceName, truthPassport, qualityQuarantine, qualityStopReason, showEditPanel,
     imageCandidates, imageCandidatesLoading,
   } = state;
 
@@ -447,6 +447,8 @@ export default function Home() {
         sourceGrounded: result.sourceGrounded,
         sourceName: result.sourceName,
         truthPassport: result.truthPassport,
+        qualityQuarantine: result.qualityQuarantine,
+        qualityStopReason: result.qualityStopReason,
         rapportBlob: result.rapportBlob,
         rapportFilename: result.rapportFilename,
       });
@@ -666,6 +668,8 @@ export default function Home() {
           sourceGrounded: result.sourceGrounded,
           sourceName: result.sourceName,
           truthPassport: result.truthPassport,
+          qualityQuarantine: result.qualityQuarantine,
+          qualityStopReason: result.qualityStopReason,
           rapportBlob: result.rapportBlob,
           rapportFilename: result.rapportFilename,
         });
@@ -1564,6 +1568,31 @@ export default function Home() {
                     </div>
                   )}
                   {truthPassport && <TruthPassport passport={truthPassport} />}
+                  {qualityQuarantine.length > 0 && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                      <div className="flex items-start gap-2">
+                        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                        <div>
+                          <p className="font-semibold">
+                            AI-crewet utelot {qualityQuarantine.length} ukontrollert {qualityQuarantine.length === 1 ? "påstand" : "påstander"}
+                          </p>
+                          <p className="mt-1 text-xs text-amber-900">
+                            Punktene under er ikke med i elevens læringsark. Kontroller dem før du eventuelt skriver inn en korrigert versjon.
+                          </p>
+                        </div>
+                      </div>
+                      <ul className="mt-3 space-y-2">
+                        {qualityQuarantine.map((item) => (
+                          <li key={item.id || item.claim_id} className="rounded-lg border border-amber-200 bg-white/70 p-3">
+                            <p className="text-xs font-semibold">{item.location || "Ukjent del"}</p>
+                            <p className="mt-1">{item.original_text}</p>
+                            <p className="mt-1 text-xs text-stone-600">{item.reason}</p>
+                          </li>
+                        ))}
+                      </ul>
+                      {qualityStopReason && <p className="mt-3 text-xs text-stone-600">{qualityStopReason}</p>}
+                    </div>
+                  )}
                   {!truthPassport && mode === "laeringsark" && basisText && (
                     <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
                       <div className="font-semibold">Faktapass mangler</div>

@@ -1,7 +1,7 @@
 import type { LessonOptions } from "./constants";
 import type { ImageMode } from "@/components/image-mode-picker";
 import { serviceBackendUrl } from "@/lib/backend-url";
-import type { TruthPassport } from "@/lib/platform-api";
+import type { TeachingArtifact, TruthPassport } from "@/lib/platform-api";
 
 const API_URL = serviceBackendUrl(process.env.NEXT_PUBLIC_VGS_API_URL, "api/fag");
 
@@ -41,6 +41,8 @@ interface GenerateLessonResult {
   sourceGrounded?: boolean;
   sourceName?: string;
   truthPassport?: TruthPassport;
+  qualityQuarantine?: TeachingArtifact["quarantine"];
+  qualityStopReason?: string;
   /** Separate teacher fact-report PDF (spec 2.8), when generated. */
   rapportBlob?: Blob;
   rapportFilename?: string;
@@ -150,6 +152,8 @@ async function runSseJob(
   let capturedSourceGrounded: boolean | undefined;
   let capturedSourceName: string | undefined;
   let capturedTruthPassport: TruthPassport | undefined;
+  let capturedQualityQuarantine: TeachingArtifact["quarantine"] | undefined;
+  let capturedQualityStopReason: string | undefined;
   let capturedHasFaktarapport = false;
   let capturedLintIssues: string[] | undefined;
 
@@ -176,6 +180,8 @@ async function runSseJob(
           capturedSourceGrounded = data.source_grounded ?? undefined;
           capturedSourceName = data.source_name ?? undefined;
           capturedTruthPassport = data.truth_passport ?? undefined;
+          capturedQualityQuarantine = data.quarantine ?? undefined;
+          capturedQualityStopReason = data.quality_stop_reason ?? undefined;
           capturedHasFaktarapport = Boolean(data.has_faktarapport);
           capturedLintIssues = data.lint_issues ?? undefined;
           signal?.removeEventListener("abort", abortHandler);
@@ -250,6 +256,8 @@ async function runSseJob(
     sourceGrounded: capturedSourceGrounded,
     sourceName: capturedSourceName,
     truthPassport: capturedTruthPassport,
+    qualityQuarantine: capturedQualityQuarantine,
+    qualityStopReason: capturedQualityStopReason,
   };
 }
 
