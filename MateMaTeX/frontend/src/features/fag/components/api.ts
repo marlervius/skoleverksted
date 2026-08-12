@@ -49,6 +49,25 @@ interface GenerateLessonResult {
   lintIssues?: string[];
 }
 
+export class QualityReviewRequiredError extends Error {
+  readonly basisText?: string;
+  readonly worksheetText?: string;
+  readonly faktarapportText?: string;
+  readonly languageExercises?: Record<string, unknown>;
+  readonly warnings?: string[];
+  readonly sourceGrounded?: boolean;
+  readonly sourceName?: string;
+  readonly truthPassport?: TruthPassport;
+  readonly qualityQuarantine?: TeachingArtifact["quarantine"];
+  readonly qualityStopReason?: string;
+
+  constructor(message: string, result: Omit<GenerateLessonResult, "blob" | "filename">) {
+    super(message);
+    this.name = "QualityReviewRequiredError";
+    Object.assign(this, result);
+  }
+}
+
 export async function generateLesson(
   params: GenerateLessonParams
 ): Promise<GenerateLessonResult> {
@@ -209,7 +228,22 @@ async function runSseJob(
   const dlRes = await fetch(previewUrl, { signal });
   if (!dlRes.ok) {
     const errorData = await dlRes.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Serverfeil: ${dlRes.status}`);
+    const message = errorData.detail || `Serverfeil: ${dlRes.status}`;
+    if (dlRes.status === 409 && capturedTruthPassport) {
+      throw new QualityReviewRequiredError(message, {
+        basisText: capturedBasisText,
+        worksheetText: capturedWorksheetText,
+        faktarapportText: capturedFaktarapportText,
+        languageExercises: capturedLanguageExercises,
+        warnings: capturedWarnings,
+        sourceGrounded: capturedSourceGrounded,
+        sourceName: capturedSourceName,
+        truthPassport: capturedTruthPassport,
+        qualityQuarantine: capturedQualityQuarantine,
+        qualityStopReason: capturedQualityStopReason,
+      });
+    }
+    throw new Error(message);
   }
 
   const blob = await dlRes.blob();

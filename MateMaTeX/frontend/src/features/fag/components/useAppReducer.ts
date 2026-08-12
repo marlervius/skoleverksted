@@ -148,7 +148,7 @@ export type AppAction =
   | { type: "TOGGLE_EDIT_PANEL" }
   | { type: "IMAGE_CANDIDATES_LOADING" }
   | { type: "IMAGE_CANDIDATES_LOADED"; candidates: ImageCandidate[] }
-  | { type: "GENERATION_ERROR"; message: string }
+  | { type: "GENERATION_ERROR"; message: string; basisText?: string; worksheetText?: string; faktarapportText?: string; languageExercises?: Record<string, unknown>; warnings?: string[]; sourceGrounded?: boolean; sourceName?: string; truthPassport?: TruthPassport; qualityQuarantine?: TeachingArtifact["quarantine"]; qualityStopReason?: string }
   | { type: "GENERATION_CANCEL" }
   | { type: "GENERATION_IDLE" }
   | { type: "SHOW_PREVIEW" }
@@ -279,20 +279,24 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         basisText: action.text,
-        truthPassport: null,
+        truthPassport: state.status === "error" ? state.truthPassport : null,
         warnings: Array.from(new Set([
           ...state.warnings,
-          "Faktapasset ble nullstilt fordi teksten ble redigert.",
+          state.status === "error"
+            ? "Faktapasset gjelder forrige tekst. Kjør kildekontrollen på nytt etter redigering."
+            : "Faktapasset ble nullstilt fordi teksten ble redigert.",
         ])),
       };
     case "SET_WORKSHEET_TEXT":
       return {
         ...state,
         worksheetText: action.text,
-        truthPassport: null,
+        truthPassport: state.status === "error" ? state.truthPassport : null,
         warnings: Array.from(new Set([
           ...state.warnings,
-          "Faktapasset ble nullstilt fordi oppgavene ble redigert.",
+          state.status === "error"
+            ? "Faktapasset gjelder forrige oppgavesett. Kjør kildekontrollen på nytt etter redigering."
+            : "Faktapasset ble nullstilt fordi oppgavene ble redigert.",
         ])),
       };
     case "TOGGLE_EDIT_PANEL":
@@ -302,7 +306,22 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "IMAGE_CANDIDATES_LOADED":
       return { ...state, imageCandidatesLoading: false, imageCandidates: action.candidates };
     case "GENERATION_ERROR":
-      return { ...state, status: "error", errorMessage: action.message, progressMessage: "" };
+      return {
+        ...state,
+        status: "error",
+        errorMessage: action.message,
+        progressMessage: "",
+        basisText: action.basisText ?? state.basisText,
+        worksheetText: action.worksheetText ?? state.worksheetText,
+        faktarapportText: action.faktarapportText ?? state.faktarapportText,
+        languageExercises: action.languageExercises ?? state.languageExercises,
+        warnings: action.warnings ?? state.warnings,
+        sourceGrounded: action.sourceGrounded ?? state.sourceGrounded,
+        sourceName: action.sourceName ?? state.sourceName,
+        truthPassport: action.truthPassport ?? state.truthPassport,
+        qualityQuarantine: action.qualityQuarantine ?? state.qualityQuarantine,
+        qualityStopReason: action.qualityStopReason ?? state.qualityStopReason,
+      };
     case "GENERATION_CANCEL":
       return { ...state, status: "idle", progressMessage: "" };
     case "GENERATION_IDLE":

@@ -46,6 +46,7 @@ import {
   downloadBlob,
   downloadDocx,
   createBlobUrl,
+  QualityReviewRequiredError,
 } from "./components/api";
 import { ImageModePicker, type ImageMode } from "@/components/image-mode-picker";
 import { AdvancedOptions, GenerationJourney, GenerationSummary } from "@/components/generation-flow";
@@ -691,7 +692,24 @@ export default function Home() {
             ? error.message
             : "Kunne ikke generere dokumentet. Prøv igjen.";
 
-        dispatch({ type: "GENERATION_ERROR", message });
+        if (error instanceof QualityReviewRequiredError) {
+          dispatch({
+            type: "GENERATION_ERROR",
+            message,
+            basisText: error.basisText,
+            worksheetText: error.worksheetText,
+            faktarapportText: error.faktarapportText,
+            languageExercises: error.languageExercises,
+            warnings: error.warnings,
+            sourceGrounded: error.sourceGrounded,
+            sourceName: error.sourceName,
+            truthPassport: error.truthPassport,
+            qualityQuarantine: error.qualityQuarantine,
+            qualityStopReason: error.qualityStopReason,
+          });
+        } else {
+          dispatch({ type: "GENERATION_ERROR", message });
+        }
       } finally {
         abortControllerRef.current = null;
         dispatch({ type: "GENERATION_PROGRESS", message: "" });
@@ -1848,6 +1866,57 @@ export default function Home() {
                 elapsedSeconds={elapsedSeconds}
                 progressMessage={progressMessage}
               />
+              {status === "error" && (truthPassport || qualityQuarantine.length > 0) && basisText && worksheetText && (
+                <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+                  <div className="flex items-start gap-2">
+                    <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                    <div>
+                      <p className="font-semibold">AI-crewet stoppet ukontrollert innhold</p>
+                      <p className="mt-1 text-xs text-amber-900">
+                        Elev-PDF-en er ikke frigitt. Se hva som mangler, rediger eller fjern teksten under,
+                        og kjør kildekontrollen på nytt.
+                      </p>
+                    </div>
+                  </div>
+                  {truthPassport && <div className="mt-3"><TruthPassport passport={truthPassport} /></div>}
+                  {qualityQuarantine.length > 0 && (
+                    <ul className="mt-3 space-y-2">
+                      {qualityQuarantine.map((item) => (
+                        <li key={item.id || item.claim_id} className="rounded-lg border border-amber-200 bg-white/80 p-3">
+                          <p className="text-xs font-semibold">{item.location || "Ukjent del"}</p>
+                          <p className="mt-1">{item.original_text}</p>
+                          <p className="mt-1 text-xs text-stone-600">{item.reason}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {qualityStopReason && <p className="mt-3 text-xs text-stone-600">{qualityStopReason}</p>}
+                  <div className="mt-4 space-y-3 rounded-lg border border-amber-200 bg-white/70 p-3">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">Fagtekst til ny kontroll</label>
+                      <textarea
+                        value={basisText}
+                        onChange={(event) => dispatch({ type: "SET_BASIS_TEXT", text: event.target.value })}
+                        rows={8}
+                        className="input-field text-sm leading-relaxed resize-y"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-stone-700">Oppgaver til ny kontroll</label>
+                      <textarea
+                        value={worksheetText}
+                        onChange={(event) => dispatch({ type: "SET_WORKSHEET_TEXT", text: event.target.value })}
+                        rows={7}
+                        className="input-field text-sm leading-relaxed resize-y"
+                      />
+                    </div>
+                    <button type="button" onClick={handleOppdaterPdf} className="btn-primary w-full py-3 px-4 text-sm">
+                      <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                      Kjør kildekontroll på nytt
+                    </button>
+                  </div>
+                </div>
+              )}
               {status === "success" && <div className="mt-4 space-y-3"><RevisionActions onSelect={(instruction) => { dispatch({ type: "SET_DESCRIPTION", description: [description, instruction].filter(Boolean).join("\n") }); window.setTimeout(() => formRef.current?.requestSubmit(), 0); }} /><GenerationFeedback module="fag" /></div>}
 
               {/* ── Batch results per student group ──────────────────────────── */}
