@@ -57,6 +57,7 @@ if __package__:
     from .job_manager import (
         JobContext, compute_cache_key, fetch_image_with_retry, get_job,
         register_job, run_job_in_thread, safe_filename, start_cleanup_task,
+        cancel_job,
     )
 else:
     import config
@@ -79,6 +80,7 @@ else:
     from job_manager import (
         JobContext, compute_cache_key, fetch_image_with_retry, get_job,
         register_job, run_job_in_thread, safe_filename, start_cleanup_task,
+        cancel_job,
     )
 
 _wikimedia_tool = WikimediaImageSearchTool()
@@ -392,10 +394,16 @@ async def _stream_job(job_id: str, request: Request) -> StreamingResponse:
                     timeout=config.SSE_HEARTBEAT_SECONDS,
                 )
                 yield f"data: {json.dumps(msg)}\n\n"
-                if msg.get("type") in ("done", "error"):
+                if msg.get("type") in ("done", "needs_teacher_review", "failed", "cancelled", "error"):
                     break
             except asyncio.TimeoutError:
-                yield "data: {\"type\":\"heartbeat\"}\n\n"
+                current = get_job(job_id)
+                heartbeat = {
+                    "type": "heartbeat",
+                    "status": current.status if current else "failed",
+                    **(current.progress if current else {}),
+                }
+                yield f"data: {json.dumps(heartbeat)}\n\n"
 
     return StreamingResponse(
         event_gen(),
@@ -411,6 +419,23 @@ async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
         raise HTTPException(status_code=404, detail="Job not found")
     if not job.done:
         raise HTTPException(status_code=202, detail="Generering pågår fortsatt")
+    if job.status == "cancelled":
+        raise HTTPException(status_code=409, detail="Genereringen er avbrutt.")
+    if job.status == "failed":
+        raise HTTPException(status_code=500, detail=job.error or "Genereringen feilet.")
+    if job.status == "needs_teacher_review":
+        passport = job.truth_passport or {}
+        reason = job.quality_stop_reason or "truth_layer_unresolved_claims"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "needs_teacher_review",
+                "stop_reason": reason,
+                "message": "PDF er blokkert til en lærer har kontrollert innholdet.",
+                "truth_passport": passport,
+                "quarantine": job.quarantine,
+            },
+        )
     if job.error:
         raise HTTPException(status_code=500, detail=job.error)
 
@@ -439,6 +464,17 @@ async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
                 quarantined_texts=quarantine,
             )
             if reasons:
+                if passport:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "needs_teacher_review",
+                            "stop_reason": "truth_passport_mismatch",
+                            "message": "Kildekontrollen krever ny lærer-gjennomgang før forhåndsvisning.",
+                            "truth_passport": passport,
+                            "reasons": reasons,
+                        },
+                    )
                 raise HTTPException(status_code=409, detail="Forhåndsvisningen er blokkert: " + "; ".join(reasons))
         else:
             try:
@@ -467,6 +503,15 @@ async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
             "X-Quality-Status": "review_only" if kind == "rapport" else ("source_approved" if preview else "export_ready"),
         },
     )
+
+
+@app.delete("/generate/{job_id}")
+async def cancel_generation(job_id: str):
+    """Cancel a generation and publish an idempotent terminal SSE event."""
+    job = cancel_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"success": True, "status": job.status, "message": "Genereringen er avbrutt."}
 
 
 @app.post("/generation/{job_id}/approve")
@@ -535,6 +580,12 @@ def _verify_structured_output(
 ) -> dict:
     """Route assessment and sequence JSON through the shared quality engine."""
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    def _quality_progress(event: dict[str, object]) -> None:
+        details = dict(event)
+        message = str(details.pop("message", "Sannhetslaget arbeider..."))
+        ctx.push(message, **details)
+
     result = run_quality_pipeline(
         generator_id=generator_id,
         content=canonical,
@@ -542,6 +593,9 @@ def _verify_structured_output(
         subject=subject,
         level=level,
         provided_sources=provided_sources,
+        cancel_check=ctx.cancel_check,
+        request_id=ctx.job_id,
+        progress_callback=_quality_progress,
     )
     try:
         verified_payload = json.loads(result.approved_content)
@@ -555,6 +609,7 @@ def _verify_structured_output(
         ctx.set_meta("quarantine", [item.model_dump(mode="json") for item in result.quarantine])
         ctx.set_meta("quality_rounds", [item.model_dump(mode="json") for item in result.rounds])
         ctx.set_meta("quality_stop_reason", result.stop_reason)
+        ctx.set_meta("quality_status", result.quality_status)
     return verified_payload
 
 
@@ -586,6 +641,8 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         interest=req.interest,
         basis_text=req.basis_text,
         progress_callback=ctx.push,
+        cancel_check=ctx.cancel_check,
+        request_id=ctx.job_id,
     )
 
     if ctx.set_meta:
@@ -602,7 +659,19 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("quarantine", content.get("quarantine"))
         ctx.set_meta("quality_rounds", content.get("quality_rounds"))
         ctx.set_meta("quality_stop_reason", content.get("quality_stop_reason"))
+        ctx.set_meta("quality_status", content.get("quality_status", "needs_teacher_review"))
         ctx.set_meta("prompt_version", content.get("prompt_version"))
+
+    if content.get("quality_status") != "source_approved":
+        ctx.push(
+            "Kildekontrollen er ferdig – rediger innholdet før PDF kan frigis.",
+            revision_round=len(content.get("quality_rounds") or []),
+            claims_checked=sum(int(round_item.get("claims_found", 0)) for round_item in content.get("quality_rounds") or []),
+            claims_verified=sum(int(round_item.get("claims_verified", 0)) for round_item in content.get("quality_rounds") or []),
+            claims_quarantined=len(content.get("quarantine") or []),
+            stop_reason=content.get("quality_stop_reason") or "truth_layer_unresolved_claims",
+        )
+        return b"", safe_filename("kontroll", req.topic, req.level)
 
     if normalize_image_mode(req.image_mode) != "none" and not req.image_data and not req.image_url_override:
         ctx.push("Bildecrewet planlegger og kvalitetssikrer ett pedagogisk bilde...")
@@ -775,6 +844,8 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
         interest=req.interest,
         progress_callback=ctx.push,
         quality_generator_id="fag.differentiated",
+        cancel_check=ctx.cancel_check,
+        request_id=ctx.job_id,
     )
 
     if ctx.set_meta:
@@ -787,6 +858,11 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("quarantine", content.get("quarantine"))
         ctx.set_meta("quality_rounds", content.get("quality_rounds"))
         ctx.set_meta("quality_stop_reason", content.get("quality_stop_reason"))
+        ctx.set_meta("quality_status", content.get("quality_status", "needs_teacher_review"))
+
+    if content.get("quality_status") != "source_approved":
+        ctx.push("Kildekontrollen er ferdig – rediger innholdet før PDF kan frigis.")
+        return b"", safe_filename("kontroll", req.topic, req.level)
 
     ctx.push(
         "Bildecrewet planlegger og kvalitetssikrer ett pedagogisk bilde..."
@@ -878,6 +954,10 @@ def _prove_worker(ctx: JobContext) -> tuple[bytes, str]:
             level=req.level,
             provided_sources=(source_metadata,) if source_metadata else (),
         )
+        if ctx.cancel_check and ctx.cancel_check():
+            return b"", safe_filename("kontroll", req.topic, req.level)
+        if (ctx.meta or {}).get("quality_status") != "source_approved":
+            return b"", safe_filename("kontroll", req.topic, req.level)
         pdf_bytes = create_prove_pdf(
             prove_json=prove_json,
             topic=req.topic,
@@ -919,6 +999,8 @@ def _sequence_worker(ctx: JobContext) -> tuple[bytes, str]:
         subject=req.subject,
         level=req.level,
     )
+    if (ctx.meta or {}).get("quality_status") != "source_approved":
+        return b"", safe_filename("kontroll", req.topic, req.level)
     ctx.push("Kompilerer sekvensplan-PDF...")
     pdf_bytes = create_sequence_pdf(
         sequence_json=sequence_json,

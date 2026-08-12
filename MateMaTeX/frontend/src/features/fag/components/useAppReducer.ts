@@ -143,6 +143,7 @@ export type AppAction =
   | { type: "GENERATION_START" }
   | { type: "GENERATION_PROGRESS"; message: string }
   | { type: "GENERATION_SUCCESS"; blob: Blob; url: string; filename: string; basisText?: string; imageUrl?: string; worksheetText?: string; faktarapportText?: string; languageExercises?: Record<string, unknown>; warnings?: string[]; sourceGrounded?: boolean; sourceName?: string; truthPassport?: TruthPassport; qualityQuarantine?: TeachingArtifact["quarantine"]; qualityStopReason?: string; rapportBlob?: Blob; rapportFilename?: string }
+  | { type: "GENERATION_REVIEW"; basisText?: string; imageUrl?: string; worksheetText?: string; faktarapportText?: string; languageExercises?: Record<string, unknown>; warnings?: string[]; sourceGrounded?: boolean; sourceName?: string; truthPassport?: TruthPassport; qualityStopReason?: string; qualityQuarantine?: TeachingArtifact["quarantine"] }
   | { type: "SET_BASIS_TEXT"; text: string }
   | { type: "SET_WORKSHEET_TEXT"; text: string }
   | { type: "TOGGLE_EDIT_PANEL" }
@@ -275,6 +276,27 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         qualityStopReason: action.qualityStopReason ?? "",
         showEditPanel: false,
       };
+    case "GENERATION_REVIEW":
+      return {
+        ...state,
+        status: "review",
+        progressMessage: "",
+        showPreview: false,
+        previewBlob: null,
+        previewUrl: null,
+        basisText: action.basisText ?? state.basisText,
+        generatedImageUrl: action.imageUrl ?? state.generatedImageUrl,
+        worksheetText: action.worksheetText ?? state.worksheetText,
+        faktarapportText: action.faktarapportText ?? state.faktarapportText,
+        languageExercises: action.languageExercises ?? state.languageExercises,
+        warnings: action.warnings ?? [],
+        sourceGrounded: action.sourceGrounded ?? null,
+        sourceName: action.sourceName ?? null,
+        truthPassport: action.truthPassport ?? state.truthPassport,
+        qualityStopReason: action.qualityStopReason ?? "truth_layer_unresolved_claims",
+        qualityQuarantine: action.qualityQuarantine ?? [],
+        showEditPanel: true,
+      };
     case "SET_BASIS_TEXT":
       return {
         ...state,
@@ -323,7 +345,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         qualityStopReason: action.qualityStopReason ?? state.qualityStopReason,
       };
     case "GENERATION_CANCEL":
-      return { ...state, status: "idle", progressMessage: "" };
+      return { ...state, status: "idle", progressMessage: "", errorMessage: "" };
     case "GENERATION_IDLE":
       return { ...state, status: "idle" };
     case "SHOW_PREVIEW":

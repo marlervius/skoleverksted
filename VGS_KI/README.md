@@ -57,6 +57,12 @@ copy .env.example .env       # legg inn GOOGLE_API_KEY
 uvicorn main:app --reload
 ```
 
+Sannhetslaget bruker `GOOGLE_API_KEY` som kanonisk nøkkel. `GEMINI_API_KEY`
+er kun en bakoverkompatibel reserve. Kvalitetsbudsjettet kan overstyres med
+`QUALITY_GATE_MODEL_TIMEOUT_SECONDS` (45 sekunder per modellkall),
+`QUALITY_GATE_MAX_MODEL_ATTEMPTS` (2), `QUALITY_GATE_MAX_REVISION_ROUNDS`
+(2) og `QUALITY_GATE_TIMEOUT_SECONDS` (120 sekunder totalt).
+
 API: `http://localhost:8000`. Krever [Typst CLI](https://typst.app) i PATH for PDF-kompilering.
 
 ### Frontend

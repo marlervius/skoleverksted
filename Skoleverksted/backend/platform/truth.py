@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 from .models import TruthClaim, TruthPassport, TruthSource, TruthSourceAttempt
+from .quality_runtime import QualityLayerCancelled, QualityLayerTimeout
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +359,10 @@ def audit_truth(
     subject: str,
     level: str,
     provided_sources: Iterable[object] = (),
+    cancel_check: Callable[[], bool] | None = None,
+    call_timeout_seconds: float | None = None,
+    max_attempts: int | None = None,
+    request_id: str = "",
 ) -> TruthAudit:
     """Research, classify and safely revise factual claims in ``content``."""
     if len(content.strip()) < 80:
@@ -440,7 +446,15 @@ JSON:
             prompt,
             grounded=True,
             response_schema=TRUTH_AUDIT_SCHEMA,
+            timeout_seconds=call_timeout_seconds,
+            max_attempts=max_attempts,
+            cancel_check=cancel_check,
+            request_id=request_id,
         )
+    except (QualityLayerCancelled, QualityLayerTimeout):
+        # The outer quality pipeline owns the deterministic review fallback.
+        # Do not convert a timeout into an ordinary provider failure here.
+        raise
     except Exception as exc:
         logger.exception("Det felles sannhetslaget feilet: %s", exc)
         passport = _blocked_passport(

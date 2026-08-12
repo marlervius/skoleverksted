@@ -32,6 +32,13 @@ from .models import (
 )
 from .truth import TruthAudit, audit_truth
 from .quality_gate import run_quality_pipeline
+from .quality_runtime import (
+    QualityLayerCancelled,
+    QualityLayerTimeout,
+    env_float,
+    env_int,
+    run_bounded_sync,
+)
 from .text_quality import TextQualityIssue, inspect_markdown
 
 
@@ -486,31 +493,121 @@ def _call_google_json(
     *,
     grounded: bool = False,
     response_schema: dict[str, Any] | None = None,
+    timeout_seconds: float | None = None,
+    max_attempts: int | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    request_id: str = "",
 ) -> tuple[dict[str, Any], list[CompendiumSource]]:
     from google import genai
     from google.genai import types
 
-    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    google_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    legacy_gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    api_key = google_key or legacy_gemini_key
     if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY mangler")
+        raise RuntimeError("GOOGLE_API_KEY mangler (GEMINI_API_KEY er kun bakoverkompatibel reserve)")
+    key_source = "GOOGLE_API_KEY" if google_key else "GEMINI_API_KEY"
+    timeout = timeout_seconds or env_float("QUALITY_GATE_MODEL_TIMEOUT_SECONDS", 45.0)
+    attempts = max(1, min(2, max_attempts or env_int("QUALITY_GATE_MAX_MODEL_ATTEMPTS", 2, maximum=2)))
+    model = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash").removeprefix("gemini/")
     config: dict[str, Any] = {
         "temperature": 0.2,
-        "response_mime_type": "application/json",
+        "responseMimeType": "application/json",
     }
     if response_schema:
-        config["response_json_schema"] = response_schema
+        config["responseJsonSchema"] = response_schema
     if grounded:
         config["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+        config["automaticFunctionCalling"] = types.AutomaticFunctionCallingConfig(
+            disable=False,
+            maximumRemoteCalls=env_int("QUALITY_GATE_AFC_MAX_REMOTE_CALLS", 1, maximum=2),
+        )
+    else:
+        config["automaticFunctionCalling"] = types.AutomaticFunctionCallingConfig(disable=True)
 
-    client = genai.Client(api_key=api_key)
-    try:
-        model = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash").removeprefix("gemini/")
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=types.GenerateContentConfig(**config),
+    logger.info(
+        "google_api_key_configured",
+        extra={"request_id": request_id, "key_source": key_source, "model": model},
+    )
+
+    def is_timeout(exc: BaseException) -> bool:
+        return isinstance(exc, (TimeoutError, QualityLayerTimeout)) or "timeout" in str(exc).lower()
+
+    def generate(label: str, contents: str, generation_config: dict[str, Any]) -> Any:
+        last_error: BaseException | None = None
+        for attempt in range(1, attempts + 1):
+            if cancel_check and cancel_check():
+                raise QualityLayerCancelled(f"{label} cancelled")
+            started = time.monotonic()
+            client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(
+                    timeout=max(1, int(timeout * 1000)),
+                    retry_options=types.HttpRetryOptions(attempts=1),
+                ),
             )
+            logger.info(
+                "model_call_started",
+                extra={
+                    "request_id": request_id,
+                    "model": model,
+                    "operation": label,
+                    "attempt": attempt,
+                    "timeout_s": timeout,
+                    "grounded": grounded,
+                },
+            )
+            try:
+                response = run_bounded_sync(
+                    lambda: client.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=types.GenerateContentConfig(**generation_config),
+                    ),
+                    timeout_seconds=timeout,
+                    cancel_check=cancel_check,
+                    operation_name=label,
+                )
+                logger.info(
+                    "model_call_completed",
+                    extra={
+                        "request_id": request_id,
+                        "model": model,
+                        "operation": label,
+                        "attempt": attempt,
+                        "duration_ms": round((time.monotonic() - started) * 1000),
+                    },
+                )
+                return response
+            except QualityLayerCancelled:
+                logger.info("job_cancelled", extra={"request_id": request_id, "operation": label})
+                raise
+            except BaseException as exc:
+                last_error = exc
+                if is_timeout(exc):
+                    logger.warning(
+                        "model_call_timeout",
+                        extra={
+                            "request_id": request_id,
+                            "model": model,
+                            "operation": label,
+                            "attempt": attempt,
+                            "duration_ms": round((time.monotonic() - started) * 1000),
+                        },
+                    )
+                if attempt >= attempts:
+                    if is_timeout(exc):
+                        raise QualityLayerTimeout(f"{label} timed out") from exc
+                    raise
+            finally:
+                close = getattr(client, "close", None)
+                if callable(close):
+                    close()
+        raise last_error or RuntimeError(f"{label} failed")
+
+    try:
+        try:
+            response = generate("truth_model_call", prompt, config)
         except Exception as exc:
             if not grounded or not _structured_tools_unsupported(exc):
                 raise
@@ -521,12 +618,9 @@ def _call_google_json(
             fallback_config = {
                 "temperature": config["temperature"],
                 "tools": config["tools"],
+                "automaticFunctionCalling": config["automaticFunctionCalling"],
             }
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=types.GenerateContentConfig(**fallback_config),
-            )
+            response = generate("truth_model_call_without_schema", prompt, fallback_config)
 
         sources = _grounding_sources(response)
         raw = _response_text(response)
@@ -545,20 +639,15 @@ bevares. Ikke legg til nye opplysninger. Returner kun ett gyldig JSON-objekt.
 """
             repair_config: dict[str, Any] = {
                 "temperature": 0,
-                "response_mime_type": "application/json",
+                "responseMimeType": "application/json",
+                "automaticFunctionCalling": types.AutomaticFunctionCallingConfig(disable=True),
             }
             if response_schema:
-                repair_config["response_json_schema"] = response_schema
-            repaired = client.models.generate_content(
-                model=model,
-                contents=repair_prompt,
-                config=types.GenerateContentConfig(**repair_config),
-            )
+                repair_config["responseJsonSchema"] = response_schema
+            repaired = generate("truth_json_repair", repair_prompt, repair_config)
             return _extract_json(_response_text(repaired)), sources
-    finally:
-        close = getattr(client, "close", None)
-        if callable(close):
-            close()
+    except QualityLayerCancelled:
+        raise
 
 
 def _fallback_titles(request: CompendiumPlanRequest) -> list[tuple[str, str]]:

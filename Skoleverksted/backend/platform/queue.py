@@ -16,6 +16,10 @@ from .store import get_platform_store
 logger = logging.getLogger(__name__)
 
 
+class JobCancelled(RuntimeError):
+    """Raised when a queued generation is cancelled before it starts."""
+
+
 class _RedisJobLease:
     """Best-effort distributed capacity lease for multi-instance deployments."""
 
@@ -60,14 +64,20 @@ class _RedisJobLease:
                 logger.warning("Kunne ikke frigjøre Redis-jobblås", exc_info=True)
 
     @contextmanager
-    def claim(self, job_id: str) -> Iterator[None]:
+    def claim(self, job_id: str, *, cancel_check: Callable[[], bool] | None = None) -> Iterator[None]:
         if self.client is None:
+            if cancel_check and cancel_check():
+                raise JobCancelled("job cancelled before capacity claim")
             yield
             return
         token = f"{os.getpid()}:{threading.get_ident()}:{job_id}:{uuid.uuid4().hex}"
         try:
             while not self._try_acquire(token):
+                if cancel_check and cancel_check():
+                    raise JobCancelled("job cancelled while waiting for capacity")
                 time.sleep(0.5)
+        except JobCancelled:
+            raise
         except Exception as exc:
             # A Redis outage must not strand a teacher's job indefinitely. The
             # durable SQLite state remains authoritative and the local gate is
@@ -142,13 +152,16 @@ class DurableJobGate:
         *,
         on_wait: Callable[[int], None] | None = None,
         auto_complete: bool = True,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> Iterator[None]:
         position = self._store.queue_position(job_id) or 1
         if on_wait:
             on_wait(position)
-        self._gate.acquire()
+        while not self._gate.acquire(timeout=0.5):
+            if cancel_check and cancel_check():
+                raise JobCancelled("job cancelled while waiting for capacity")
         try:
-            with self._distributed.claim(job_id):
+            with self._distributed.claim(job_id, cancel_check=cancel_check):
                 self._store.update_job_state(
                     job_id,
                     status="generating",
@@ -157,6 +170,15 @@ class DurableJobGate:
                     retryable=True,
                 )
                 yield
+        except JobCancelled:
+            self._store.update_job_state(
+                job_id,
+                status="cancelled",
+                message="Avbrutt av bruker",
+                progress=100,
+                retryable=True,
+            )
+            raise
         except BaseException as exc:
             self._store.update_job_state(
                 job_id,
