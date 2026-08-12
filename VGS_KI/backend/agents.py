@@ -878,7 +878,7 @@ def _retry_english_fix(payload, leak_words: list[str]):
         return None
 
 
-def generate_lesson_content(topic: str, subject: str, level: str, language_level: str = None, options: dict[str, bool] = None, description: str = None, source_text: str = None, basis_text: str = None, interest: str = None, progress_callback=None, quality_generator_id: str = "fag.learning_sheet") -> dict:
+def generate_lesson_content(topic: str, subject: str, level: str, language_level: str = None, options: dict[str, bool] = None, description: str = None, source_text: str = None, basis_text: str = None, interest: str = None, progress_callback=None, quality_generator_id: str = "fag.learning_sheet", source_metadata: dict | None = None) -> dict:
     """
     Generate complete lesson content using the AI agents.
     
@@ -2524,6 +2524,7 @@ Hold fasiten praktisk og under 450 ord."""
         topic=topic,
         subject=subject,
         level=level,
+        provided_sources=(source_metadata,) if source_metadata else (),
     )
     truth_audit = type("QualityAudit", (), {"content": quality_result.approved_content, "passport": quality_result.passport})()
     try:

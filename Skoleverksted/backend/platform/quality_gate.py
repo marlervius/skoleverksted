@@ -226,6 +226,53 @@ def _remove_exact_claim_from_json(content: str, exact: str) -> tuple[str, bool]:
     return json.dumps(revised_payload, ensure_ascii=False), True
 
 
+def _quarantine_item(claim: TruthClaim) -> QualityQuarantineItem:
+    return QualityQuarantineItem(
+        claim_id=claim.id,
+        content_type=claim.content_type,
+        original_text=claim.exact_text or claim.claim,
+        location=claim.location or "Ukjent seksjon",
+        reason=claim.evidence or "Påstanden mangler tilstrekkelig dokumentasjon.",
+        source_attempts=claim.source_attempts,
+        suggested_replacement=claim.replacement,
+        omission_consequence="Teksten er utelatt fra godkjent innhold og alle eksportformater.",
+    )
+
+
+def _withhold_unresolved_claims(
+    content: str,
+    claims: Iterable[TruthClaim],
+    quarantine: dict[str, QualityQuarantineItem],
+) -> tuple[str, list[TruthClaim], bool]:
+    """Remove unresolved claims from the exact export candidate.
+
+    ``audit_truth`` can revise prose directly, while structured generators use
+    JSON.  This controller handles both and records every omitted claim.  A
+    claim already absent from the candidate still counts as handled because the
+    passport being inspected describes the previous revision and must be
+    refreshed against the cleaned text.
+    """
+    current = content
+    unsafe: list[TruthClaim] = []
+    handled = False
+    for claim in claims:
+        exact = claim.exact_text.strip()
+        removed = bool(exact and exact not in current)
+        revised = current
+        if not removed:
+            revised, removed = _remove_exact_claim(current, exact)
+        if not removed:
+            revised, removed = _remove_exact_claim_from_json(current, exact)
+        if removed:
+            current = revised
+            handled = True
+            item = _quarantine_item(claim)
+            quarantine.setdefault(item.original_text, item)
+        else:
+            unsafe.append(claim)
+    return current, unsafe, handled
+
+
 def _changes(content_after: str, claims: Iterable[TruthClaim]) -> list[RepairChange]:
     result: list[RepairChange] = []
     for claim in claims:
@@ -328,6 +375,7 @@ def run_quality_pipeline(
     final: TruthPassport | None = None
     stop_reason = ""
     previous_score = (-1, 10**9)
+    quarantine_by_text: dict[str, QualityQuarantineItem] = {}
 
     for round_number in range(1, max_rounds + 1):
         before = content_digest(current)
@@ -343,6 +391,12 @@ def run_quality_pipeline(
         next_content = outcome.content
         final = outcome.passport.model_copy(update={"version": "2.0", "content_revision": content_digest(next_content)})
         unresolved = [claim for claim in final.claims if not claim_is_resolved(claim)]
+        next_content, _round_unsafe, _handled = _withhold_unresolved_claims(
+            next_content,
+            unresolved,
+            quarantine_by_text,
+        )
+        final.content_revision = content_digest(next_content)
         verified = len(final.claims) - len(unresolved)
         score = (verified, len(unresolved))
         changed = next_content != current
@@ -383,31 +437,21 @@ def run_quality_pipeline(
         outcome = audit(content=current, topic=topic, subject=subject, level=level, provided_sources=provided_sources)
         final = outcome.passport.model_copy(update={"version": "2.0", "content_revision": content_digest(current)})
 
-    quarantine: list[QualityQuarantineItem] = []
+    # The final controller always checks the exact export candidate again.  A
+    # re-audit may discover claims that became visible only after earlier JSON
+    # fields were withheld, so keep the cleanup bounded but iterative.
     unsafe: list[TruthClaim] = []
-    for claim in [item for item in final.claims if not claim_is_resolved(item)]:
-        revised, removed = _remove_exact_claim(current, claim.exact_text)
-        if not removed:
-            revised, removed = _remove_exact_claim_from_json(current, claim.exact_text)
-        if removed:
-            current = revised
-            quarantine.append(
-                QualityQuarantineItem(
-                    claim_id=claim.id,
-                    content_type=claim.content_type,
-                    original_text=claim.exact_text or claim.claim,
-                    location=claim.location or "Ukjent seksjon",
-                    reason=claim.evidence or "Påstanden mangler tilstrekkelig dokumentasjon.",
-                    source_attempts=claim.source_attempts,
-                    suggested_replacement=claim.replacement,
-                    omission_consequence="Teksten er utelatt fra godkjent innhold og alle eksportformater.",
-                )
-            )
-        else:
-            unsafe.append(claim)
-
-    # The final controller always checks the exact export candidate again.
-    if quarantine:
+    for _controller_round in range(MAX_REVISION_ROUNDS):
+        unresolved = [item for item in final.claims if not claim_is_resolved(item)]
+        if not unresolved:
+            break
+        current, unsafe, handled = _withhold_unresolved_claims(
+            current,
+            unresolved,
+            quarantine_by_text,
+        )
+        if not handled:
+            break
         final_outcome = audit(
             content=current,
             topic=topic,
@@ -416,6 +460,12 @@ def run_quality_pipeline(
             provided_sources=provided_sources,
         )
         final = final_outcome.passport.model_copy(update={"version": "2.0", "content_revision": content_digest(current)})
+    remaining = [item for item in final.claims if not claim_is_resolved(item)]
+    # Only the claims in the passport for the exact final candidate may block
+    # preview.  Keeping an earlier ``unsafe`` list here would reject content
+    # that a later re-audit has already confirmed no longer contains it.
+    unsafe = remaining
+    quarantine = list(quarantine_by_text.values())
     if unsafe:
         final.status = "needs_review"
         final.limitations = list(dict.fromkeys([
@@ -439,6 +489,7 @@ def run_quality_pipeline(
         # to claim_is_resolved above.
         final.status = "verified"
         final.content_revision = content_digest(current)
+        stop_reason = "Alle kontrollerte påstander er løst eller trygt utelatt."
     failures = deterministic_math_failures(current)
     if failures:
         final.status = "needs_review"

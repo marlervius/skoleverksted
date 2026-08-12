@@ -495,24 +495,32 @@ def approve_generation(job_id: str):
 
 # ── Source resolution (teacher-provided or NDLA) ─────────────────────────────
 
-def _resolve_source(req, ctx: "JobContext") -> tuple[Optional[str], Optional[str]]:
+def _resolve_source(req, ctx: "JobContext") -> tuple[Optional[str], Optional[str], Optional[dict]]:
     """Determine the grounding source for a generation job.
 
     Teacher-pasted material always wins. Otherwise, if NDLA grounding is
     enabled, search NDLA's open learning resources for a relevant article.
-    Returns (source_text, source_name); both None when no source is available.
+    Returns (source_text, source_name, source_metadata).  The metadata follows
+    the generated text into the independent truth layer so a fetched NDLA page
+    is not silently discarded before claim verification.
     """
     if req.source_text:
-        return req.source_text, "lærerens kildemateriale"
+        return req.source_text, "lærerens kildemateriale", None
     if getattr(req, "use_ndla", False):
         ctx.push("Søker etter kildegrunnlag på NDLA...")
         language = "en" if req.subject.lower() == "engelsk" else "nb"
         ndla = fetch_ndla_source(req.topic, language=language)
         if ndla:
             ctx.push(f"Kildeforankrer i NDLA: {ndla['title']}")
-            return ndla["text"], f"NDLA: {ndla['title']}"
+            return ndla["text"], f"NDLA: {ndla['title']}", {
+                "title": ndla["title"],
+                "url": ndla["url"],
+                "publisher": "NDLA",
+                "origin": "grounding",
+                "fetch_status": "fetched",
+            }
         ctx.push("Fant ingen passende NDLA-kilde — fortsetter uten kildeforankring.")
-    return None, None
+    return None, None, None
 
 
 def _verify_structured_output(
@@ -523,6 +531,7 @@ def _verify_structured_output(
     topic: str,
     subject: str,
     level: str,
+    provided_sources: tuple[dict, ...] = (),
 ) -> dict:
     """Route assessment and sequence JSON through the shared quality engine."""
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -532,6 +541,7 @@ def _verify_structured_output(
         topic=topic,
         subject=subject,
         level=level,
+        provided_sources=provided_sources,
     )
     try:
         verified_payload = json.loads(result.approved_content)
@@ -552,12 +562,17 @@ def _verify_structured_output(
 
 def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
     req = ctx.request_payload  # LessonRequest
-    # When regenerating from an existing text the main text is reused as-is,
-    # so fetching a new source would have no effect.
-    if req.basis_text:
-        source_text, source_name = req.source_text, ("lærerens kildemateriale" if req.source_text else None)
+    # Existing text is reused as-is, but its source provenance must still be
+    # available to the independent verifier (for example when only the image
+    # or exercises are regenerated).
+    if req.basis_text and not (getattr(req, "use_ndla", False) and not req.source_text):
+        source_text, source_name, source_metadata = (
+            req.source_text,
+            "lærerens kildemateriale" if req.source_text else None,
+            None,
+        )
     else:
-        source_text, source_name = _resolve_source(req, ctx)
+        source_text, source_name, source_metadata = _resolve_source(req, ctx)
     ctx.push("Genererer fagtekst..." if not req.basis_text else "Bruker eksisterende fagtekst, regenererer oppgaver...")
     content = generate_lesson_content(
         topic=req.topic,
@@ -567,6 +582,7 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         options=req.options,
         description=req.description,
         source_text=source_text,
+        source_metadata=source_metadata,
         interest=req.interest,
         basis_text=req.basis_text,
         progress_callback=ctx.push,
@@ -580,6 +596,7 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("warnings", content.get("warnings"))
         ctx.set_meta("source_grounded", content.get("source_grounded"))
         ctx.set_meta("source_name", source_name)
+        ctx.set_meta("source_url", (source_metadata or {}).get("url"))
         ctx.set_meta("truth_passport", content.get("truth_passport"))
         ctx.set_meta("verification_content", content.get("verification_content"))
         ctx.set_meta("quarantine", content.get("quarantine"))
@@ -744,7 +761,7 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
     options = dict(req.options)
     options["differensiering"] = True
 
-    source_text, source_name = _resolve_source(req, ctx)
+    source_text, source_name, source_metadata = _resolve_source(req, ctx)
     ctx.push("Genererer fagtekst...")
     content = generate_lesson_content(
         topic=req.topic,
@@ -754,6 +771,7 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
         options=options,
         description=req.description,
         source_text=source_text,
+        source_metadata=source_metadata,
         interest=req.interest,
         progress_callback=ctx.push,
         quality_generator_id="fag.differentiated",
@@ -762,6 +780,7 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
     if ctx.set_meta:
         ctx.set_meta("source_grounded", content.get("source_grounded"))
         ctx.set_meta("source_name", source_name)
+        ctx.set_meta("source_url", (source_metadata or {}).get("url"))
         ctx.set_meta("prompt_version", content.get("prompt_version"))
         ctx.set_meta("truth_passport", content.get("truth_passport"))
         ctx.set_meta("verification_content", content.get("verification_content"))
@@ -828,7 +847,7 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
 
 def _prove_worker(ctx: JobContext) -> tuple[bytes, str]:
     req = ctx.request_payload  # ProveRequest
-    source_text, source_name = _resolve_source(req, ctx)
+    source_text, source_name, source_metadata = _resolve_source(req, ctx)
     ctx.push("Genererer prøveoppgaver...")
     content = generate_prove_content(
         topic=req.topic,
@@ -843,6 +862,7 @@ def _prove_worker(ctx: JobContext) -> tuple[bytes, str]:
     if ctx.set_meta:
         ctx.set_meta("source_grounded", bool(source_text))
         ctx.set_meta("source_name", source_name)
+        ctx.set_meta("source_url", (source_metadata or {}).get("url"))
 
     ctx.push("Henter og optimaliserer bilde...")
     image_path = fetch_image_with_retry(content.get("image_url"), None, ctx.req_logger)
@@ -856,6 +876,7 @@ def _prove_worker(ctx: JobContext) -> tuple[bytes, str]:
             topic=req.topic,
             subject=req.subject,
             level=req.level,
+            provided_sources=(source_metadata,) if source_metadata else (),
         )
         pdf_bytes = create_prove_pdf(
             prove_json=prove_json,

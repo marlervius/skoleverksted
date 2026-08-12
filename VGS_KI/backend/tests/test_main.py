@@ -1,4 +1,7 @@
+from types import SimpleNamespace
+
 import pytest
+import VGS_KI.backend.main as main_module
 from fastapi.testclient import TestClient
 from VGS_KI.backend.main import app, sanitize_description
 
@@ -108,6 +111,42 @@ def test_stream_nonexistent_job():
     """Streaming a job that does not exist should return 404."""
     response = client.get("/generate-lesson-stream/nonexistent-job-id")
     assert response.status_code == 404
+
+
+def test_resolve_source_preserves_ndla_provenance(monkeypatch):
+    monkeypatch.setattr(
+        main_module,
+        "fetch_ndla_source",
+        lambda *_args, **_kwargs: {
+            "text": "Et langt nok kildeutdrag fra NDLA.",
+            "title": "Kildekritikk",
+            "url": "https://ndla.no/article/12345",
+            "license": "CC-BY-SA-4.0",
+        },
+    )
+    messages: list[str] = []
+    request = SimpleNamespace(
+        source_text=None,
+        use_ndla=True,
+        topic="Kildekritikk",
+        subject="Historie",
+    )
+
+    text, name, metadata = main_module._resolve_source(
+        request,
+        SimpleNamespace(push=messages.append),
+    )
+
+    assert text == "Et langt nok kildeutdrag fra NDLA."
+    assert name == "NDLA: Kildekritikk"
+    assert metadata == {
+        "title": "Kildekritikk",
+        "url": "https://ndla.no/article/12345",
+        "publisher": "NDLA",
+        "origin": "grounding",
+        "fetch_status": "fetched",
+    }
+    assert any("Kildeforankrer" in message for message in messages)
 
 
 # ── PDF service: Typst escaping ───────────────────────────────────────────────

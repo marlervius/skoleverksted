@@ -205,6 +205,103 @@ def test_unsupported_claim_inside_json_is_removed_before_preview():
     assert payload["worksheet"] == "Drøft kildenes troverdighet."
 
 
+def test_structured_cleanup_is_reaudited_until_new_claims_are_gone():
+    original = json.dumps(
+        {
+            "text": "Første udokumenterte påstand. Trygg innledning.",
+            "worksheet": "Andre udokumenterte påstand. Drøft temaet.",
+        },
+        ensure_ascii=False,
+    )
+    first_claim = TruthClaim(
+        claim="Første påstand",
+        exact_text="Første udokumenterte påstand",
+        status="unsupported",
+        action="remove",
+        content_type="fact",
+        location="Fagtekst",
+    )
+    second_claim = TruthClaim(
+        claim="Andre påstand",
+        exact_text="Andre udokumenterte påstand.",
+        status="unsupported",
+        action="remove",
+        content_type="fact",
+        location="Oppgaver",
+    )
+    calls = 0
+
+    def progressive_audit(**kwargs):
+        nonlocal calls
+        calls += 1
+        candidate = kwargs["content"]
+        if "Første udokumenterte" in candidate:
+            return _audit(candidate, [first_claim], status="source_unavailable")
+        if "Andre udokumenterte" in candidate:
+            return _audit(candidate, [second_claim], status="source_unavailable")
+        return _audit(candidate, [], status="source_unavailable")
+
+    result = run_quality_pipeline(
+        generator_id="fag.learning_sheet",
+        content=original,
+        topic="Kildekritikk",
+        subject="Historie",
+        level="VG2",
+        audit=progressive_audit,
+    )
+
+    payload = json.loads(result.approved_content)
+    assert calls == 3, calls
+    assert result.source_approved
+    assert result.passport.status == "verified"
+    assert len(result.quarantine) == 2
+    assert "Første udokumenterte" not in payload["text"]
+    assert "Andre udokumenterte" not in payload["worksheet"]
+
+
+def test_claim_removed_by_auditor_is_reaudited_instead_of_left_blocking():
+    original = json.dumps(
+        {
+            "text": "En udokumentert påstand. Trygg innledning.",
+            "worksheet": "Drøft temaet.",
+        },
+        ensure_ascii=False,
+    )
+    cleaned = json.dumps(
+        {
+            "text": "Trygg innledning.",
+            "worksheet": "Drøft temaet.",
+        },
+        ensure_ascii=False,
+    )
+    removed_claim = TruthClaim(
+        claim="En udokumentert påstand.",
+        exact_text="En udokumentert påstand.",
+        status="unsupported",
+        action="remove",
+        content_type="fact",
+        location="Fagtekst",
+    )
+    responses = deque([
+        _audit(cleaned, [removed_claim], status="source_unavailable"),
+        _audit(cleaned, [], status="source_unavailable"),
+    ])
+
+    result = run_quality_pipeline(
+        generator_id="fag.learning_sheet",
+        content=original,
+        topic="Kildekritikk",
+        subject="Historie",
+        level="VG2",
+        audit=lambda **_kwargs: responses.popleft(),
+    )
+
+    assert result.source_approved
+    assert result.passport.status == "verified"
+    assert result.approved_content == cleaned
+    assert len(result.quarantine) == 1
+
+
 def test_fabricated_or_irrelevant_source_does_not_resolve_claim():
     claim = TruthClaim(
         claim="Påstand",
