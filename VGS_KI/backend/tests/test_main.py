@@ -80,17 +80,18 @@ def test_sanitize_description(injection: str, expected_clean: bool):
 
 # ── SSE job endpoints ─────────────────────────────────────────────────────────
 
-def test_start_job_returns_job_id():
-    """POST /generate-lesson-start should return a job_id without actually calling AI."""
-    # We can't mock the full AI pipeline in unit tests, but we can verify the endpoint
-    # accepts valid input and returns a job_id (even if the background thread will fail
-    # without a real GOOGLE_API_KEY). The job_id format is a UUID string.
+def test_start_job_returns_job_id(monkeypatch):
+    """POST /generate-lesson-start returns an id without starting a real model job."""
+    # The endpoint contract is tested here; the worker and model are tested with
+    # explicit doubles elsewhere. A no-op worker keeps this unit test offline and
+    # prevents a daemon thread from outliving the test process.
+    monkeypatch.setattr("VGS_KI.backend.main.run_job_in_thread", lambda *args, **kwargs: None)
     response = client.post("/generate-lesson-start", json={
         "topic": "Fotosyntese",
         "subject": "Naturfag",
         "level": "VG1",
     })
-    # 200 = job started, 422 = validation error, 429 = rate limited
+    # 200 = job accepted, 422 = validation error, 429 = rate limited
     assert response.status_code in (200, 422, 429)
     if response.status_code == 200:
         data = response.json()

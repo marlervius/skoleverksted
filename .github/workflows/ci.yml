@@ -23,6 +23,7 @@ jobs:
           cache-dependency-path: MateMaTeX/frontend/package-lock.json
       - run: npm ci
       - run: npm test
+      - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm run build
         env:
@@ -30,6 +31,17 @@ jobs:
 
   platform-backend:
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      TEST_DATA_DIR: ${{ runner.temp }}/skoleverksted-test
+      OUTPUT_DIR: ${{ runner.temp }}/skoleverksted-test/output
+      SKOLEVERKSTED_DB_PATH: ${{ runner.temp }}/skoleverksted-test/platform.sqlite3
+      DATABASE_URL: ''
+      GOOGLE_API_KEY: test-key-not-used
+      PYTHONPATH: ${{ github.workspace }}
+      XDG_DATA_HOME: ${{ runner.temp }}/skoleverksted-test/xdg-data
+      CREWAI_DISABLE_TELEMETRY: 'true'
+      OTEL_SDK_DISABLED: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,15 +49,33 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: pip install "pydantic>=2.9" "fastapi>=0.115" "httpx2>=2.10,<3" "pytest>=8" "pyyaml>=6"
-      - run: pytest -q Skoleverksted/backend/tests
+      - run: pip install -r Skoleverksted/backend/requirements-test.txt
+      - run: pytest -q --cov=Skoleverksted/backend/platform --cov-report=term-missing --cov-report=xml:coverage.xml Skoleverksted/backend/tests
       - name: Run cross-module quality evaluation gate
         run: pytest -q Skoleverksted/backend/tests/test_eval_suite.py
-      - run: python -m compileall -q Skoleverksted VGS_KI/backend ScriptoriumFOV/backend MateMaTeX/backend/app
+      - run: python scripts/compile_sources.py Skoleverksted VGS_KI/backend ScriptoriumFOV/backend MateMaTeX/backend/app
       - run: docker build --check .
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
 
   deterministic-domain-tests:
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      TEST_DATA_DIR: ${{ runner.temp }}/skoleverksted-test
+      OUTPUT_DIR: ${{ runner.temp }}/skoleverksted-test/output
+      SKOLEVERKSTED_DB_PATH: ${{ runner.temp }}/skoleverksted-test/platform.sqlite3
+      DATABASE_URL: ''
+      GOOGLE_API_KEY: test-key-not-used
+      PYTHONPATH: ${{ github.workspace }}
+      XDG_DATA_HOME: ${{ runner.temp }}/skoleverksted-test/xdg-data
+      CREWAI_DISABLE_TELEMETRY: 'true'
+      OTEL_SDK_DISABLED: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -58,6 +88,16 @@ jobs:
 
   full-domain-tests:
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      TEST_DATA_DIR: ${{ runner.temp }}/skoleverksted-test
+      OUTPUT_DIR: ${{ runner.temp }}/skoleverksted-test/output
+      SKOLEVERKSTED_DB_PATH: ${{ runner.temp }}/skoleverksted-test/platform.sqlite3
+      DATABASE_URL: ''
+      GOOGLE_API_KEY: test-key-not-used
+      XDG_DATA_HOME: ${{ runner.temp }}/skoleverksted-test/xdg-data
+      CREWAI_DISABLE_TELEMETRY: 'true'
+      OTEL_SDK_DISABLED: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -74,7 +114,7 @@ jobs:
         working-directory: VGS_KI/backend
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: GOOGLE_API_KEY=test-key-not-used python -m pytest -q tests
+        run: python -m pytest -q tests
       - name: Test Norsklæring
         working-directory: ScriptoriumFOV/backend
         env:

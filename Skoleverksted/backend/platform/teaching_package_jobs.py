@@ -289,12 +289,7 @@ def _run_package(package_id: str, package_job_id: str, artifact_job_ids: Iterabl
         if package:
             completed = sum(1 for artifact in package.artifacts if artifact.status not in {"planned", "generating"})
             store.update_job_state(package_job_id, status="generating", message=f"{completed} av {len(package.artifacts)} artefakter er behandlet.", progress=min(95, round(completed * 95 / max(1, len(package.artifacts)))), retryable=True)
-    package = store.get_teaching_package(package_id)
     parent_state = store.get_job(package_job_id)
-    if package:
-        package.status = aggregate_package_status(package)
-        package.package_job_id = package_job_id
-        store.save_teaching_package(with_revision_digest(package))
     failed = [job_id for job_id in artifact_job_ids if (store.get_job(job_id) or Job(id=job_id, module="platform")).status in {"failed", "superseded", "cancelled"}]
     parent_cancelled = parent_state is not None and parent_state.status == "cancelled"
     _finish_job(
