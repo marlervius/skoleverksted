@@ -39,6 +39,7 @@ from .models import (
     TeachingPackageUpdate,
     utc_now,
 )
+from .test_environment import assert_test_storage_safe
 
 
 def _default_db_path() -> Path:
@@ -1489,5 +1490,6 @@ def get_platform_store() -> PlatformStore:
     if _store is None:
         with _store_lock:
             if _store is None:
+                assert_test_storage_safe()
                 _store = PlatformStore()
     return _store

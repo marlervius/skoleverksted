@@ -1,0 +1,74 @@
+name: Skoleverksted quality evaluations
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_live_ai:
+        description: Run the opt-in real-model smoke suite (uses the configured test key)
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-evaluation:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      TEST_DATA_DIR: ${{ runner.temp }}/skoleverksted-test
+      OUTPUT_DIR: ${{ runner.temp }}/skoleverksted-test/output
+      SKOLEVERKSTED_DB_PATH: ${{ runner.temp }}/skoleverksted-test/platform.sqlite3
+      DATABASE_URL: ''
+      GOOGLE_API_KEY: test-key-not-used
+      PYTHONPATH: ${{ github.workspace }}
+      XDG_DATA_HOME: ${{ runner.temp }}/skoleverksted-test/xdg-data
+      CREWAI_DISABLE_TELEMETRY: 'true'
+      OTEL_SDK_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r Skoleverksted/backend/requirements.txt
+      - run: python scripts/run_quality_evaluation.py --report quality-evaluation.json
+      - run: pytest -q Skoleverksted/backend/tests/test_eval_suite.py Skoleverksted/backend/tests/test_quality_gate.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deterministic-quality-evaluation
+          path: quality-evaluation.json
+
+  live-ai-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_ai == true }}
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      GOOGLE_API_KEY: ${{ secrets.SKOLEVERKSTED_TEST_GOOGLE_API_KEY }}
+      GOOGLE_MODEL: ${{ vars.SKOLEVERKSTED_TEST_GOOGLE_MODEL || 'gemini-3.5-flash' }}
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r Skoleverksted/backend/requirements.txt
+      - name: Require a dedicated test key
+        run: |
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "SKOLEVERKSTED_TEST_GOOGLE_API_KEY is not configured; refusing live AI calls."
+            exit 1
+          fi
+      - run: python scripts/run_live_ai_evaluation.py --max-calls 3 --timeout 30 --report live-ai-evaluation.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-ai-quality-evaluation
+          path: live-ai-evaluation.json

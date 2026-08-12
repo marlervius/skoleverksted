@@ -135,11 +135,18 @@ def test_end_to_end_generation_approval_projection_and_idempotent_double_click()
             deadline = time.time() + 8
             while time.time() < deadline:
                 current = store.get_teaching_package(package.id)
-                if current and all(item.status == "needs_review" for item in current.artifacts):
+                parent_job = store.get_job(accepted.package_job_id)
+                if (
+                    current
+                    and all(item.status == "needs_review" for item in current.artifacts)
+                    and parent_job
+                    and parent_job.status in {"completed", "failed", "cancelled", "superseded"}
+                ):
                     break
                 time.sleep(0.05)
             current = store.get_teaching_package(package.id)
             assert current is not None
+            assert store.get_job(accepted.package_job_id).status == "completed"
             assert all(item.files for item in current.artifacts)
             for artifact in current.artifacts:
                 approved = approve_teaching_artifact(package.id, type("Approval", (), {"teacher": "historielærer"})(), artifact.id)

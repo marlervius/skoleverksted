@@ -181,6 +181,22 @@ Plattformtestene kan kjøres uten eksterne AI-kall:
 python -m unittest discover -s .\Skoleverksted\backend\tests -v
 ```
 
+Det isolerte testmiljøet er den anbefalte inngangen for nye kjøringer. Det
+setter `APP_ENV=test`, unik lokal SQLite/temp-lagring, testnøkkel og fakes for
+eksterne tjenester:
+
+```powershell
+pwsh -File .\scripts\test.ps1 -Suite quick -PythonPath .\.venv\Scripts\python.exe
+pwsh -File .\scripts\test.ps1 -Suite full -PythonPath .\.venv\Scripts\python.exe
+pwsh -File .\scripts\test.ps1 -Suite docs -PythonPath .\.venv\Scripts\python.exe
+pwsh -File .\scripts\test.ps1 -Suite ai -PythonPath .\.venv\Scripts\python.exe
+```
+
+Se [docs/testing/README.md](docs/testing/README.md) for oppsett, testmatrise,
+kvalitetsrubrikk og feil-playbook. Testene kan ikke koble til `DATABASE_URL`
+i testprofilen; dokumentkjøringen krever `typst`/`pdflatex` for de modulene
+som bruker dem.
+
 TeachingPackage-fixturen kan renderes til `output/teaching-package-fixture` for
 visuell QA:
 
