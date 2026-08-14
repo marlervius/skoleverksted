@@ -173,6 +173,7 @@ TruthClaimStatus = Literal[
 ]
 TruthAction = Literal["keep", "qualify", "remove"]
 TruthContentType = Literal[
+    # Legacy values remain readable for already persisted passports.
     "fact",
     "quote",
     "number",
@@ -181,6 +182,19 @@ TruthContentType = Literal[
     "instruction",
     "creative",
     "interpretation",
+    # Structured content policy used by the language-learning and
+    # differentiated pipelines.  Only external_factual_claim requires a
+    # web source; the other categories are routed to the appropriate
+    # language/pedagogical checks.
+    "external_factual_claim",
+    "grammar_claim",
+    "translation",
+    "fictional_language_example",
+    "hypothetical_scenario",
+    "reflection_question",
+    "learner_response_placeholder",
+    "pedagogical_scaffolding",
+    "opinion_or_interpretation",
 ]
 
 
@@ -220,6 +234,10 @@ class TruthClaim(BaseModel):
     confidence: float = Field(default=0, ge=0, le=1)
     content_type: TruthContentType = "fact"
     location: str = Field(default="", max_length=300)
+    # Structured provenance for a teacher-facing control view.  These fields
+    # are deliberately optional so old passports remain valid.
+    field_path: str = Field(default="", max_length=300)
+    variant: str = Field(default="", max_length=80)
     source_attempts: list[TruthSourceAttempt] = Field(default_factory=list, max_length=20)
 
 

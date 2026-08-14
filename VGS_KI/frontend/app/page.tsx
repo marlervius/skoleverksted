@@ -45,6 +45,10 @@ import {
   downloadBlob,
   downloadDocx,
   createBlobUrl,
+  ReviewRequiredError,
+  rerunGenerationReview,
+  removeGenerationClaim,
+  downloadApprovedGeneration,
 } from "./components/api";
 
 export default function Home() {
@@ -60,8 +64,26 @@ export default function Home() {
     status, errorMessage, elapsedSeconds, progressMessage,
     previewUrl, previewBlob, previewFilename, rapportBlob, rapportFilename, showPreview,
     basisText, generatedImageUrl, worksheetText, faktarapportText, languageExercises, warnings, sourceGrounded, sourceName, showEditPanel,
-    imageCandidates, imageCandidatesLoading,
+    imageCandidates, imageCandidatesLoading, review,
   } = state;
+
+  const [reviewCanonical, setReviewCanonical] = useState("");
+  const [reviewVariants, setReviewVariants] = useState({ stoette: "", fordypning: "" });
+  const [reviewBusy, setReviewBusy] = useState(false);
+
+  useEffect(() => {
+    if (!review) return;
+    const canonical = review.content?.canonical;
+    setReviewCanonical(typeof canonical === "string" ? canonical : JSON.stringify(canonical ?? "", null, 2));
+    const variants = review.content?.variants;
+    if (variants && typeof variants === "object") {
+      const values = variants as Record<string, unknown>;
+      setReviewVariants({
+        stoette: String(values.støtte ?? values.stoette ?? ""),
+        fordypning: String(values.fordypning ?? ""),
+      });
+    }
+  }, [review]);
 
   const isFormValid = subject && level && topic.trim().length > 0;
   const isDifferensiert = mode === "differensiert";
@@ -232,6 +254,56 @@ export default function Home() {
     }
   }, [previewBlob, previewFilename]);
 
+  const handleGenerationFailure = useCallback((error: unknown, fallback: string) => {
+    if (error instanceof ReviewRequiredError) {
+      dispatch({ type: "GENERATION_REVIEW", review: error.review });
+      return;
+    }
+    dispatch({ type: "GENERATION_ERROR", message: error instanceof Error ? error.message : fallback });
+  }, []);
+
+  const applyReviewResult = useCallback(async (updated: Awaited<ReturnType<typeof rerunGenerationReview>>) => {
+    if (updated.status === "source_approved" && updated.pdf_ready) {
+      const result = await downloadApprovedGeneration(updated.job_id);
+      dispatch({
+        type: "GENERATION_SUCCESS",
+        blob: result.blob,
+        url: createBlobUrl(result.blob),
+        filename: result.filename,
+        warnings: ["Lærergjennomgang fullført. PDF-en er generert på nytt fra det kontrollerte innholdet."],
+      });
+      return;
+    }
+    dispatch({ type: "GENERATION_REVIEW_UPDATED", review: updated });
+  }, []);
+
+  const handleReviewRerun = useCallback(async () => {
+    if (!review?.job_id) return;
+    setReviewBusy(true);
+    try {
+      await applyReviewResult(await rerunGenerationReview(review.job_id, {
+        canonical: reviewCanonical,
+        variants: reviewVariants,
+      }));
+    } catch (error) {
+      handleGenerationFailure(error, "Kontrollen kunne ikke kjøres på nytt.");
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [review, reviewCanonical, reviewVariants, applyReviewResult, handleGenerationFailure]);
+
+  const handleReviewRemove = useCallback(async (claimId: string) => {
+    if (!review?.job_id) return;
+    setReviewBusy(true);
+    try {
+      await applyReviewResult(await removeGenerationClaim(review.job_id, claimId));
+    } catch (error) {
+      handleGenerationFailure(error, "Påstanden kunne ikke fjernes.");
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [review, applyReviewResult, handleGenerationFailure]);
+
   const handleDownloadDocx = useCallback(async () => {
     if (!basisText) return;
     try {
@@ -244,9 +316,9 @@ export default function Home() {
         level,
       });
     } catch (e) {
-      dispatch({ type: "GENERATION_ERROR", message: e instanceof Error ? e.message : "Docx-feil" });
+      handleGenerationFailure(e, "Docx-feil");
     }
-  }, [basisText, worksheetText, faktarapportText, topic, subject, level]);
+  }, [basisText, worksheetText, faktarapportText, topic, subject, level, handleGenerationFailure]);
 
   const handleRegenerate = useCallback(async () => {
     if (!basisText || mode !== "laeringsark") return;
@@ -297,15 +369,12 @@ export default function Home() {
         dispatch({ type: "GENERATION_CANCEL" });
         return;
       }
-      dispatch({
-        type: "GENERATION_ERROR",
-        message: error instanceof Error ? error.message : "Kunne ikke regenerere. Prøv igjen.",
-      });
+      handleGenerationFailure(error, "Kunne ikke regenerere. Prøv igjen.");
     } finally {
       abortControllerRef.current = null;
       dispatch({ type: "GENERATION_PROGRESS", message: "" });
     }
-  }, [basisText, generatedImageUrl, mode, topic, subject, level, languageLevel, options, description, sourceText, useNdla, interest, previewUrl, startTimer, stopTimer]);
+  }, [basisText, generatedImageUrl, mode, topic, subject, level, languageLevel, options, description, sourceText, useNdla, interest, previewUrl, startTimer, stopTimer, handleGenerationFailure]);
 
   const handleOppdaterPdf = useCallback(async () => {
     if (!basisText || !worksheetText) return;
@@ -350,15 +419,12 @@ export default function Home() {
         dispatch({ type: "GENERATION_CANCEL" });
         return;
       }
-      dispatch({
-        type: "GENERATION_ERROR",
-        message: error instanceof Error ? error.message : "Kunne ikke oppdatere PDF. Prøv igjen.",
-      });
+      handleGenerationFailure(error, "Kunne ikke oppdatere PDF. Prøv igjen.");
     } finally {
       abortControllerRef.current = null;
       dispatch({ type: "GENERATION_PROGRESS", message: "" });
     }
-  }, [basisText, worksheetText, faktarapportText, languageExercises, sourceGrounded, sourceName, generatedImageUrl, topic, subject, level, languageLevel, options, previewUrl, startTimer, stopTimer]);
+  }, [basisText, worksheetText, faktarapportText, languageExercises, sourceGrounded, sourceName, generatedImageUrl, topic, subject, level, languageLevel, options, previewUrl, startTimer, stopTimer, handleGenerationFailure]);
 
   const handleSelectImage = useCallback(async (imageUrl: string) => {
     if (!basisText || !worksheetText) return;
@@ -401,15 +467,12 @@ export default function Home() {
         dispatch({ type: "GENERATION_CANCEL" });
         return;
       }
-      dispatch({
-        type: "GENERATION_ERROR",
-        message: error instanceof Error ? error.message : "Kunne ikke bytte bilde.",
-      });
+      handleGenerationFailure(error, "Kunne ikke bytte bilde.");
     } finally {
       abortControllerRef.current = null;
       dispatch({ type: "GENERATION_PROGRESS", message: "" });
     }
-  }, [basisText, worksheetText, faktarapportText, languageExercises, sourceGrounded, sourceName, topic, subject, level, languageLevel, options, previewUrl, startTimer, stopTimer]);
+  }, [basisText, worksheetText, faktarapportText, languageExercises, sourceGrounded, sourceName, topic, subject, level, languageLevel, options, previewUrl, startTimer, stopTimer, handleGenerationFailure]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -518,7 +581,11 @@ export default function Home() {
             ? error.message
             : "Kunne ikke generere dokumentet. Prøv igjen.";
 
-        dispatch({ type: "GENERATION_ERROR", message });
+        if (error instanceof ReviewRequiredError) {
+          dispatch({ type: "GENERATION_REVIEW", review: error.review });
+        } else {
+          dispatch({ type: "GENERATION_ERROR", message });
+        }
       } finally {
         abortControllerRef.current = null;
         dispatch({ type: "GENERATION_PROGRESS", message: "" });
@@ -1545,6 +1612,94 @@ export default function Home() {
                 elapsedSeconds={elapsedSeconds}
                 progressMessage={progressMessage}
               />
+
+              {review && (
+                <section className="mt-4 panel border-amber-300 bg-amber-50/60 space-y-4" aria-live="polite">
+                  <div className="flex items-start gap-2">
+                    <ShieldAlert className="w-5 h-5 mt-0.5 text-amber-700 shrink-0" aria-hidden="true" />
+                    <div>
+                      <h2 className="font-semibold text-amber-950">Kontrollbilde – lærergjennomgang</h2>
+                      <p className="text-sm text-amber-900 mt-1">
+                        PDF-en er blokkert til innholdet er kontrollert. Stoppårsak: <span className="font-mono">{review.quality_stop_reason}</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {review.variant_issues && review.variant_issues.length > 0 && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+                      <p className="font-semibold mb-1">Differensieringskontroll</p>
+                      <ul className="list-disc list-inside space-y-0.5">
+                        {review.variant_issues.map((issue) => <li key={issue}>{issue}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  {review.claims_for_review.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-sm font-semibold text-stone-800">Påstander som trenger tiltak</p>
+                      {review.claims_for_review.map((claim, index) => {
+                        const claimId = String(claim.id || "");
+                        return (
+                          <div key={claimId || index} className="rounded-lg border border-amber-200 bg-white p-3 text-sm">
+                            <p className="font-medium text-stone-900">{String(claim.claim || claim.exact_text || "Uspesifisert påstand")}</p>
+                            <p className="text-xs text-stone-600 mt-1">
+                              {String(claim.content_type || "ekstern faktapåstand")} · {String(claim.location || "ukjent felt")} · status: {String(claim.status || "ukjent")}
+                            </p>
+                            {Boolean(claim.evidence) && <p className="text-xs text-stone-600 mt-1">Merknad: {String(claim.evidence)}</p>}
+                            {claimId && (
+                              <button
+                                type="button"
+                                disabled={reviewBusy}
+                                onClick={() => handleReviewRemove(claimId)}
+                                className="mt-2 rounded-md border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                              >
+                                Fjern markert innhold
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-stone-700">Ingen uløste påstander er igjen. Kjør kontrollen på nytt for å regenerere PDF-en.</p>
+                  )}
+
+                  <div className="space-y-3">
+                    <label className="block text-sm font-semibold text-stone-800">
+                      Rediger kanonisk innhold
+                      <textarea
+                        value={reviewCanonical}
+                        onChange={(event) => setReviewCanonical(event.target.value)}
+                        rows={8}
+                        className="input-field mt-1.5 text-sm leading-relaxed resize-y bg-white"
+                      />
+                    </label>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {(["stoette", "fordypning"] as const).map((variant) => (
+                        <label key={variant} className="block text-sm font-semibold text-stone-800">
+                          {variant === "stoette" ? "Støttevariant" : "Fordypningsvariant"}
+                          <textarea
+                            value={reviewVariants[variant]}
+                            onChange={(event) => setReviewVariants((current) => ({ ...current, [variant]: event.target.value }))}
+                            rows={6}
+                            className="input-field mt-1.5 text-sm leading-relaxed resize-y bg-white"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={reviewBusy}
+                    onClick={handleReviewRerun}
+                    className="btn-primary w-full py-3 px-4 disabled:opacity-50"
+                  >
+                    {reviewBusy ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="w-4 h-4" aria-hidden="true" />}
+                    {reviewBusy ? "Kontrollerer..." : "Kjør kontroll på nytt"}
+                  </button>
+                </section>
+              )}
 
               {/* ── Batch results per student group ──────────────────────────── */}
               {profileResults.length > 0 && (

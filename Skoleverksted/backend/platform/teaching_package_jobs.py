@@ -272,6 +272,7 @@ def _save_verified_if_current(package: TeachingPackage, artifact: TeachingArtifa
 
 
 def _run_package(package_id: str, package_job_id: str, artifact_job_ids: Iterable[str]) -> None:
+    artifact_job_ids = list(artifact_job_ids)
     store = get_platform_store()
     parent = store.get_job(package_job_id)
     started = time.time()
@@ -292,14 +293,21 @@ def _run_package(package_id: str, package_job_id: str, artifact_job_ids: Iterabl
     parent_state = store.get_job(package_job_id)
     failed = [job_id for job_id in artifact_job_ids if (store.get_job(job_id) or Job(id=job_id, module="platform")).status in {"failed", "superseded", "cancelled"}]
     parent_cancelled = parent_state is not None and parent_state.status == "cancelled"
+    parent_status = "cancelled" if parent_cancelled else ("needs_review" if failed else "completed")
     _finish_job(
         package_job_id,
-        message="Pakken er behandlet. Kontroller artefaktene før godkjenning." if failed else "Alle artefaktene er generert og kontrollert.",
-        status="cancelled" if parent_cancelled else "completed",
-        retryable=parent_cancelled,
+        message=(
+            "Pakken er behandlet, men minst ett artefakt krever ny kontroll."
+            if failed
+            else "Pakken er avbrutt."
+            if parent_cancelled
+            else "Alle artefaktene er generert og kontrollert."
+        ),
+        status=parent_status,
+        retryable=parent_cancelled or bool(failed),
         summary={
             "package_total_ms": max(0, round((time.time() - started) * 1000)),
-            "artifact_count": len(list(artifact_job_ids)),
+            "artifact_count": len(artifact_job_ids),
             "failed_artifact_count": len(failed),
             "failure_reason": "cancelled" if parent_cancelled else ("partial_artifact_failure" if failed else ""),
         },

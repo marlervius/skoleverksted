@@ -24,7 +24,13 @@ from .models import (
     TruthPassport,
     TruthSource,
 )
-from .truth import TruthAudit, _blocked_passport, audit_truth
+from .truth import (
+    TruthAudit,
+    _blocked_passport,
+    audit_truth,
+    content_claim_is_resolved,
+    content_type_requires_external_source,
+)
 from .quality_runtime import (
     QualityLayerCancelled,
     QualityLayerTimeout,
@@ -115,19 +121,15 @@ def content_digest(content: str) -> str:
 
 
 def claim_requires_evidence(claim: TruthClaim) -> bool:
-    if claim.content_type in {"fact", "quote", "number"}:
-        return True
-    if claim.content_type == "mathematics":
-        return False
-    return claim.status in {"unsupported", "disputed", "time_sensitive", "verification_failed"}
+    return content_type_requires_external_source(claim.content_type)
 
 
 def claim_is_resolved(claim: TruthClaim) -> bool:
-    if claim.content_type in {"creative", "instruction", "user_input", "interpretation"}:
-        return claim.status not in {"unsupported", "disputed", "time_sensitive", "verification_failed"}
-    if claim.content_type == "mathematics":
-        return claim.status not in {"unsupported", "verification_failed"}
-    return claim.status == "verified" and bool(claim.source_urls)
+    return content_claim_is_resolved(
+        content_type=claim.content_type,
+        status=claim.status,
+        source_urls=claim.source_urls,
+    )
 
 
 _BIN_OPS: dict[type[ast.operator], Callable[[float, float], float]] = {
@@ -379,6 +381,10 @@ def run_quality_pipeline(
             "verification_round_started",
             extra={"request_id": request_id, "round_number": round_number},
         )
+        logger.info(
+            "revision_started",
+            extra={"request_id": request_id, "round_number": round_number},
+        )
         try:
             outcome = invoke_audit(round_number=round_number)
         except QualityLayerCancelled:
@@ -439,6 +445,16 @@ def run_quality_pipeline(
                 "claims_quarantined": 0,
             },
         )
+        logger.info(
+            "revision_completed",
+            extra={
+                "request_id": request_id,
+                "round_number": round_number,
+                "changed": changed,
+                "claims_verified": verified,
+                "claims_unresolved": len(unresolved),
+            },
+        )
         emit_progress(
             f"{verified} av {len(final.claims)} påstander verifisert",
             round_number=round_number,
@@ -476,6 +492,15 @@ def run_quality_pipeline(
                     omission_consequence="Teksten er utelatt fra godkjent innhold og alle eksportformater.",
                 )
             )
+            logger.info(
+                "claim_quarantined",
+                extra={
+                    "request_id": request_id,
+                    "claim_id": claim.id,
+                    "content_type": claim.content_type,
+                    "location": claim.location or "Ukjent seksjon",
+                },
+            )
         else:
             unsafe.append(claim)
 
@@ -500,8 +525,18 @@ def run_quality_pipeline(
             "Minst én uløst påstand kunne ikke skilles trygt fra teksten og må redigeres av læreren.",
         ]))
     elif (
-        final.status not in {"verification_failed", "source_unavailable", "blocked"}
-        and not [claim for claim in final.claims if not claim_is_resolved(claim)]
+        not [claim for claim in final.claims if not claim_is_resolved(claim)]
+        and (
+            final.status not in {"verification_failed", "source_unavailable", "blocked"}
+            # A source-unavailable passport with no evidence-bearing claims is
+            # a valid language worksheet, not a factual failure.  Preserve
+            # source_unavailable for actual external claims.
+            or (
+                final.status == "source_unavailable"
+                and final.total_claims == 0
+                and not final.claims
+            )
+        )
     ):
         # Non-factual documents and documents cleaned by quarantine are valid
         # without inventing a source.  Evidence-bearing claims remain subject

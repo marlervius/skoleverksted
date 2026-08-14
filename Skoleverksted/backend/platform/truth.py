@@ -10,6 +10,7 @@ unresolved claims remain.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 from dataclasses import dataclass
 from collections.abc import Callable
@@ -20,6 +21,60 @@ from .models import TruthClaim, TruthPassport, TruthSource, TruthSourceAttempt
 from .quality_runtime import QualityLayerCancelled, QualityLayerTimeout
 
 logger = logging.getLogger(__name__)
+
+
+# These names are part of the cross-module content contract.  Keep the legacy
+# aliases for persisted jobs, but make the policy explicit: a language
+# exercise is not a factual claim merely because it contains a sentence.
+EXTERNAL_EVIDENCE_CONTENT_TYPES = frozenset({
+    "fact", "quote", "number", "external_factual_claim",
+})
+LANGUAGE_REVIEW_CONTENT_TYPES = frozenset({"grammar_claim", "translation"})
+NON_FACTUAL_CONTENT_TYPES = frozenset({
+    "instruction",
+    "fictional_language_example",
+    "hypothetical_scenario",
+    "reflection_question",
+    "learner_response_placeholder",
+    "pedagogical_scaffolding",
+    "opinion_or_interpretation",
+    "creative",
+    "interpretation",
+    "user_input",
+})
+UNRESOLVED_STATUSES = frozenset({
+    "unsupported", "disputed", "time_sensitive", "verification_failed", "source_unavailable",
+})
+
+
+def normalize_content_type(value: object) -> str:
+    """Return one of the structured content-policy categories."""
+    content_type = str(value or "").strip()
+    if content_type in EXTERNAL_EVIDENCE_CONTENT_TYPES | LANGUAGE_REVIEW_CONTENT_TYPES | NON_FACTUAL_CONTENT_TYPES | {"mathematics"}:
+        return content_type
+    return "external_factual_claim"
+
+
+def content_type_requires_external_source(content_type: str) -> bool:
+    """Whether a claim needs a concrete external source to become green."""
+    return normalize_content_type(content_type) in EXTERNAL_EVIDENCE_CONTENT_TYPES
+
+
+def content_claim_is_resolved(*, content_type: str, status: str, source_urls: Iterable[str] = ()) -> bool:
+    """Apply the structured content policy without text heuristics.
+
+    Grammar and translation are language-QA items, not web facts.  They still
+    need a positive language review result.  Exercises, prompts and examples
+    are safe when they are not explicitly marked as unsupported.
+    """
+    normalized = normalize_content_type(content_type)
+    if normalized in EXTERNAL_EVIDENCE_CONTENT_TYPES:
+        return status == "verified" and bool(list(source_urls))
+    if normalized in LANGUAGE_REVIEW_CONTENT_TYPES:
+        return status in {"verified", "interpretation"}
+    if normalized == "mathematics":
+        return status not in {"unsupported", "verification_failed"}
+    return status not in UNRESOLVED_STATUSES
 
 
 TRUTH_AUDIT_SCHEMA: dict[str, Any] = {
@@ -61,10 +116,16 @@ TRUTH_AUDIT_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "enum": [
                             "fact", "quote", "number", "mathematics", "user_input",
-                            "instruction", "creative", "interpretation"
+                            "instruction", "creative", "interpretation",
+                            "external_factual_claim", "grammar_claim", "translation",
+                            "fictional_language_example", "hypothetical_scenario",
+                            "reflection_question", "learner_response_placeholder",
+                            "pedagogical_scaffolding", "opinion_or_interpretation",
                         ],
                     },
                     "location": {"type": "string"},
+                    "field_path": {"type": "string"},
+                    "variant": {"type": "string"},
                 },
                 "required": [
                     "claim",
@@ -365,6 +426,15 @@ def audit_truth(
     request_id: str = "",
 ) -> TruthAudit:
     """Research, classify and safely revise factual claims in ``content``."""
+    logger.info(
+        "fact_check_started",
+        extra={
+            "request_id": request_id,
+            "topic": topic,
+            "subject": subject,
+            "content_digest": hashlib.sha256(content.encode("utf-8")).hexdigest()[:16],
+        },
+    )
     if len(content.strip()) < 80:
         passport = _blocked_passport(
             topic,
@@ -402,8 +472,19 @@ Fag og nivå: {subject}, {level}
 </TEKST>
 
 Krav:
-- Del teksten i atomiske, etterprøvbare faktapåstander. Rene oppgaver,
-  læringsmål og åpenbare meninger skal ikke registreres som fakta.
+- Del teksten i atomiske kontrollpunkter og klassifiser hvert punkt. Rene
+  oppgaver, læringsmål, språkeksempler og refleksjonsspørsmål skal IKKE
+  registreres som eksterne faktapåstander.
+- Bruk content_type nøyaktig: external_factual_claim for virkelige personer,
+  steder, datoer, hendelser, institusjoner, statistikk og andre opplysninger
+  om verden; grammar_claim for språkfaglige regler; translation for oversettelser;
+  fictional_language_example for oppdiktede eksempelsetninger;
+  hypothetical_scenario for tydelig hypotetiske situasjoner; instruction for
+  oppgaveinstruksjoner; reflection_question for åpne elevspørsmål;
+  learner_response_placeholder for svarlinjer; pedagogical_scaffolding for
+  stillasbygging; opinion_or_interpretation for tolkning eller mening.
+- Et språkeksempel kan inneholde en faktisk del. Registrer bare den faktiske
+  delen separat som external_factual_claim med sitt eget exact_text.
 - exact_text skal være en ORDRETT, sammenhengende del av teksten.
 - «verified» krever at minst én konkret, autoritativ nettside faktisk støtter
   påstanden. Oppgi den nøyaktige URL-en i source_urls.
@@ -413,11 +494,8 @@ Krav:
   faglig forsvarlig replacement. Ikke dikt opp en erstatning.
 - Oppdiktede sitater, boktitler, forskere, sidetall og URL-er er forbudt.
 - Ved tvil: klassifiser som unsupported. Falsk trygghet er verre enn utelatelse.
-- Klassifiser content_type: fact, quote, number, mathematics, user_input,
-  instruction, creative eller interpretation. Kreative formuleringer og rene
-  instruksjoner er ikke faktapåstander, men uriktige premisser skal fortsatt
-  merkes unsupported. Matematikk skal merkes mathematics og må i tillegg
-  kontrolleres deterministisk av kvalitetspipelinen.
+- Klassifiser content_type med kategoriene over. Ikke bruk external_factual_claim
+  som standard for tekstbiter som bare er pedagogisk innhold.
 - Oppgi hvilken overskrift/seksjon eller hvilket lysbilde påstanden tilhører i location.
 
 JSON:
@@ -433,7 +511,9 @@ JSON:
     "evidence": "hva kilden faktisk dokumenterer",
     "confidence": 0.0,
     "content_type": "fact",
-    "location": "overskrift, seksjon eller lysbilde"
+    "location": "overskrift, seksjon eller lysbilde",
+    "field_path": "struktursti til feltet",
+    "variant": "standard|støtte|fordypning|felles"
   }}]
 }}
 """
@@ -513,12 +593,15 @@ JSON:
         claim_text = _clean_text(raw.get("claim"), 1200)
         if not claim_text:
             continue
-        content_type = _clean_text(raw.get("content_type"), 40)
-        if content_type not in {
-            "fact", "quote", "number", "mathematics", "user_input",
-            "instruction", "creative", "interpretation",
-        }:
-            content_type = "fact"
+        content_type = normalize_content_type(raw.get("content_type"))
+        # A model must not be able to turn harmless exercise prose into a
+        # source failure by returning an unsupported verdict for it.  Keep the
+        # classification visible, but route it to the correct non-web gate.
+        if content_type in NON_FACTUAL_CONTENT_TYPES and status in UNRESOLVED_STATUSES:
+            status = "not_evaluated"
+            action = "keep"
+        field_path = _clean_text(raw.get("field_path"), 300)
+        variant = _clean_text(raw.get("variant"), 80)
         claims.append(
             TruthClaim(
                 claim=claim_text,
@@ -531,7 +614,20 @@ JSON:
                 confidence=confidence,
                 content_type=content_type,  # type: ignore[arg-type]
                 location=_claim_location(content, _exact_text(raw.get("exact_text"), 1200)),
+                field_path=field_path,
+                variant=variant,
             )
+        )
+        logger.info(
+            "claim_classified",
+            extra={
+                "request_id": request_id,
+                "content_type": content_type,
+                "variant": variant or "felles",
+                "field_path": field_path or "",
+                "status": status,
+                "evidence_required": content_type_requires_external_source(content_type),
+            },
         )
         if len(claims) >= 120:
             break
@@ -541,9 +637,10 @@ JSON:
         claim.model_copy(update={"source_attempts": _source_attempts(claim=claim, sources=sources)})
         for claim in claims
     ]
-    verified_count = sum(1 for claim in claims if claim.status == "verified")
-    total = len(claims)
-    coverage = round(verified_count * 100 / total) if total else 0
+    evidence_claims = [claim for claim in claims if content_type_requires_external_source(claim.content_type)]
+    verified_count = sum(1 for claim in evidence_claims if claim.status == "verified")
+    total = len(evidence_claims)
+    coverage = round(verified_count * 100 / total) if total else 100
     limitations: list[str] = []
     if not claims:
         limitations.append("Revisoren returnerte ikke et etterprøvbart påstandsregister.")
@@ -552,13 +649,18 @@ JSON:
             f"{len(unresolved_edits)} usikre påstand(er) kunne ikke endres automatisk."
         )
     concrete_sources = [source for source in sources if _is_concrete_source_url(source.url)]
-    if not concrete_sources:
+    if not evidence_claims and claims:
+        # A source-free language worksheet is valid when it contains no
+        # external factual claims.  This is the production bug fix: absence of
+        # a web source is not itself a factual failure.
+        passport_status = "verified"
+        limitations.append("Ingen eksterne faktapåstander krever kilde i dette innholdet.")
+    elif not concrete_sources:
         limitations.append("Ingen konkrete, validerte kildesider ble registrert.")
-    if not concrete_sources:
         passport_status = "source_unavailable"
     elif not claims:
         passport_status = "not_evaluated"
-    elif claims and concrete_sources and (verified_count / total) >= 0.8 and not unresolved_edits:
+    elif evidence_claims and concrete_sources and (verified_count / total) >= 0.8 and not unresolved_edits:
         passport_status = "verified"
     else:
         passport_status = "needs_review"
@@ -575,9 +677,20 @@ JSON:
         removed_claims=removed,
         limitations=limitations,
         summary=(
-            f"{verified_count} av {total} registrerte faktapåstander ble "
+            f"{verified_count} av {total} eksterne faktapåstander ble "
             f"dokumentert med konkrete kilder. {len(removed)} udokumentert(e) "
             "påstand(er) ble fjernet før levering."
         ),
+    )
+    logger.info(
+        "fact_check_completed",
+        extra={
+            "request_id": request_id,
+            "status": passport.status,
+            "claims_found": len(claims),
+            "evidence_claims": total,
+            "verified_claims": verified_count,
+            "sources": len(sources),
+        },
     )
     return TruthAudit(content=revised, passport=passport)

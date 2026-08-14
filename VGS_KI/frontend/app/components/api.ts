@@ -38,6 +38,86 @@ interface GenerateLessonResult {
   lintIssues?: string[];
 }
 
+export interface GenerationReview {
+  job_id: string;
+  status: "needs_teacher_review" | "source_approved";
+  quality_stop_reason: string;
+  truth_passport: Record<string, unknown>;
+  sources: Array<Record<string, unknown>>;
+  claims_for_review: Array<Record<string, unknown>>;
+  quarantine: Array<Record<string, unknown>>;
+  content: Record<string, unknown>;
+  variant_issues?: string[];
+  pdf_ready?: boolean;
+  filename?: string;
+}
+
+export interface GenerationReviewPatch {
+  canonical?: Record<string, unknown> | string;
+  variants?: Record<string, string>;
+  worksheet?: string;
+  language_exercises?: Record<string, unknown>;
+}
+
+export class ReviewRequiredError extends Error {
+  review: GenerationReview;
+
+  constructor(review: GenerationReview) {
+    const firstClaim = review.claims_for_review[0];
+    const location = firstClaim?.location ? ` (${String(firstClaim.location)})` : "";
+    const claim = firstClaim?.claim ? ` Første punkt${location}: ${String(firstClaim.claim)}` : "";
+    super(`Produksjonen trenger lærergjennomgang: ${review.quality_stop_reason}.${claim}`);
+    this.name = "ReviewRequiredError";
+    this.review = review;
+  }
+}
+
+async function reviewRequest(path: string, body: Record<string, unknown>): Promise<GenerationReview> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Serverfeil: ${res.status}`);
+  const passport = data.truth_passport || {};
+  const claims = Array.isArray(passport.claims)
+    ? passport.claims.filter((claim: Record<string, unknown>) => claim.status !== "verified")
+    : [];
+  return {
+    job_id: String(data.job_id || ""),
+    status: data.status === "source_approved" ? "source_approved" : "needs_teacher_review",
+    quality_stop_reason: String(data.quality_stop_reason || "truth_layer_unresolved_claims"),
+    truth_passport: passport,
+    sources: Array.isArray(data.sources || passport.sources) ? (data.sources || passport.sources) : [],
+    claims_for_review: Array.isArray(data.claims_for_review) ? data.claims_for_review : claims,
+    quarantine: Array.isArray(data.quarantine) ? data.quarantine : [],
+    content: data.review_payload || data.content || {},
+    variant_issues: Array.isArray(data.variant_issues) ? data.variant_issues : [],
+    pdf_ready: Boolean(data.pdf_ready),
+    filename: data.filename ? String(data.filename) : undefined,
+  };
+}
+
+export function rerunGenerationReview(jobId: string, patch: GenerationReviewPatch): Promise<GenerationReview> {
+  return reviewRequest(`/generation/${encodeURIComponent(jobId)}/review/rerun`, patch as Record<string, unknown>);
+}
+
+export function removeGenerationClaim(jobId: string, claimId: string): Promise<GenerationReview> {
+  return reviewRequest(`/generation/${encodeURIComponent(jobId)}/review/remove`, { claim_id: claimId });
+}
+
+export async function downloadApprovedGeneration(jobId: string): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(`${API_URL}/generate-lesson-download/${encodeURIComponent(jobId)}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail?.message || data.detail || `Serverfeil: ${res.status}`);
+  }
+  const contentDisposition = res.headers.get("Content-Disposition");
+  const filename = contentDisposition?.match(/filename="(.+)"/)?.[1] || "differensiert.pdf";
+  return { blob: await res.blob(), filename };
+}
+
 export async function generateLesson(
   params: GenerateLessonParams
 ): Promise<GenerateLessonResult> {
@@ -136,6 +216,23 @@ async function runSseJob(
         const data = JSON.parse(event.data);
         if (data.type === "progress" && onProgress) {
           onProgress(data.message);
+        } else if (data.type === "needs_teacher_review") {
+          signal?.removeEventListener("abort", abortHandler);
+          eventSource.close();
+          const claims = Array.isArray(data.truth_passport?.claims)
+            ? data.truth_passport.claims.filter((claim: Record<string, unknown>) => claim.status !== "verified")
+            : [];
+          reject(new ReviewRequiredError({
+            job_id: String(data.job_id || ""),
+            status: "needs_teacher_review",
+            quality_stop_reason: String(data.quality_stop_reason || "truth_layer_unresolved_claims"),
+            truth_passport: data.truth_passport || {},
+            sources: Array.isArray(data.truth_passport?.sources) ? data.truth_passport.sources : [],
+            claims_for_review: claims,
+            quarantine: Array.isArray(data.quarantine) ? data.quarantine : [],
+            content: data.review_payload || {},
+            variant_issues: Array.isArray(data.variant_issues) ? data.variant_issues : [],
+          }));
         } else if (data.type === "done") {
           capturedBasisText = data.basis_text ?? undefined;
           capturedImageUrl = data.image_url ?? undefined;
