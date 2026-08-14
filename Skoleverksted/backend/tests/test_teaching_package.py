@@ -23,7 +23,11 @@ from Skoleverksted.backend.platform.router import (
 )
 from Skoleverksted.backend.platform.store import PlatformStore, StaleTeachingArtifactError
 from Skoleverksted.backend.platform.teaching_package import build_package_from_period, content_digest
-from Skoleverksted.backend.platform.teaching_package_jobs import recover_teaching_package_jobs, run_artifact_job
+from Skoleverksted.backend.platform.teaching_package_jobs import (
+    _run_package,
+    recover_teaching_package_jobs,
+    run_artifact_job,
+)
 from Skoleverksted.backend.platform.truth import TruthAudit
 
 
@@ -278,3 +282,31 @@ def test_one_failed_child_does_not_block_independent_artifact():
         assert current.artifacts[1].status == "needs_review"
         assert store.get_job(jobs[0].id).result_summary["failure_reason"] == "artifact_generation_failed"
         assert store.get_job(jobs[1].id).result_summary["failure_reason"] == ""
+
+
+def test_parent_job_is_needs_review_when_one_child_fails():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = PlatformStore(Path(tmp) / "platform.sqlite3")
+        plan, period, sources = _fixture_plan(store)
+        package = build_package_from_period(
+            plan, period, artifact_types=["student_sheet", "exercise_sheet"], sources=sources
+        )
+        store.create_teaching_package(package)
+        parent = Job(id="pkg:partial", module="platform", kind="teaching_package", status="planning")
+        failed = Job(
+            id="child:failed", module="platform", kind="teaching_artifact", status="failed",
+            request_summary={"artifact_id": package.artifacts[0].id},
+        )
+        completed = Job(
+            id="child:ok", module="platform", kind="teaching_artifact", status="completed",
+            request_summary={"artifact_id": package.artifacts[1].id},
+        )
+        store.upsert_job(parent)
+        store.upsert_job(failed)
+        store.upsert_job(completed)
+
+        with patch("Skoleverksted.backend.platform.teaching_package_jobs.get_platform_store", return_value=store), \
+             patch("Skoleverksted.backend.platform.teaching_package_jobs.run_artifact_job"):
+            _run_package(package.id, parent.id, [failed.id, completed.id])
+
+        assert store.get_job(parent.id).status == "needs_review"
