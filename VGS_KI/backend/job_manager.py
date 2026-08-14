@@ -54,6 +54,7 @@ TERMINAL_JOB_STATUSES = frozenset({
 class Job:
     queue: asyncio.Queue
     loop: Optional[asyncio.AbstractEventLoop] = None
+    request_payload: Any = None
     created_at: float = field(default_factory=time.time)
     pdf: Optional[bytes] = None
     filename: Optional[str] = None
@@ -72,6 +73,8 @@ class Job:
     quarantine: list[dict[str, Any]] = field(default_factory=list)
     quality_rounds: list[dict[str, Any]] = field(default_factory=list)
     quality_stop_reason: str = ""
+    review_payload: dict[str, Any] = field(default_factory=dict)
+    variant_issues: list[str] = field(default_factory=list)
     teacher_approved_at: str = ""
     approved_digest: str = ""
 
@@ -320,6 +323,10 @@ def run_job_in_thread(
             filename: Optional[str] = None
             job_meta: dict = {}
             worker_duration: float = 0.0
+            with _jobs_lock:
+                current_job = _jobs.get(job_id)
+                if current_job:
+                    current_job.request_payload = request_payload
 
             def set_meta_fn(key: str, value: Any) -> None:
                 job_meta[key] = value
@@ -337,6 +344,7 @@ def run_job_in_thread(
                     for key in (
                         "verification_content", "truth_passport", "quarantine",
                         "quality_rounds", "quality_stop_reason", "quality_status",
+                        "review_payload", "variant_issues",
                     ):
                         if key in value:
                             job_meta[key] = value[key]
@@ -354,7 +362,9 @@ def run_job_in_thread(
                     "quarantine": job_meta.get("quarantine", []),
                     "quality_rounds": job_meta.get("quality_rounds", []),
                     "quality_stop_reason": job_meta.get("quality_stop_reason", ""),
-                    "quality_status": job_meta.get("quality_status", "source_approved"),
+                    "quality_status": job_meta.get("quality_status", "needs_teacher_review"),
+                    "review_payload": job_meta.get("review_payload", {}),
+                    "variant_issues": job_meta.get("variant_issues", []),
                 }
 
             # ── Cache check / lock ──
@@ -384,7 +394,7 @@ def run_job_in_thread(
                             if is_job_cancelled(job_id):
                                 raise GenerationCancelled("job cancelled during worker")
                             try:
-                                if job_meta.get("quality_status", "source_approved") == "source_approved":
+                                if job_meta.get("quality_status", "needs_teacher_review") == "source_approved":
                                     cache.set(cache_key, _cache_value(), expire=config.CACHE_TTL_SECONDS)
                             except Exception as e:
                                 req_logger.warning(f"Failed to write cache: {e}")
@@ -412,9 +422,10 @@ def run_job_in_thread(
                                for c in str(topic)).strip()[:50]
                 filename = f"{safe}_{level}.pdf" if level else f"{safe}.pdf"
 
-            quality_status = str(job_meta.get("quality_status") or "source_approved")
+            quality_status = str(job_meta.get("quality_status") or "needs_teacher_review")
             if quality_status not in {"source_approved", "needs_teacher_review"}:
-                quality_status = "source_approved"
+                # Unknown states must never fall through to an approved PDF.
+                quality_status = "needs_teacher_review"
             with _jobs_lock:
                 job = _jobs.get(job_id)
                 if job:
@@ -427,6 +438,8 @@ def run_job_in_thread(
                     job.quarantine = list(job_meta.get("quarantine") or [])
                     job.quality_rounds = list(job_meta.get("quality_rounds") or [])
                     job.quality_stop_reason = str(job_meta.get("quality_stop_reason") or "")
+                    job.review_payload = dict(job_meta.get("review_payload") or {})
+                    job.variant_issues = list(job_meta.get("variant_issues") or [])
                     job.status = quality_status
                     job.done = True
 
@@ -443,13 +456,15 @@ def run_job_in_thread(
             done_event: dict = {
                 "type": "done" if quality_status == "source_approved" else "needs_teacher_review",
                 "status": quality_status,
+                "job_id": job_id,
                 "filename": filename,
             }
             for field in ("basis_text", "image_url", "image_metadata", "worksheet_text",
                           "faktarapport_text", "language_exercises", "warnings",
                           "truth_passport",
                           "quarantine", "quality_rounds", "quality_stop_reason",
-                          "source_name", "prompt_version", "lint_issues"):
+                          "source_name", "prompt_version", "lint_issues",
+                          "review_payload", "variant_issues"):
                 if job_meta.get(field):
                     done_event[field] = job_meta[field]
             # Boolean flags must be forwarded even when False, so the UI can
@@ -460,6 +475,8 @@ def run_job_in_thread(
             # themselves never go over SSE).
             done_event["has_faktarapport"] = bool(job_meta.get("rapport_pdf"))
             done_event["quality_status"] = quality_status
+            if quality_status == "needs_teacher_review":
+                done_event["review_url"] = f"/generation/{job_id}/review"
             schedule_event(done_event)
             with _jobs_lock:
                 job = _jobs.get(job_id)
@@ -467,6 +484,10 @@ def run_job_in_thread(
                     job.terminal_event_sent = True
             logger.info(
                 "job_completed",
+                extra={"job_id": job_id, "status": quality_status, "duration_s": round(total_duration, 2)},
+            )
+            logger.info(
+                "package_completed",
                 extra={"job_id": job_id, "status": quality_status, "duration_s": round(total_duration, 2)},
             )
 
@@ -533,6 +554,11 @@ def run_job_in_thread(
                     job.error = f"{err_msg} (request_id: {job_id[:8]})"
                     job.status = "failed"
                     job.done = True
+                    job.terminal_event_sent = True
+            logger.error(
+                "job_failed",
+                extra={"job_id": job_id, "error_type": type(e).__name__},
+            )
             schedule_event({
                 "type": "error",
                 "status": "failed",

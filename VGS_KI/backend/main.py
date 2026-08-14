@@ -14,7 +14,7 @@ import os
 import re
 import threading
 import uuid
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import diskcache as dc
 from fastapi import FastAPI, HTTPException, Request
@@ -38,14 +38,19 @@ from Skoleverksted.backend.platform.quality_gate import (
 
 if __package__:
     from . import config
-    from .agents import generate_lesson_content, generate_prove_content, generate_sequence_content
+    from .agents import (
+        generate_lesson_content,
+        generate_prove_content,
+        generate_sequence_content,
+        validate_differentiated_variants,
+    )
     from .tools import WikimediaImageSearchTool
     from .grep_api import get_competency_goals
     from .ndla_service import fetch_ndla_source
     from .docx_service import create_lesson_docx
     from .laeringsark_renderer import (
         build_faktarapport_doc, build_laeringsark_doc, collect_text_fields,
-        make_image_observation_task, parse_oppgaver,
+        make_image_observation_task, parse_oppgaver, structured_to_plain_text,
     )
     from .text_pipeline import lint_pdf
     from .pdf_service import (
@@ -61,14 +66,19 @@ if __package__:
     )
 else:
     import config
-    from agents import generate_lesson_content, generate_prove_content, generate_sequence_content
+    from agents import (
+        generate_lesson_content,
+        generate_prove_content,
+        generate_sequence_content,
+        validate_differentiated_variants,
+    )
     from tools import WikimediaImageSearchTool
     from grep_api import get_competency_goals
     from ndla_service import fetch_ndla_source
     from docx_service import create_lesson_docx
     from laeringsark_renderer import (
         build_faktarapport_doc, build_laeringsark_doc, collect_text_fields,
-        make_image_observation_task, parse_oppgaver,
+        make_image_observation_task, parse_oppgaver, structured_to_plain_text,
     )
     from text_pipeline import lint_pdf
     from pdf_service import (
@@ -514,6 +524,222 @@ async def cancel_generation(job_id: str):
     return {"success": True, "status": job.status, "message": "Genereringen er avbrutt."}
 
 
+@app.get("/generation/{job_id}/review")
+def generation_review(job_id: str):
+    """Return a teacher-facing control view for a blocked generation.
+
+    This is intentionally separate from the PDF route: a blocked artifact is
+    inspectable and editable, but never downloadable as an approved document.
+    """
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "needs_teacher_review":
+        raise HTTPException(status_code=409, detail="Jobben har ikke en aktiv lærerkontroll.")
+    passport = job.truth_passport or {}
+    claims = (passport.get("claims") or []) if isinstance(passport, dict) else []
+    return {
+        "job_id": job_id,
+        "status": job.status,
+        "quality_stop_reason": job.quality_stop_reason or "truth_layer_unresolved_claims",
+        "content": job.review_payload,
+        "verification_content": job.verification_content,
+        "truth_passport": passport,
+        "sources": passport.get("sources", []) if isinstance(passport, dict) else [],
+        "verified_claims": [item for item in claims if item.get("status") == "verified"],
+        "quarantine": job.quarantine,
+        "variant_issues": job.variant_issues,
+        "claims_for_review": [
+            item for item in claims if item.get("status") != "verified"
+        ],
+        "actions": {
+            "rerun": f"/generation/{job_id}/review/rerun",
+            "remove_claim": f"/generation/{job_id}/review/remove",
+            "cancel": f"/generate/{job_id}",
+        },
+    }
+
+
+class GenerationReviewPatch(BaseModel):
+    """Editable fields returned by the teacher control view."""
+
+    canonical: dict[str, Any] | str | None = None
+    variants: dict[str, str] | None = None
+    worksheet: str | None = Field(default=None, max_length=20_000)
+    language_exercises: dict[str, Any] | None = None
+
+
+def _review_payload(job: Any) -> dict[str, Any]:
+    if job.review_payload:
+        return json.loads(json.dumps(job.review_payload, ensure_ascii=False))
+    try:
+        parsed = json.loads(job.verification_content or "{}")
+    except json.JSONDecodeError:
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _replace_claim_once(value: Any, exact_text: str, state: dict[str, bool]) -> Any:
+    if state["removed"]:
+        return value
+    if isinstance(value, str) and exact_text and exact_text in value:
+        state["removed"] = True
+        return value.replace(exact_text, "", 1)
+    if isinstance(value, list):
+        return [_replace_claim_once(item, exact_text, state) for item in value]
+    if isinstance(value, dict):
+        return {key: _replace_claim_once(item, exact_text, state) for key, item in value.items()}
+    return value
+
+
+async def _rerun_review(job_id: str, job: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    source_payload = (job.truth_passport or {}).get("sources", [])
+    result = await asyncio.to_thread(
+        run_quality_pipeline,
+        generator_id="fag.differentiated",
+        content=json.dumps(payload, ensure_ascii=False),
+        topic=getattr(job.request_payload, "topic", "Norsk"),
+        subject=getattr(job.request_payload, "subject", "Norsklæring"),
+        level=getattr(job.request_payload, "level", "A2"),
+        provided_sources=source_payload,
+        request_id=job_id,
+    )
+    job.filename = safe_filename(
+        "kontroll",
+        getattr(job.request_payload, "topic", "differensiert"),
+        getattr(job.request_payload, "level", ""),
+    )
+    job.variant_issues = []
+    try:
+        approved_payload = json.loads(result.approved_content)
+    except (TypeError, json.JSONDecodeError):
+        approved_payload = None
+    if not isinstance(approved_payload, dict):
+        job.review_payload = payload
+        job.verification_content = result.approved_content
+        job.truth_passport = result.passport.model_dump(mode="json")
+        job.quarantine = [item.model_dump(mode="json") for item in result.quarantine]
+        job.quality_rounds = [item.model_dump(mode="json") for item in result.rounds]
+        job.quality_stop_reason = "review_payload_invalid_after_quality_gate"
+        job.teacher_approved_at = ""
+        job.approved_digest = ""
+        job.pdf = None
+        job.status = "needs_teacher_review"
+        job.done = True
+        return {
+            "job_id": job_id,
+            "status": job.status,
+            "quality_stop_reason": job.quality_stop_reason,
+            "truth_passport": job.truth_passport,
+            "quarantine": job.quarantine,
+            "review_payload": job.review_payload,
+            "variant_issues": job.variant_issues,
+            "pdf_ready": False,
+            "filename": job.filename,
+        }
+    payload = approved_payload
+    job.review_payload = payload
+    job.verification_content = result.approved_content
+    job.truth_passport = result.passport.model_dump(mode="json")
+    job.quarantine = [item.model_dump(mode="json") for item in result.quarantine]
+    job.quality_rounds = [item.model_dump(mode="json") for item in result.rounds]
+    job.quality_stop_reason = result.stop_reason
+    job.teacher_approved_at = ""
+    job.approved_digest = ""
+    job.pdf = None
+    job.status = "needs_teacher_review"
+    if result.source_approved:
+        canonical = payload.get("canonical")
+        if isinstance(canonical, dict):
+            canonical_text = structured_to_plain_text(canonical) if canonical.get("seksjoner") else str(canonical.get("text") or "")
+        else:
+            canonical_text = str(canonical or "")
+        variants = payload.get("variants") if isinstance(payload.get("variants"), dict) else {}
+        differentiation = {
+            "stoette": str(variants.get("støtte", variants.get("stoette", "")) or ""),
+            "fordypning": str(variants.get("fordypning", "") or ""),
+        }
+        variant_issues = validate_differentiated_variants(
+            canonical_text=canonical_text,
+            differensiering=differentiation,
+        )
+        job.variant_issues = variant_issues
+        if not variant_issues:
+            request_payload = job.request_payload
+            job.pdf = await asyncio.to_thread(
+                create_differentiated_pdf,
+                standard_text=canonical_text,
+                stoette_text=differentiation["stoette"],
+                fordypning_text=differentiation["fordypning"],
+                topic=getattr(request_payload, "topic", "Norsk"),
+                level=getattr(request_payload, "level", "VGS"),
+                subject=getattr(request_payload, "subject", "Norsklæring"),
+                worksheet_text=str(payload.get("worksheet") or ""),
+                language_exercises=payload.get("language_exercises"),
+                options=getattr(request_payload, "options", {}) or {},
+            )
+            job.filename = safe_filename(
+                "differensiert",
+                getattr(request_payload, "topic", "differensiert"),
+                getattr(request_payload, "level", ""),
+            )
+            job.status = "source_approved"
+        else:
+            job.quality_stop_reason = "differentiation_contract_failed"
+    job.done = True
+    return {
+        "job_id": job_id,
+        "status": job.status,
+        "quality_stop_reason": job.quality_stop_reason,
+        "truth_passport": job.truth_passport,
+        "quarantine": job.quarantine,
+        "review_payload": job.review_payload,
+        "variant_issues": job.variant_issues,
+        "pdf_ready": bool(job.pdf),
+        "filename": job.filename,
+    }
+
+
+@app.post("/generation/{job_id}/review/rerun")
+async def rerun_generation_review(job_id: str, patch: GenerationReviewPatch):
+    """Apply teacher edits and run only the bounded quality gate again."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    payload = _review_payload(job)
+    changes = patch.model_dump(exclude_none=True)
+    payload.update(changes)
+    result = await _rerun_review(job_id, job, payload)
+    result["job_id"] = job_id
+    return result
+
+
+class GenerationReviewRemove(BaseModel):
+    claim_id: str = Field(min_length=1, max_length=80)
+
+
+@app.post("/generation/{job_id}/review/remove")
+async def remove_generation_claim(job_id: str, request: GenerationReviewRemove):
+    """Remove one explicitly selected claim, then re-run the gate."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    passport = job.truth_passport or {}
+    claims = passport.get("claims", []) if isinstance(passport, dict) else []
+    claim = next((item for item in claims if item.get("id") == request.claim_id), None)
+    if not claim:
+        raise HTTPException(status_code=404, detail="Påstanden finnes ikke i kontrollbildet.")
+    exact_text = str(claim.get("exact_text") or claim.get("claim") or "")
+    payload = _review_payload(job)
+    state = {"removed": False}
+    payload = _replace_claim_once(payload, exact_text, state)
+    if not state["removed"]:
+        raise HTTPException(status_code=409, detail="Påstanden kunne ikke fjernes sikkert. Rediger feltet i stedet.")
+    result = await _rerun_review(job_id, job, payload)
+    result["job_id"] = job_id
+    return result
+
+
 @app.post("/generation/{job_id}/approve")
 def approve_generation(job_id: str):
     """Record explicit teacher approval for the exact verified job text."""
@@ -628,6 +854,10 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         )
     else:
         source_text, source_name, source_metadata = _resolve_source(req, ctx)
+    provided_sources = (
+        (source_metadata,)
+        if source_metadata else ()
+    )
     ctx.push("Genererer fagtekst..." if not req.basis_text else "Bruker eksisterende fagtekst, regenererer oppgaver...")
     content = generate_lesson_content(
         topic=req.topic,
@@ -643,6 +873,7 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         progress_callback=ctx.push,
         cancel_check=ctx.cancel_check,
         request_id=ctx.job_id,
+        provided_sources=provided_sources,
     )
 
     if ctx.set_meta:
@@ -831,6 +1062,10 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
     options["differensiering"] = True
 
     source_text, source_name, source_metadata = _resolve_source(req, ctx)
+    provided_sources = (
+        (source_metadata,)
+        if source_metadata else ()
+    )
     ctx.push("Genererer fagtekst...")
     content = generate_lesson_content(
         topic=req.topic,
@@ -846,6 +1081,7 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
         quality_generator_id="fag.differentiated",
         cancel_check=ctx.cancel_check,
         request_id=ctx.job_id,
+        provided_sources=provided_sources,
     )
 
     if ctx.set_meta:
@@ -859,9 +1095,22 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("quality_rounds", content.get("quality_rounds"))
         ctx.set_meta("quality_stop_reason", content.get("quality_stop_reason"))
         ctx.set_meta("quality_status", content.get("quality_status", "needs_teacher_review"))
+        ctx.set_meta("review_payload", content.get("review_payload"))
 
     if content.get("quality_status") != "source_approved":
         ctx.push("Kildekontrollen er ferdig – rediger innholdet før PDF kan frigis.")
+        return b"", safe_filename("kontroll", req.topic, req.level)
+
+    variant_issues = validate_differentiated_variants(
+        canonical_text=content.get("canonical_content") or content.get("text", ""),
+        differensiering=content.get("differensiering"),
+    )
+    if variant_issues:
+        if ctx.set_meta:
+            ctx.set_meta("quality_status", "needs_teacher_review")
+            ctx.set_meta("quality_stop_reason", "differentiation_contract_failed")
+            ctx.set_meta("variant_issues", variant_issues)
+        ctx.push("Differensieringen mangler en gyldig variant – lærergjennomgang kreves.")
         return b"", safe_filename("kontroll", req.topic, req.level)
 
     ctx.push(

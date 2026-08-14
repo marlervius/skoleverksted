@@ -414,8 +414,8 @@ differentiation_agent = Agent(
     STØTTE should be accessible to struggling learners without losing academic substance.
     FORDYPNING should challenge advanced learners with synthesis and evaluation.""",
     backstory="""You are a specialist in differentiated instruction (tilpasset opplæring)
-    as required by Norwegian law (opplæringslova §1-3). You know exactly how to adapt
-    the same academic content for different learning needs while keeping the curriculum goals intact.
+    as required by Norwegian law (opplæringslova §1-3). You adapt one verified canonical
+    text for different learning needs while keeping the curriculum goals and factual claims intact.
 
     STØTTE rules:
     - Max 15 words per sentence
@@ -426,11 +426,11 @@ differentiation_agent = Agent(
     - 20-30% shorter than original
 
     FORDYPNING rules:
-    - Introduce 2-3 additional nuances or perspectives not in the standard text
-    - Include at least one historiographical or methodological reflection
-    - Add a critical question at the end: «Noen historikere mener... Men andre hevder...»
-    - Reference primary source types that could be used to investigate the topic
-    - 20-30% longer than original
+    - Explain existing claims with more nuance, but introduce NO new factual claims,
+      names, dates, statistics, institutions or events.
+    - Add only interpretation or reflection prompts when they are clearly marked as such.
+    - Keep the same factual core and learning goals as the canonical text.
+    - 20-30% longer than original only through explanation, scaffolding and questions.
 
     CRITICAL: Return ONLY valid JSON with exactly this structure:
     {"stoette": "...", "fordypning": "..."}
@@ -886,7 +886,93 @@ def _forward_quality_progress(progress_callback, event: dict[str, object]) -> No
         progress_callback(message)
 
 
-def generate_lesson_content(topic: str, subject: str, level: str, language_level: str = None, options: dict[str, bool] = None, description: str = None, source_text: str = None, basis_text: str = None, interest: str = None, progress_callback=None, quality_generator_id: str = "fag.learning_sheet", source_metadata: dict | None = None, cancel_check=None, request_id: str = "") -> dict:
+def _build_typed_truth_payload(
+    *,
+    structured: dict | None,
+    text: str,
+    worksheet: str,
+    language_exercises: dict | None,
+    differensiering: dict | None,
+) -> dict:
+    """Build the explicit content manifest consumed by the truth layer.
+
+    The old pipeline sent one untyped JSON blob.  This manifest preserves the
+    exact field and variant for the reviewer, so ordinary exercise prose is
+    not mistaken for an external fact and variant-only claims can be traced.
+    """
+    canonical = structured if structured else {"text": text}
+    variants = {
+        "standard": canonical,
+        "støtte": (differensiering or {}).get("stoette", ""),
+        "fordypning": (differensiering or {}).get("fordypning", ""),
+    }
+    return {
+        "canonical": canonical,
+        "variants": variants,
+        "worksheet": worksheet,
+        "language_exercises": language_exercises,
+        "content_manifest": [
+            {
+                "field_path": "canonical",
+                "content_type": "external_factual_claim",
+                "variant": "standard",
+                "instruction": "Verify only real-world claims; split fictional examples and instructions into their own types.",
+            },
+            {
+                "field_path": "variants.støtte",
+                "content_type": "external_factual_claim",
+                "variant": "støtte",
+                "instruction": "Compare against canonical; do not add factual content.",
+            },
+            {
+                "field_path": "variants.fordypning",
+                "content_type": "external_factual_claim",
+                "variant": "fordypning",
+                "instruction": "Compare against canonical; new factual claims require their own verification.",
+            },
+            {
+                "field_path": "worksheet",
+                "content_type": "instruction",
+                "variant": "felles",
+                "instruction": "Do not treat task instructions or reflection prompts as external facts.",
+            },
+            {
+                "field_path": "language_exercises",
+                "content_type": "grammar_claim",
+                "variant": "felles",
+                "instruction": "Route grammar and translation to language QA, not web fact checking.",
+            },
+        ],
+    }
+
+
+def validate_differentiated_variants(
+    *,
+    canonical_text: str,
+    differensiering: dict | None,
+) -> list[str]:
+    """Deterministically guard the three-variant contract before rendering."""
+    issues: list[str] = []
+    if not canonical_text.strip():
+        issues.append("Den kanoniske fagteksten mangler.")
+    if not isinstance(differensiering, dict):
+        return [*issues, "Differensieringsagenten returnerte ikke et objekt med tre nivåer."]
+    support = str(differensiering.get("stoette") or "").strip()
+    extension = str(differensiering.get("fordypning") or "").strip()
+    if not support:
+        issues.append("Støttevarianten mangler.")
+    if not extension:
+        issues.append("Fordypningsvarianten mangler.")
+    if support and support == canonical_text.strip():
+        issues.append("Støttevarianten er ikke reelt differensiert.")
+    if extension and extension == canonical_text.strip():
+        issues.append("Fordypningsvarianten er ikke reelt differensiert.")
+    if support and extension and support == extension:
+        issues.append("Støtte- og fordypningsvarianten er identiske.")
+    return issues
+
+
+def generate_lesson_content(topic: str, subject: str, level: str, language_level: str = None, options: dict[str, bool] = None, description: str = None, source_text: str = None, basis_text: str = None, interest: str = None, progress_callback=None, quality_generator_id: str = "fag.learning_sheet", source_metadata: dict | None = None, cancel_check=None, request_id: str = "", provided_sources=None) -> dict:
     """
     Generate complete lesson content using the AI agents.
     
@@ -930,6 +1016,12 @@ def generate_lesson_content(topic: str, subject: str, level: str, language_level
     if options:
         default_options.update(options)
     options = default_options
+
+    if options.get("differensiering"):
+        logger.info(
+            "differentiated_package_started",
+            extra={"request_id": request_id, "topic": topic, "subject": subject, "variant_count": 3},
+        )
 
     # Determine output language based on subject (needed early for language focus)
     is_english_subject = subject.lower() == "engelsk"
@@ -1830,11 +1922,12 @@ Hold fasiten praktisk og under 450 ord."""
 
             STØTTE rules: max 15 words/sentence, active voice, re-explain all key terms,
             use signal words (First, Then, Because, This means), break into bullets where helpful,
-            20-30% shorter than original.
+            20-30% shorter than original. Keep exactly the same factual claims.
 
-            FORDYPNING rules: add 2-3 extra nuances not in original, include historiographical
-            reflection, add a critical closing question comparing perspectives,
-            reference relevant primary source types, 20-30% longer than original."""
+            FORDYPNING rules: explain the original claims with more nuance, but add NO new
+            factual claims, names, dates, numbers, institutions or events. New reflection
+            questions must be clearly hypothetical or interpretive, and the learning goals
+            must stay identical. 20-30% longer than original only through explanation."""
         else:
             diff_desc = f"""Basert på fagteksten om "{topic}", lag to tilpassede versjoner.
             Teksten er tilgjengelig som kontekst fra forrige oppgave.
@@ -1844,11 +1937,12 @@ Hold fasiten praktisk og under 450 ord."""
 
             STØTTE-regler: maks 15 ord/setning, aktiv form, forklar alle fagbegreper på nytt i parentes,
             bruk signalord (Først, Deretter, Fordi, Dette betyr at), del opp i punktlister der det hjelper,
-            20-30% kortere enn originalen.
+            20-30% kortere enn originalen. Behold nøyaktig samme faktagrunnlag.
 
-            FORDYPNING-regler: legg til 2-3 ekstra nyanser som ikke er i originalen, inkluder
-            historiografisk eller metodisk refleksjon, avslutt med et kritisk spørsmål som sammenstiller
-            ulike perspektiver, referer til relevante primærkildetyper, 20-30% lengre enn originalen."""
+            FORDYPNING-regler: forklar eksisterende påstander mer nyansert, men legg IKKE til nye
+            faktapåstander, navn, datoer, tall, institusjoner eller hendelser. Nye refleksjonsspørsmål
+            skal være tydelig hypotetiske eller tolkende. Behold samme læringsmål og faktakjerne.
+            20-30% lengre enn originalen bare gjennom forklaring og oppgaver."""
 
         differensiering_task = Task(
             description=diff_desc,
@@ -2093,6 +2187,14 @@ Hold fasiten praktisk og under 450 ord."""
     # the legacy free-text flow so a malformed JSON never blocks generation.
     _text_wo_url, _ = extract_image_url(raw_text_output)
     structured = coerce_structured_lesson(extract_json_object(_text_wo_url))
+    logger.info(
+        "canonical_content_generated",
+        extra={
+            "request_id": request_id,
+            "structured": bool(structured),
+            "content_length": len(raw_text_output or ""),
+        },
+    )
     if structured:
         logger.info("Structured lesson JSON parsed (%d seksjoner)", len(structured["seksjoner"]))
     elif not basis_text:
@@ -2492,6 +2594,16 @@ Hold fasiten praktisk og under 450 ord."""
     differensiering = None
     if differensiering_output:
         differensiering = _parse_differensiering(differensiering_output)
+    if options.get("differensiering"):
+        logger.info(
+            "variant_generation_completed",
+            extra={
+                "request_id": request_id,
+                "standard_present": bool(text_output.strip()),
+                "support_present": bool((differensiering or {}).get("stoette", "").strip()),
+                "extension_present": bool((differensiering or {}).get("fordypning", "").strip()),
+            },
+        )
 
     # Whether this output was grounded in teacher-provided source material.
     source_grounded = bool(source_text and source_text.strip())
@@ -2516,23 +2628,21 @@ Hold fasiten praktisk og under 450 ord."""
         )
     from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
 
-    truth_input = json.dumps(
-        {
-            "structured": structured,
-            "text": None if structured else text_output,
-            "worksheet": worksheet_output,
-            "language_exercises": language_exercises,
-            "differensiering": differensiering,
-        },
-        ensure_ascii=False,
+    truth_payload = _build_typed_truth_payload(
+        structured=structured,
+        text=text_output,
+        worksheet=worksheet_output,
+        language_exercises=language_exercises,
+        differensiering=differensiering,
     )
+    truth_input = json.dumps(truth_payload, ensure_ascii=False)
     quality_result = run_quality_pipeline(
         generator_id=quality_generator_id,
         content=truth_input,
         topic=topic,
         subject=subject,
         level=level,
-        provided_sources=(source_metadata,) if source_metadata else (),
+        provided_sources=provided_sources or ((source_metadata,) if source_metadata else ()),
         cancel_check=cancel_check,
         request_id=request_id,
         progress_callback=(
@@ -2551,7 +2661,7 @@ Hold fasiten praktisk og under 450 ord."""
         )
     if isinstance(truth_payload, dict):
         if structured:
-            truth_structured = coerce_structured_lesson(truth_payload.get("structured"))
+            truth_structured = coerce_structured_lesson(truth_payload.get("canonical"))
             if truth_structured:
                 structured = truth_structured
                 text_output = structured_to_plain_text(structured)
@@ -2560,8 +2670,8 @@ Hold fasiten praktisk og under 450 ord."""
                 truth_audit.passport.limitations.append(
                     "Den kontrollerte strukturteksten kunne ikke valideres etter retting."
                 )
-        elif isinstance(truth_payload.get("text"), str):
-            text_output = truth_payload["text"]
+        elif isinstance(truth_payload.get("canonical"), dict) and isinstance(truth_payload["canonical"].get("text"), str):
+            text_output = truth_payload["canonical"]["text"]
         if isinstance(truth_payload.get("worksheet"), str):
             worksheet_output = truth_payload["worksheet"]
         revised_language = truth_payload.get("language_exercises")
@@ -2572,7 +2682,12 @@ Hold fasiten praktisk og under 450 ord."""
             truth_audit.passport.limitations.append(
                 "Kontrollerte språkoppgaver kunne ikke valideres etter retting."
             )
-        revised_differentiation = truth_payload.get("differensiering")
+        revised_differentiation = truth_payload.get("variants")
+        if isinstance(revised_differentiation, dict):
+            revised_differentiation = {
+                "stoette": revised_differentiation.get("støtte", ""),
+                "fordypning": revised_differentiation.get("fordypning", ""),
+            }
         if revised_differentiation is None or isinstance(revised_differentiation, dict):
             differensiering = revised_differentiation
         else:
@@ -2590,7 +2705,7 @@ Hold fasiten praktisk og under 450 ord."""
 
     deliver_fact_report = bool(options.get("faktarapport", True))
 
-    return {
+    result_payload = {
         "topic": topic,
         "subject": subject,
         "level": level,
@@ -2603,6 +2718,13 @@ Hold fasiten praktisk og under 450 ord."""
         "faktarapport_structured": faktarapport_structured if deliver_fact_report else None,
         "verk": list(structured.get("verk", [])) if structured else [],
         "differensiering": differensiering,
+        "canonical_content": structured_to_plain_text(structured) if structured else text_output,
+        "variant_contents": {
+            "standard": structured_to_plain_text(structured) if structured else text_output,
+            "støtte": (differensiering or {}).get("stoette", ""),
+            "fordypning": (differensiering or {}).get("fordypning", ""),
+        },
+        "review_payload": truth_payload,
         "warnings": warnings,
         "source_grounded": source_grounded,
         "truth_passport": truth_audit.passport.model_dump(mode="json"),
@@ -2613,6 +2735,16 @@ Hold fasiten praktisk og under 450 ord."""
         "quality_status": quality_result.quality_status,
         "prompt_version": PROMPT_VERSION,
     }
+    logger.info(
+        "package_completed",
+        extra={
+            "request_id": request_id,
+            "generator_id": quality_generator_id,
+            "quality_status": quality_result.quality_status,
+            "variant_count": 3 if options.get("differensiering") else 1,
+        },
+    )
+    return result_payload
 
 
 def _parse_differensiering(text: str) -> dict | None:

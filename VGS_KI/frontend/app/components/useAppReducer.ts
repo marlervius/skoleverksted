@@ -1,6 +1,6 @@
 import type { Status, LessonOptions, AppMode, StudentProfile } from "./constants";
 import { DEFAULT_OPTIONS } from "./constants";
-import type { CompetencyGoal, ImageCandidate } from "./api";
+import type { CompetencyGoal, GenerationReview, ImageCandidate } from "./api";
 
 /** Result of one profile's generation in a batch run. */
 export interface ProfileResult {
@@ -58,6 +58,7 @@ export interface AppState {
   showEditPanel: boolean;
   imageCandidates: ImageCandidate[];
   imageCandidatesLoading: boolean;
+  review: GenerationReview | null;
 }
 
 export const initialState: AppState = {
@@ -102,6 +103,7 @@ export const initialState: AppState = {
   showEditPanel: false,
   imageCandidates: [],
   imageCandidatesLoading: false,
+  review: null,
 };
 
 export type AppAction =
@@ -138,6 +140,8 @@ export type AppAction =
   | { type: "IMAGE_CANDIDATES_LOADING" }
   | { type: "IMAGE_CANDIDATES_LOADED"; candidates: ImageCandidate[] }
   | { type: "GENERATION_ERROR"; message: string }
+  | { type: "GENERATION_REVIEW"; review: GenerationReview }
+  | { type: "GENERATION_REVIEW_UPDATED"; review: GenerationReview }
   | { type: "GENERATION_CANCEL" }
   | { type: "GENERATION_IDLE" }
   | { type: "SHOW_PREVIEW" }
@@ -226,6 +230,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         status: "loading",
         errorMessage: "",
+        review: null,
         progressMessage: "",
         elapsedSeconds: 0,
         showPreview: false,
@@ -255,6 +260,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         sourceGrounded: action.sourceGrounded ?? null,
         sourceName: action.sourceName ?? null,
         showEditPanel: false,
+        review: null,
       };
     case "SET_BASIS_TEXT":
       return { ...state, basisText: action.text };
@@ -268,10 +274,20 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, imageCandidatesLoading: false, imageCandidates: action.candidates };
     case "GENERATION_ERROR":
       return { ...state, status: "error", errorMessage: action.message, progressMessage: "" };
+    case "GENERATION_REVIEW":
+      return {
+        ...state,
+        status: "error",
+        errorMessage: "Produksjonen er stoppet for lærergjennomgang.",
+        progressMessage: "",
+        review: action.review,
+      };
+    case "GENERATION_REVIEW_UPDATED":
+      return { ...state, review: action.review };
     case "GENERATION_CANCEL":
       return { ...state, status: "idle", progressMessage: "" };
     case "GENERATION_IDLE":
-      return { ...state, status: "idle" };
+      return { ...state, status: "idle", review: state.review };
     case "SHOW_PREVIEW":
       return { ...state, showPreview: true };
     case "CLOSE_PREVIEW":
