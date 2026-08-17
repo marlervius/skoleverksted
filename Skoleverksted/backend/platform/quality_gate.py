@@ -640,8 +640,12 @@ def run_quality_pipeline(
             final.status != "source_unavailable"
             or bool(quarantine)
             # A source-unavailable passport with no evidence-bearing claims is
-            # a valid language worksheet, not a factual failure.
-            or not any(claim_requires_evidence(claim) for claim in final.claims)
+            # a valid language worksheet only when the auditor returned an
+            # explicit typed claim register. An empty register is fail-closed.
+            or (
+                bool(final.claims)
+                and not any(claim_requires_evidence(claim) for claim in final.claims)
+            )
         )
     ):
         # Non-factual documents and documents cleaned by quarantine are valid

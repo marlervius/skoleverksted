@@ -10,7 +10,21 @@ describe("fag generation review state", () => {
         basisText: "Kontrollerbar fagtekst.",
         worksheetText: "Oppgave.",
         qualityStopReason: "truth_layer_timeout",
-        quarantine: [{ original_text: "Uverifisert påstand." }],
+        qualityQuarantine: [
+          {
+            id: "quarantine-1",
+            claim_id: "claim-1",
+            content_type: "fact",
+            original_text: "Uverifisert påstand.",
+            location: "fagtekst",
+            reason: "Ingen autoritativ kilde ble funnet.",
+            source_attempts: [],
+            suggested_replacement: "",
+            omission_consequence: "Påstanden utelates fra elevmaterialet.",
+            status: "withheld",
+            created_at: "2026-08-17T00:00:00Z",
+          },
+        ],
       },
     );
 
@@ -18,6 +32,6 @@ describe("fag generation review state", () => {
     expect(state.showEditPanel).toBe(true);
     expect(state.previewBlob).toBeNull();
     expect(state.qualityStopReason).toBe("truth_layer_timeout");
-    expect(state.quarantine).toHaveLength(1);
+    expect(state.qualityQuarantine).toHaveLength(1);
   });
 });

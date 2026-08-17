@@ -1,13 +1,13 @@
 import io
-from pathlib import Path
 
 from pypdf import PdfReader
 
 from ScriptoriumFOV.backend import main
 from ScriptoriumFOV.backend.progress_store import clear_progress, initialize_progress
+from ScriptoriumFOV.backend.tests.pdf_fixture import build_valid_pdf_bytes
 
 
-PDF_FIXTURE = Path(__file__).resolve().parents[3] / "test_laeringsark.pdf"
+PDF_FIXTURE = build_valid_pdf_bytes()
 
 
 def test_norsk_generation_publishes_and_serves_a_valid_pdf(monkeypatch):
@@ -27,7 +27,7 @@ def test_norsk_generation_publishes_and_serves_a_valid_pdf(monkeypatch):
         "_materialize_pedagogical_image",
         lambda *_args, **_kwargs: (None, None, "", ""),
     )
-    monkeypatch.setattr(main, "create_lesson_pdf", lambda **_kwargs: PDF_FIXTURE.read_bytes())
+    monkeypatch.setattr(main, "create_lesson_pdf", lambda **_kwargs: PDF_FIXTURE)
     monkeypatch.setattr(main, "_cleanup_image", lambda _path: None)
     monkeypatch.setattr(main, "_require_norsk_documents", lambda *_args, **_kwargs: None)
 
