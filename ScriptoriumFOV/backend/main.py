@@ -6,10 +6,12 @@ import logging
 import os
 import re
 import tempfile
+import time
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, Literal, Optional, Dict
+from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,28 +37,39 @@ from Skoleverksted.backend.platform.quality_gate import (
     run_quality_pipeline,
     source_approval_reasons,
 )
-
 if __package__:
     from .agents import generate_lesson_content
+    from .artifact import (
+        ArtifactValidationError,
+        ValidatedArtifact,
+        validate_pdf_artifact,
+        validate_zip_artifact,
+    )
     from .config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from .errors import GeminiQuotaExceededError
     from .auth import app_password_configured, require_app_password, verify_password_plain
     from .pdf_service import create_lesson_pdf
     from .media_manager import image_processor
     from .progress_store import (
-        get_progress, is_json_preview_ready, is_pdf_ready, is_zip_ready,
-        merge_progress, progress_backend_label, update_progress,
+        get_progress, initialize_progress, is_json_preview_ready, is_pdf_ready, is_zip_ready,
+        merge_progress, progress_backend_label, publish_event, update_progress,
     )
 else:
     from agents import generate_lesson_content
+    from artifact import (
+        ArtifactValidationError,
+        ValidatedArtifact,
+        validate_pdf_artifact,
+        validate_zip_artifact,
+    )
     from config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from errors import GeminiQuotaExceededError
     from auth import app_password_configured, require_app_password, verify_password_plain
     from pdf_service import create_lesson_pdf
     from media_manager import image_processor
     from progress_store import (
-        get_progress, is_json_preview_ready, is_pdf_ready, is_zip_ready,
-        merge_progress, progress_backend_label, update_progress,
+        get_progress, initialize_progress, is_json_preview_ready, is_pdf_ready, is_zip_ready,
+        merge_progress, progress_backend_label, publish_event, update_progress,
     )
 
 # Configure logging
@@ -70,8 +83,8 @@ USER_FACING_GENERATION_ERROR = (
 
 
 def _public_progress_error(exc: Exception) -> str:
-    """Log full error; return safe message for progress JSON."""
-    logger.exception("Generation task failed: %s", exc)
+    """Log a safe error code and return a user-facing progress message."""
+    logger.error("Generation task failed error_type=%s", type(exc).__name__)
     if isinstance(exc, GeminiQuotaExceededError):
         return exc.user_message
     return USER_FACING_GENERATION_ERROR
@@ -129,6 +142,179 @@ def _cleanup_image(path: Optional[str]) -> None:
             logger.info(f"Cleaned up temporary image: {path}")
         except Exception as e:
             logger.warning(f"Failed to clean up image {path}: {e}")
+
+
+def _request_id(request: Request) -> str:
+    """Use the platform correlation id when present, otherwise create one."""
+
+    return (request.headers.get("x-request-id") or uuid.uuid4().hex[:12]).strip()[:80]
+
+
+def _job_context(generation_id: str) -> tuple[str, str]:
+    progress = get_progress(generation_id) or {}
+    return str(progress.get("request_id") or "unknown"), generation_id
+
+
+def _log_generation_event(
+    event: str,
+    generation_id: str,
+    *,
+    artifact_id: str = "",
+    started_at: float | None = None,
+    size_bytes: int | None = None,
+    terminal_status: str = "running",
+    error_code: str = "",
+) -> None:
+    request_id, job_id = _job_context(generation_id)
+    duration_ms = round((time.perf_counter() - started_at) * 1000, 2) if started_at else None
+    logger.info(
+        "generation_event=%s request_id=%s job_id=%s artifact_id=%s duration_ms=%s "
+        "size_bytes=%s terminal_status=%s error_code=%s",
+        event,
+        request_id,
+        job_id,
+        artifact_id or "-",
+        duration_ms if duration_ms is not None else "-",
+        size_bytes if size_bytes is not None else "-",
+        terminal_status,
+        error_code or "-",
+    )
+
+
+def _artifact_metadata(generation_id: str, artifact: ValidatedArtifact) -> dict:
+    artifact_id = f"{generation_id}:{artifact.kind}:{uuid.uuid4().hex[:12]}"
+    base_url = f"/api/norsk"
+    if artifact.content_type == "application/pdf":
+        download_url = f"{base_url}/download-pdf/{generation_id}"
+        preview_url = f"{download_url}?preview=true"
+    else:
+        download_url = f"{base_url}/download-zip/{generation_id}"
+        preview_url = None
+    return {
+        "id": artifact_id,
+        "job_id": generation_id,
+        "kind": artifact.kind,
+        "filename": artifact.filename,
+        "content_type": artifact.content_type,
+        "size_bytes": artifact.size_bytes,
+        "preview_url": preview_url,
+        "download_url": download_url,
+    }
+
+
+def _publish_validated_artifact(
+    generation_id: str,
+    artifact: ValidatedArtifact,
+    *,
+    payload_key: str,
+    total_steps: int,
+    quality_documents: list[dict],
+    ready_message: str,
+    done_message: str = "Ferdig! PDF klar for nedlasting.",
+) -> dict:
+    """Store, verify and publish one idempotent terminal artefact transition."""
+
+    existing = get_progress(generation_id) or {}
+    if (
+        existing.get("job_status") == "completed"
+        and existing.get(payload_key)
+        and existing.get("artifact")
+    ):
+        return dict(existing["artifact"])
+
+    started_at = time.perf_counter()
+    metadata = _artifact_metadata(generation_id, artifact)
+    merge_progress(
+        generation_id,
+        **{
+            payload_key: artifact.content,
+            "filename": artifact.filename,
+            "artifact": metadata,
+            "artifact_id": metadata["id"],
+            "quality_documents": quality_documents,
+        },
+    )
+    stored = get_progress(generation_id) or {}
+    if stored.get(payload_key) != artifact.content:
+        raise ArtifactValidationError("artifact_storage_verification_failed")
+    _log_generation_event(
+        "pdf_storage_completed",
+        generation_id,
+        artifact_id=metadata["id"],
+        started_at=started_at,
+        size_bytes=artifact.size_bytes,
+    )
+    _log_generation_event(
+        "artifact_metadata_created",
+        generation_id,
+        artifact_id=metadata["id"],
+        size_bytes=artifact.size_bytes,
+    )
+
+    publish_event(
+        generation_id,
+        "artifact_ready",
+        message=ready_message,
+        artifact=metadata,
+    )
+    _log_generation_event(
+        "artifact_ready_sent",
+        generation_id,
+        artifact_id=metadata["id"],
+        size_bytes=artifact.size_bytes,
+    )
+
+    # A full progress bar is now true, but it is still not the terminal state.
+    update_progress(
+        generation_id,
+        total_steps,
+        total_steps,
+        "Artefaktet er kontrollert. Fullfører jobben …",
+        event_type="progress",
+        job_status="completed",
+    )
+    publish_event(
+        generation_id,
+        "done",
+        message=done_message,
+        artifact=metadata,
+    )
+    _log_generation_event(
+        "terminal_event_sent",
+        generation_id,
+        artifact_id=metadata["id"],
+        size_bytes=artifact.size_bytes,
+        terminal_status="completed",
+    )
+    return metadata
+
+
+def _mark_generation_failed(generation_id: str, exc: Exception, total_steps: int) -> None:
+    error_code = f"{type(exc).__name__.lower()}"
+    update_progress(
+        generation_id,
+        -1,
+        total_steps,
+        _public_progress_error(exc),
+        event_type="failed",
+        job_status="failed",
+        error_code=error_code,
+    )
+    _log_generation_event(
+        "terminal_event_sent",
+        generation_id,
+        terminal_status="failed",
+        error_code=error_code,
+    )
+
+
+def _log_download_failure(generation_id: str, error_code: str) -> None:
+    _log_generation_event(
+        "artifact_download_failed",
+        generation_id,
+        terminal_status=str((get_progress(generation_id) or {}).get("job_status") or "unknown"),
+        error_code=error_code,
+    )
 
 
 def _content_quality_document(content: dict) -> dict:
@@ -268,7 +454,15 @@ def generate_lesson_background(
         )
 
         # Step 3: Create PDF from the generated content
-        update_progress(generation_id, 3, 4, "Formaterer og kompilerer PDF...")
+        update_progress(
+            generation_id,
+            3,
+            4,
+            "Bygger og kontrollerer PDF …",
+            event_type="artifact_building",
+        )
+        _log_generation_event("pdf_build_started", generation_id)
+        pdf_started_at = time.perf_counter()
         pdf_bytes = create_lesson_pdf(
             content_text=content["text"],
             worksheet_text=content["worksheet"],
@@ -284,6 +478,19 @@ def generate_lesson_background(
             series_header=content.get("series_header", ""),
             accessibility=getattr(request, 'accessibility', None),
         )
+        _log_generation_event(
+            "pdf_build_completed",
+            generation_id,
+            started_at=pdf_started_at,
+            size_bytes=len(pdf_bytes),
+        )
+        _log_generation_event("pdf_validation_started", generation_id, size_bytes=len(pdf_bytes))
+        validated = validate_pdf_artifact(pdf_bytes, _safe_filename(request.topic) + ".pdf")
+        _log_generation_event(
+            "pdf_validation_completed",
+            generation_id,
+            size_bytes=validated.size_bytes,
+        )
 
         # Step 4: Store PDF bytes in progress for retrieval
         image_warning = (
@@ -293,19 +500,22 @@ def generate_lesson_background(
             if image_mode != "none" and not processed_image_path
             else ""
         )
-        update_progress(generation_id, 4, 4, f"Ferdig! PDF klar for nedlasting.{image_warning}")
-        fname = _safe_filename(request.topic) + ".pdf"
-        merge_progress(
+        _publish_validated_artifact(
             generation_id,
-            pdf_bytes=pdf_bytes,
-            filename=fname,
+            validated,
+            payload_key="pdf_bytes",
+            total_steps=4,
             quality_documents=[_content_quality_document(content)],
+            ready_message=(
+                "PDF-en er bygget, validert og lagret. PDF klar for nedlasting."
+                + image_warning
+            ),
         )
 
-        logger.info(f"PDF generated successfully: {fname} ({len(pdf_bytes)} bytes)")
+        logger.info("PDF generated successfully: %s (%s bytes)", validated.filename, validated.size_bytes)
 
     except Exception as e:
-        update_progress(generation_id, -1, 4, _public_progress_error(e))
+        _mark_generation_failed(generation_id, e, 4)
     finally:
         _cleanup_image(processed_image_path)
 
@@ -578,8 +788,12 @@ def get_generation_status(generation_id: str, _auth: AuthPasswordDep):
     progress = get_progress(generation_id)
     if progress is None:
         raise HTTPException(status_code=404, detail="Generation task not found")
-    # Exclude binary fields (pdf_bytes, zip_bytes) — not JSON-serializable
-    return {k: v for k, v in progress.items() if not isinstance(v, bytes)}
+    # Exclude binary and content-bearing fields from the status contract.
+    return {
+        k: v
+        for k, v in progress.items()
+        if not isinstance(v, bytes) and k not in {"quality_documents", "json_data"}
+    }
 
 
 @app.get("/download-pdf/{generation_id}")
@@ -592,24 +806,48 @@ def download_pdf(generation_id: str, _auth: AuthPasswordDep, preview: bool = Fal
     """
     progress = get_progress(generation_id)
     if progress is None:
+        _log_download_failure(generation_id, "generation_not_found")
         raise HTTPException(status_code=404, detail="Generation task not found")
 
     if not is_pdf_ready(progress):
+        _log_download_failure(generation_id, "pdf_not_ready")
         raise HTTPException(status_code=202, detail="PDF not ready yet")
-    _require_norsk_documents(progress, "norsk.pdf", teacher=not preview)
+    try:
+        _require_norsk_documents(progress, "norsk.pdf", teacher=not preview)
+    except HTTPException:
+        _log_download_failure(generation_id, "quality_gate_blocked")
+        raise
 
     pdf_bytes = progress.get("pdf_bytes")
     filename = progress.get("filename", "lesson.pdf")
 
     if not pdf_bytes:
+        _log_download_failure(generation_id, "pdf_bytes_missing")
         raise HTTPException(status_code=500, detail="PDF data not available")
 
+    _log_generation_event(
+        "artifact_download_requested",
+        generation_id,
+        artifact_id=(progress.get("artifact") or {}).get("id", ""),
+        size_bytes=len(pdf_bytes),
+        terminal_status=str(progress.get("job_status") or "running"),
+    )
+    _log_generation_event(
+        "artifact_download_completed",
+        generation_id,
+        artifact_id=(progress.get("artifact") or {}).get("id", ""),
+        size_bytes=len(pdf_bytes),
+        terminal_status=str(progress.get("job_status") or "running"),
+    )
+    disposition = "inline" if preview else "attachment"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
-            "Content-Length": str(len(pdf_bytes))
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(filename)}",
+            "Content-Length": str(len(pdf_bytes)),
+            "X-Artifact-ID": str((progress.get("artifact") or {}).get("id", "")),
+            "X-Job-ID": generation_id,
         }
     )
 
@@ -624,24 +862,47 @@ def download_zip(generation_id: str, _auth: AuthPasswordDep, preview: bool = Fal
     """
     progress = get_progress(generation_id)
     if progress is None:
+        _log_download_failure(generation_id, "generation_not_found")
         raise HTTPException(status_code=404, detail="Generation task not found")
 
     if not is_zip_ready(progress):
+        _log_download_failure(generation_id, "zip_not_ready")
         raise HTTPException(status_code=202, detail="ZIP not ready yet")
-    _require_norsk_documents(progress, "norsk.zip", teacher=not preview)
+    try:
+        _require_norsk_documents(progress, "norsk.zip", teacher=not preview)
+    except HTTPException:
+        _log_download_failure(generation_id, "quality_gate_blocked")
+        raise
 
     zip_bytes = progress.get("zip_bytes")
     filename = progress.get("filename", "lessons.zip")
 
     if not zip_bytes:
+        _log_download_failure(generation_id, "zip_bytes_missing")
         raise HTTPException(status_code=500, detail="ZIP data not available")
 
+    _log_generation_event(
+        "artifact_download_requested",
+        generation_id,
+        artifact_id=(progress.get("artifact") or {}).get("id", ""),
+        size_bytes=len(zip_bytes),
+        terminal_status=str(progress.get("job_status") or "running"),
+    )
+    _log_generation_event(
+        "artifact_download_completed",
+        generation_id,
+        artifact_id=(progress.get("artifact") or {}).get("id", ""),
+        size_bytes=len(zip_bytes),
+        terminal_status=str(progress.get("job_status") or "running"),
+    )
     return Response(
         content=zip_bytes,
         media_type="application/zip",
         headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
-            "Content-Length": str(len(zip_bytes))
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Content-Length": str(len(zip_bytes)),
+            "X-Artifact-ID": str((progress.get("artifact") or {}).get("id", "")),
+            "X-Job-ID": generation_id,
         }
     )
 
@@ -677,19 +938,37 @@ def _run_durable_fov_job(
     *args,
 ) -> None:
     """Run every FOV background job through the shared durable capacity gate."""
-    queue = get_durable_job_queue()
-    queue.enqueue(generation_id, module="norsk", kind=kind, payload=payload, project_id=project_id)
+    queue = None
+    try:
+        queue = get_durable_job_queue()
+        queue.enqueue(generation_id, module="norsk", kind=kind, payload=payload, project_id=project_id)
 
-    def announce(position: int) -> None:
-        update_progress(generation_id, 0, 4, f"Venter i kø (plass {position}) …")
+        def announce(position: int) -> None:
+            update_progress(generation_id, 0, 4, f"Venter i kø (plass {position}) …")
 
-    with queue.claim(generation_id, on_wait=announce, auto_complete=False):
-        target(*args)
-    progress = get_progress(generation_id) or {}
-    if int(progress.get("step", 0)) < 0:
-        queue.fail(generation_id, str(progress.get("message") or "Genereringen feilet"))
-    else:
-        queue.finish(generation_id)
+        with queue.claim(generation_id, on_wait=announce, auto_complete=False):
+            target(*args)
+        progress = get_progress(generation_id) or {}
+        if progress.get("job_status") == "failed" or int(progress.get("step", 0)) < 0:
+            queue.fail(generation_id, str(progress.get("message") or "Genereringen feilet"))
+        elif progress.get("job_status") in {"completed", "needs_teacher_review", "cancelled"}:
+            queue.finish(generation_id)
+        else:
+            _mark_generation_failed(
+                generation_id,
+                RuntimeError("worker_returned_without_terminal_status"),
+                int(progress.get("total_steps") or 4),
+            )
+            queue.fail(generation_id, "Genereringen avsluttet uten terminalstatus")
+    except Exception as exc:
+        progress = get_progress(generation_id) or {}
+        if progress.get("job_status") not in {"completed", "needs_teacher_review", "failed", "cancelled"}:
+            _mark_generation_failed(generation_id, exc, int(progress.get("total_steps") or 4))
+        if queue is not None:
+            try:
+                queue.fail(generation_id, "Genereringen feilet")
+            except Exception:
+                logger.exception("Could not mark durable queue job as failed job_id=%s", generation_id)
 
 @app.post("/generate-lesson")
 @limiter.limit("5/minute")
@@ -706,7 +985,12 @@ async def generate_lesson(
         JSON with generation_id for tracking progress via /generation-status/{id}
     """
     generation_id = str(uuid.uuid4())
-    update_progress(generation_id, 0, 4, "Starter generering...")
+    initialize_progress(
+        generation_id,
+        4,
+        "Starter generering...",
+        request_id=_request_id(request),
+    )
     background_tasks.add_task(
         _run_durable_fov_job,
         generation_id, "lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_background,
@@ -798,10 +1082,17 @@ def generate_lesson_json_background(
         # Publish the completed step only after json_data is persisted. This
         # prevents clients from observing "ready" in the tiny interval before
         # the preview payload exists.
-        update_progress(generation_id, 3, 3, "Forhåndsvisning er klar!")
+        update_progress(generation_id, 3, 3, "Forhåndsvisning er kontrollert.", event_type="progress")
+        publish_event(
+            generation_id,
+            "done",
+            message="Forhåndsvisning er klar!",
+            job_status="completed",
+        )
+        _log_generation_event("terminal_event_sent", generation_id, terminal_status="completed")
 
     except Exception as e:
-        update_progress(generation_id, -1, 3, _public_progress_error(e))
+        _mark_generation_failed(generation_id, e, 3)
 
 @app.post("/generate-lesson-json")
 @limiter.limit("5/minute")
@@ -818,7 +1109,12 @@ async def generate_lesson_json(
         JSON with generation_id for tracking progress via /generation-status/{id}
     """
     generation_id = str(uuid.uuid4())
-    update_progress(generation_id, 0, 3, "Starter forhåndsvisning...")
+    initialize_progress(
+        generation_id,
+        3,
+        "Starter forhåndsvisning...",
+        request_id=_request_id(request),
+    )
     background_tasks.add_task(
         _run_durable_fov_job,
         generation_id, "preview", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_json_background,
@@ -899,8 +1195,15 @@ def generate_pdf_from_json_background(
                 {"text": request.text},
             )
             
-        update_progress(generation_id, 2, 3, "Formaterer og kompilerer PDF...")
-        
+        update_progress(
+            generation_id,
+            2,
+            3,
+            "Bygger og kontrollerer PDF …",
+            event_type="artifact_building",
+        )
+        _log_generation_event("pdf_build_started", generation_id)
+        pdf_started_at = time.perf_counter()
         pdf_bytes = create_lesson_pdf(
             content_text=request.text,
             worksheet_text=request.worksheet,
@@ -914,6 +1217,19 @@ def generate_pdf_from_json_background(
             options=request.options,
             accessibility=getattr(request, "accessibility", None),
         )
+        _log_generation_event(
+            "pdf_build_completed",
+            generation_id,
+            started_at=pdf_started_at,
+            size_bytes=len(pdf_bytes),
+        )
+        _log_generation_event("pdf_validation_started", generation_id, size_bytes=len(pdf_bytes))
+        validated = validate_pdf_artifact(pdf_bytes, _safe_filename(request.topic) + ".pdf")
+        _log_generation_event(
+            "pdf_validation_completed",
+            generation_id,
+            size_bytes=validated.size_bytes,
+        )
 
         # Store PDF
         requested_image = normalize_image_mode(request.image_mode) != "none"
@@ -924,16 +1240,20 @@ def generate_pdf_from_json_background(
             if requested_image and not processed_image_path
             else ""
         )
-        update_progress(generation_id, 3, 3, f"Ferdig! PDF klar for nedlasting.{image_warning}")
-        merge_progress(
+        _publish_validated_artifact(
             generation_id,
-            pdf_bytes=pdf_bytes,
-            filename=_safe_filename(request.topic) + ".pdf",
+            validated,
+            payload_key="pdf_bytes",
+            total_steps=3,
             quality_documents=[quality_document],
+            ready_message=(
+                "PDF-en er bygget, validert og lagret. PDF klar for nedlasting."
+                + image_warning
+            ),
         )
 
     except Exception as e:
-        update_progress(generation_id, -1, 3, _public_progress_error(e))
+        _mark_generation_failed(generation_id, e, 3)
     finally:
         _cleanup_image(processed_image_path)
 
@@ -947,7 +1267,12 @@ async def generate_pdf_from_json(
 ):
     """Generate PDF directly from preview content."""
     generation_id = str(uuid.uuid4())
-    update_progress(generation_id, 0, 3, "Starter PDF-generering...")
+    initialize_progress(
+        generation_id,
+        3,
+        "Starter PDF-generering...",
+        request_id=_request_id(request),
+    )
     background_tasks.add_task(
         _run_durable_fov_job,
         generation_id, "preview_pdf", preview_request, request.headers.get("X-Skoleverksted-Project"), generate_pdf_from_json_background,
@@ -1044,24 +1369,50 @@ def _generate_dual_background(generation_id: str, lesson_req: "LessonRequest"):
         pdf_a, name_a, quality_a = fut_a.result()
         pdf_b, name_b, quality_b = fut_b.result()
 
-        update_progress(generation_id, 3, 4, "Pakker PDF-er til ZIP...")
+        update_progress(
+            generation_id,
+            3,
+            4,
+            "Bygger og kontrollerer ZIP-artefakt …",
+            event_type="artifact_building",
+        )
+        _log_generation_event("pdf_build_started", generation_id)
+        artifact_started_at = time.perf_counter()
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(name_a, pdf_a)
             zf.writestr(name_b, pdf_b)
         zip_bytes = zip_buffer.getvalue()
-
-        update_progress(generation_id, 4, 4, "Ferdig! ZIP klar for nedlasting.")
-        merge_progress(
+        _log_generation_event(
+            "pdf_build_completed",
             generation_id,
-            zip_bytes=zip_bytes,
-            filename=_safe_filename(lesson_req.topic) + "_dual.zip",
-            quality_documents=[quality_a, quality_b],
+            started_at=artifact_started_at,
+            size_bytes=len(zip_bytes),
         )
-        logger.info(f"Dual PDF ZIP generated: {len(zip_bytes)} bytes")
+        _log_generation_event("pdf_validation_started", generation_id, size_bytes=len(zip_bytes))
+        validated = validate_zip_artifact(
+            zip_bytes,
+            _safe_filename(lesson_req.topic) + "_dual.zip",
+        )
+        _log_generation_event(
+            "pdf_validation_completed",
+            generation_id,
+            size_bytes=validated.size_bytes,
+        )
+
+        _publish_validated_artifact(
+            generation_id,
+            validated,
+            payload_key="zip_bytes",
+            total_steps=4,
+            quality_documents=[quality_a, quality_b],
+            ready_message="ZIP-artefaktet er bygget, validert og lagret.",
+            done_message="Ferdig! ZIP klar for nedlasting.",
+        )
+        logger.info("Dual PDF ZIP generated: %s bytes", validated.size_bytes)
 
     except Exception as e:
-        update_progress(generation_id, -1, 4, _public_progress_error(e))
+        _mark_generation_failed(generation_id, e, 4)
 
 
 @app.post("/generate-dual-lesson")
@@ -1078,7 +1429,12 @@ async def generate_dual_lesson(
     Returns a generation_id; poll /generation-status/{id} then download the ZIP from /download-zip/{id}.
     """
     generation_id = str(uuid.uuid4())
-    update_progress(generation_id, 0, 4, "Starter dual generering...")
+    initialize_progress(
+        generation_id,
+        4,
+        "Starter dual generering...",
+        request_id=_request_id(request),
+    )
     background_tasks.add_task(
         _run_durable_fov_job,
         generation_id, "dual_lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), _generate_dual_background,
@@ -1106,24 +1462,50 @@ def _generate_multi_level_background(generation_id: str, lesson_req: "MultiLevel
         for fut in futures:
             zip_parts.append(fut.result())
 
-        update_progress(generation_id, 3, 4, "Pakker PDF-er til ZIP...")
+        update_progress(
+            generation_id,
+            3,
+            4,
+            "Bygger og kontrollerer ZIP-artefakt …",
+            event_type="artifact_building",
+        )
+        _log_generation_event("pdf_build_started", generation_id)
+        artifact_started_at = time.perf_counter()
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for pdf_bytes, name, _quality in zip_parts:
                 zf.writestr(name, pdf_bytes)
         zip_bytes = zip_buffer.getvalue()
-
-        update_progress(generation_id, 4, 4, "Ferdig! ZIP klar for nedlasting.")
-        merge_progress(
+        _log_generation_event(
+            "pdf_build_completed",
             generation_id,
-            zip_bytes=zip_bytes,
-            filename=_safe_filename(lesson_req.topic) + "_flerniva.zip",
-            quality_documents=[quality for _pdf, _name, quality in zip_parts],
+            started_at=artifact_started_at,
+            size_bytes=len(zip_bytes),
         )
-        logger.info("Multi-level PDF ZIP generated: %s bytes (%s levels)", len(zip_bytes), n)
+        _log_generation_event("pdf_validation_started", generation_id, size_bytes=len(zip_bytes))
+        validated = validate_zip_artifact(
+            zip_bytes,
+            _safe_filename(lesson_req.topic) + "_flerniva.zip",
+        )
+        _log_generation_event(
+            "pdf_validation_completed",
+            generation_id,
+            size_bytes=validated.size_bytes,
+        )
+
+        _publish_validated_artifact(
+            generation_id,
+            validated,
+            payload_key="zip_bytes",
+            total_steps=4,
+            quality_documents=[quality for _pdf, _name, quality in zip_parts],
+            ready_message="ZIP-artefaktet er bygget, validert og lagret.",
+            done_message="Ferdig! ZIP klar for nedlasting.",
+        )
+        logger.info("Multi-level PDF ZIP generated: %s bytes (%s levels)", validated.size_bytes, n)
 
     except Exception as e:
-        update_progress(generation_id, -1, 4, _public_progress_error(e))
+        _mark_generation_failed(generation_id, e, 4)
 
 
 @app.post("/generate-multi-lesson")
@@ -1140,7 +1522,12 @@ async def generate_multi_lesson(
     Returns generation_id; poll /generation-status/{id} then download ZIP from /download-zip/{id}.
     """
     generation_id = str(uuid.uuid4())
-    update_progress(generation_id, 0, 4, "Starter flernivå-generering...")
+    initialize_progress(
+        generation_id,
+        4,
+        "Starter flernivå-generering...",
+        request_id=_request_id(request),
+    )
     background_tasks.add_task(
         _run_durable_fov_job,
         generation_id, "multi_lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), _generate_multi_level_background,
@@ -1273,7 +1660,12 @@ async def generate_lesson_with_image(
     )
 
     generation_id = str(uuid.uuid4())
-    update_progress(generation_id, 0, 4, "Starter generering med opplastet bilde...")
+    initialize_progress(
+        generation_id,
+        4,
+        "Starter generering med opplastet bilde...",
+        request_id=_request_id(request),
+    )
 
     # Pass the pre-processed image path so background task skips URL download
     background_tasks.add_task(

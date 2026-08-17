@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useReducer } from "react";
 import {
   FileText,
   Loader2,
@@ -40,9 +40,14 @@ import type {
   LessonResponse,
   OptionsState,
   SeriesState,
-  Status,
 } from "../lib/fovTypes";
 import { nextPollDelayMs } from "../lib/polling";
+import {
+  generationReducer,
+  initialGenerationState,
+} from "../lib/generationState";
+
+const ACTIVE_GENERATION_KEY = "scriptorium.active-generation";
 
 // ---------------------------------------------------------------------------
 // Root
@@ -93,14 +98,19 @@ export default function HomeContent() {
   const [showHistory, setShowHistory] = useState(false);
 
   // --- Generation state ---
-  const [status, setStatus] = useState<Status>("idle");
-  const [errorMessage, setErrorMessage] = useState("");
-  const [progress, setProgress] = useState<{ step: number; totalSteps: number; message: string } | null>(null);
-  const [generationId, setGenerationId] = useState<string | null>(null);
-  const [isDual, setIsDual] = useState(false);
+  const [generation, dispatchGeneration] = useReducer(
+    generationReducer,
+    initialGenerationState,
+  );
+  const { status, errorMessage, progress, jobId: generationId, artifact, isDual } = generation;
+  const [artifactAction, setArtifactAction] = useState<"idle" | "downloading" | "previewing">("idle");
+  const [artifactError, setArtifactError] = useState("");
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<LessonResponse | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const pollingRef = useRef<boolean>(false);
+  const pollingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeJobRef = useRef<string | null>(null);
 
   // --- Simple password gate (when backend has APP_PASSWORD set) ---
   const [authConfigLoaded, setAuthConfigLoaded] = useState(false);
@@ -175,8 +185,15 @@ export default function HomeContent() {
   useEffect(() => {
     return () => {
       pollingRef.current = false;
+      if (pollingTimerRef.current) clearTimeout(pollingTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+    };
+  }, [pdfPreviewUrl]);
 
   // --- Derived validity ---
   const authBlocked = passwordRequired && !appPassword;
@@ -184,7 +201,8 @@ export default function HomeContent() {
     selectedMultiLevels.length >= 2 && selectedMultiLevels.length <= 3;
   const levelOk = multiLevelMode ? multiLevelsOk : !!level;
   const isFormValid = !!(subject && levelOk && topic.trim().length > 0 && !authBlocked);
-  const formDisabled = status === "loading" || authBlocked;
+  const formDisabled =
+    status === "generating" || status === "building_artifact" || authBlocked;
 
   function toggleMultiLevelCheckbox(lv: string) {
     setSelectedMultiLevels((prev) => {
@@ -453,44 +471,56 @@ export default function HomeContent() {
     return res.json();
   }
 
+  const downloadPreviewJson = useCallback(async (gId: string) => {
+    try {
+      const res = await authFetch(`${apiUrl}/download-json/${gId}`);
+      if (!res.ok) throw new Error("Kunne ikke hente forhåndsvisning");
+
+      const data = await res.json();
+      setPreviewData(data);
+      setIsPreviewing(true);
+      activeJobRef.current = null;
+      dispatchGeneration({ type: "reset" });
+      try {
+        localStorage.removeItem(ACTIVE_GENERATION_KEY);
+      } catch {
+        /* ignore */
+      }
+    } catch (error) {
+      console.error("Error fetching preview:", error);
+      dispatchGeneration({
+        type: "local_failed",
+        message: error instanceof Error ? error.message : "Kunne ikke laste forhåndsvisning.",
+      });
+    }
+  }, [apiUrl, authFetch]);
+
   const handlePreview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isFormValid) return;
 
-    setStatus("loading");
-    setErrorMessage("");
-    setProgress({ step: 0, totalSteps: 2, message: "Starter forhåndsvisning..." });
-    setGenerationId(null);
-    pollingRef.current = true;
-
     try {
       const data = await startPreview();
       const gId = data.generation_id;
-      setGenerationId(gId);
+      startTracking(gId, false);
 
       saveToHistory();
       pollPreviewProgress(gId);
     } catch (error) {
       console.error("Error starting preview:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
+      dispatchGeneration({
+        type: "local_failed",
+        message:
         error instanceof Error
           ? error.message
-          : "Kunne ikke starte forhåndsvisning. Prøv igjen."
-      );
+          : "Kunne ikke starte forhåndsvisning. Prøv igjen.",
+      });
     }
   };
 
   const generatePdfFromPreview = async () => {
     if (!previewData) return;
 
-    setStatus("loading");
-    setErrorMessage("");
-    setProgress({ step: 0, totalSteps: 3, message: "Starter PDF-generering..." });
-    setGenerationId(null);
-    pollingRef.current = true;
     setIsPreviewing(false);
 
     try {
@@ -513,59 +543,17 @@ export default function HomeContent() {
       if (!res.ok) await throwFromResponse(res);
       const data = await res.json();
       const gId = data.generation_id;
-      setGenerationId(gId);
-      
-      // Re-use standard pollProgress since the final step downloads PDF
-      // Note: We pass dual=false
-      const pollFromPreview = async (id: string, attempt = 0) => {
-        if (!pollingRef.current) return;
-        try {
-          const statusRes = await authFetch(`${apiUrl}/generation-status/${id}`);
-          if (!statusRes.ok) throw new Error("Kunne ikke hente status");
-
-          const progressData = await statusRes.json();
-          setProgress({
-            step: progressData.step,
-            totalSteps: progressData.total_steps,
-            message: progressData.message,
-          });
-
-          if (progressData.step === 3) {
-            pollingRef.current = false;
-            await downloadPDF(id);
-          } else if (progressData.step === -1) {
-            pollingRef.current = false;
-            throw new Error(progressData.message);
-          } else if (pollingRef.current) {
-            setTimeout(
-              () => pollFromPreview(id, attempt + 1),
-              nextPollDelayMs(attempt)
-            );
-          }
-        } catch (error) {
-          if (pollingRef.current) {
-            console.error("Error polling progress:", error);
-            setStatus("error");
-            setProgress(null);
-            pollingRef.current = false;
-            setErrorMessage(
-              error instanceof Error ? error.message : "Feil under generering. Prøv igjen."
-            );
-          }
-        }
-      };
-      
-      pollFromPreview(gId);
+      startTracking(gId, false);
+      pollGeneration(gId, false);
     } catch (error) {
       console.error("Error generating from preview:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Kunne ikke generere PDF. Prøv igjen."
-      );
+      dispatchGeneration({
+        type: "local_failed",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Kunne ikke generere PDF. Prøv igjen.",
+      });
     }
   };
 
@@ -573,30 +561,23 @@ export default function HomeContent() {
     e.preventDefault();
     if (!isFormValid) return;
 
-    setStatus("loading");
-    setErrorMessage("");
-    setProgress({ step: 0, totalSteps: 4, message: "Starter generering..." });
-    setGenerationId(null);
-    pollingRef.current = true;
-
     try {
       const data = await startGeneration();
       const gId = data.generation_id;
-      setGenerationId(gId);
-      setIsDual(!!data.dual || !!data.zip_download);
+      const dual = !!data.dual || !!data.zip_download;
+      startTracking(gId, dual);
 
       saveToHistory();
-      pollProgress(gId, !!data.dual);
+      pollGeneration(gId, dual);
     } catch (error) {
       console.error("Error starting generation:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Kunne ikke starte generering. Prøv igjen."
-      );
+      dispatchGeneration({
+        type: "local_failed",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Kunne ikke starte generering. Prøv igjen.",
+      });
     }
   };
 
@@ -604,109 +585,147 @@ export default function HomeContent() {
   // Polling
   // ---------------------------------------------------------------------------
 
-  const pollPreviewProgress = async (gId: string, attempt = 0) => {
-    if (!pollingRef.current) return;
+  const stopPolling = useCallback(() => {
+    pollingRef.current = false;
+    if (pollingTimerRef.current) {
+      clearTimeout(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
+  }, []);
 
+  const startTracking = useCallback((gId: string, dual: boolean) => {
+    stopPolling();
+    activeJobRef.current = gId;
+    pollingRef.current = true;
+    dispatchGeneration({ type: "started", jobId: gId, isDual: dual });
+    try {
+      localStorage.setItem(
+        ACTIVE_GENERATION_KEY,
+        JSON.stringify({ id: gId, isDual: dual }),
+      );
+    } catch {
+      /* best effort; status polling still works */
+    }
+  }, [stopPolling]);
+
+  const schedulePoll = useCallback((fn: () => void, attempt: number) => {
+    if (!pollingRef.current) return;
+    pollingTimerRef.current = setTimeout(fn, nextPollDelayMs(attempt));
+  }, []);
+
+  const pollPreviewProgress = useCallback(async (gId: string, attempt = 0): Promise<void> => {
+    if (!pollingRef.current || activeJobRef.current !== gId) return;
     try {
       const res = await authFetch(`${apiUrl}/generation-status/${gId}`);
       if (!res.ok) throw new Error("Kunne ikke hente status");
-
-      const progressData = await res.json();
-      setProgress({
-        step: progressData.step,
-        totalSteps: progressData.total_steps,
-        message: progressData.message,
+      const data = await res.json();
+      if (activeJobRef.current !== gId) return;
+      const lifecycle = data.job_status || data.status;
+      dispatchGeneration({
+        type: "status_received",
+        jobId: gId,
+        requestId: data.request_id,
+        step: data.step,
+        totalSteps: data.total_steps,
+        message: data.message,
+        eventType: data.event_type || data.last_event?.type,
+        jobStatus: lifecycle,
+        artifact: data.artifact || null,
       });
-
-      if (progressData.step === 2) {
-        pollingRef.current = false;
+      if (lifecycle === "completed" || data.step >= data.total_steps) {
+        stopPolling();
         await downloadPreviewJson(gId);
-      } else if (progressData.step === -1) {
-        pollingRef.current = false;
-        throw new Error(progressData.message);
-      } else if (pollingRef.current) {
-        setTimeout(
-          () => pollPreviewProgress(gId, attempt + 1),
-          nextPollDelayMs(attempt)
-        );
+        return;
       }
+      if (lifecycle === "failed" || lifecycle === "cancelled") {
+        stopPolling();
+        return;
+      }
+      schedulePoll(() => void pollPreviewProgress(gId, attempt + 1), attempt);
     } catch (error) {
-      if (pollingRef.current) {
-        console.error("Error polling preview progress:", error);
-        setStatus("error");
-        setProgress(null);
-        pollingRef.current = false;
-        setErrorMessage(
-          error instanceof Error ? error.message : "Feil under generering. Prøv igjen."
-        );
+      if (activeJobRef.current !== gId) return;
+      if (attempt >= 20) {
+        stopPolling();
+        dispatchGeneration({
+          type: "failed",
+          jobId: gId,
+          message: error instanceof Error ? error.message : "Feil under statuskontroll.",
+        });
+        return;
       }
+      schedulePoll(() => void pollPreviewProgress(gId, attempt + 1), attempt);
     }
-  };
+  }, [apiUrl, authFetch, downloadPreviewJson, schedulePoll, stopPolling]);
 
-  const pollProgress = async (gId: string, dual: boolean, attempt = 0) => {
-    if (!pollingRef.current) return;
-
+  const pollGeneration = useCallback(async (gId: string, dual: boolean, attempt = 0): Promise<void> => {
+    if (!pollingRef.current || activeJobRef.current !== gId) return;
     try {
       const res = await authFetch(`${apiUrl}/generation-status/${gId}`);
       if (!res.ok) throw new Error("Kunne ikke hente status");
-
-      const progressData = await res.json();
-      setProgress({
-        step: progressData.step,
-        totalSteps: progressData.total_steps,
-        message: progressData.message,
+      const data = await res.json();
+      if (activeJobRef.current !== gId) return;
+      const lifecycle = data.job_status || data.status || "running";
+      dispatchGeneration({
+        type: "status_received",
+        jobId: gId,
+        requestId: data.request_id,
+        step: data.step,
+        totalSteps: data.total_steps,
+        message: data.message,
+        eventType: data.event_type || data.last_event?.type,
+        jobStatus: lifecycle,
+        artifact: data.artifact || null,
       });
-
-      if (progressData.step === 4) {
-        pollingRef.current = false;
-        if (dual) {
-          await downloadZip(gId);
-        } else {
-          await downloadPDF(gId);
-        }
-      } else if (progressData.step === -1) {
-        pollingRef.current = false;
-        throw new Error(progressData.message);
-      } else if (pollingRef.current) {
-        setTimeout(
-          () => pollProgress(gId, dual, attempt + 1),
-          nextPollDelayMs(attempt)
-        );
+      if (data.event_type === "artifact_ready" || data.last_event?.type === "artifact_ready") {
+        console.info("frontend_artifact_loaded", {
+          requestId: data.request_id || "",
+          jobId: gId,
+          artifactId: data.artifact?.id || "",
+          sizeBytes: data.artifact?.size_bytes || 0,
+        });
       }
+      if (["completed", "failed", "cancelled", "needs_teacher_review"].includes(lifecycle)) {
+        console.info("frontend_terminal_event_received", {
+          requestId: data.request_id || "",
+          jobId: gId,
+          terminalStatus: lifecycle,
+          artifactId: data.artifact?.id || "",
+        });
+      }
+      if ((lifecycle === "completed" && data.artifact) || lifecycle === "failed" || lifecycle === "cancelled" || lifecycle === "needs_teacher_review") {
+        stopPolling();
+        return;
+      }
+      // 100% is intentionally not terminal. Keep polling for artifact_ready/done
+      // so a lost final event or the old storage race can be recovered safely.
+      if (attempt >= 40) {
+        stopPolling();
+        dispatchGeneration({
+          type: "failed",
+          jobId: gId,
+          message: "Innholdet ble ferdig, men PDF-en kunne ikke hentes. Prøv å hente filen på nytt.",
+        });
+        return;
+      }
+      schedulePoll(() => void pollGeneration(gId, dual, attempt + 1), attempt);
     } catch (error) {
-      if (pollingRef.current) {
-        console.error("Error polling progress:", error);
-        setStatus("error");
-        setProgress(null);
-        pollingRef.current = false;
-        setErrorMessage(
-          error instanceof Error ? error.message : "Feil under generering. Prøv igjen."
-        );
+      if (activeJobRef.current !== gId) return;
+      if (attempt >= 20) {
+        stopPolling();
+        dispatchGeneration({
+          type: "failed",
+          jobId: gId,
+          message: error instanceof Error ? error.message : "Feil under statuskontroll.",
+        });
+        return;
       }
+      schedulePoll(() => void pollGeneration(gId, dual, attempt + 1), attempt);
     }
-  };
+  }, [apiUrl, authFetch, schedulePoll, stopPolling]);
 
   // ---------------------------------------------------------------------------
   // Download helpers
   // ---------------------------------------------------------------------------
-
-  async function downloadPreviewJson(gId: string) {
-    try {
-      const res = await authFetch(`${apiUrl}/download-json/${gId}`);
-      if (!res.ok) throw new Error("Kunne ikke hente forhåndsvisning");
-      
-      const data = await res.json();
-      setPreviewData(data);
-      setIsPreviewing(true);
-      setStatus("idle");
-      setProgress(null);
-    } catch (error) {
-      console.error("Error fetching preview:", error);
-      setStatus("error");
-      setProgress(null);
-      setErrorMessage(error instanceof Error ? error.message : "Kunne ikke laste forhåndsvisning.");
-    }
-  }
 
   async function downloadFile(url: string, defaultName: string) {
     const res = await authFetch(url);
@@ -726,44 +745,57 @@ export default function HomeContent() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    window.URL.revokeObjectURL(objectUrl);
+    window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
   }
 
-  const downloadPDF = async (gId: string) => {
+  const downloadArtifact = async () => {
+    if (!artifact) return;
+    setArtifactError("");
+    setArtifactAction("downloading");
     try {
-      await downloadFile(`${apiUrl}/download-pdf/${gId}`, "leksjon.pdf");
-      setStatus("success");
-      setProgress(null);
-      pollingRef.current = false;
-      setTimeout(() => setStatus("idle"), 3000);
+      await downloadFile(artifact.download_url, artifact.filename);
     } catch (error) {
       console.error("Error downloading PDF:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error ? error.message : "Kunne ikke laste ned PDF. Prøv igjen."
+      setArtifactError(
+        "Innholdet ble ferdig, men PDF-en kunne ikke hentes. Prøv å hente filen på nytt.",
       );
+    } finally {
+      setArtifactAction("idle");
     }
   };
 
-  const downloadZip = async (gId: string) => {
+  const previewArtifact = async () => {
+    if (!artifact || artifact.content_type !== "application/pdf" || !artifact.preview_url) return;
+    setArtifactError("");
+    setArtifactAction("previewing");
     try {
-      await downloadFile(`${apiUrl}/download-zip/${gId}`, "leksjoner_dual.zip");
-      setStatus("success");
-      setProgress(null);
-      pollingRef.current = false;
-      setTimeout(() => setStatus("idle"), 3000);
+      const res = await authFetch(artifact.preview_url);
+      if (!res.ok) throw new Error(`Kunne ikke forhåndsvise PDF (${res.status})`);
+      const blob = await res.blob();
+      if (!blob.type.includes("pdf")) throw new Error("Serveren returnerte ikke en PDF.");
+      setPdfPreviewUrl(URL.createObjectURL(blob));
     } catch (error) {
-      console.error("Error downloading ZIP:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error ? error.message : "Kunne ikke laste ned ZIP. Prøv igjen."
-      );
+      console.error("Error previewing PDF:", error);
+      setArtifactError("PDF-en kunne ikke forhåndsvises. Prøv å hente filen på nytt.");
+    } finally {
+      setArtifactAction("idle");
     }
   };
+
+  useEffect(() => {
+    if (!authConfigLoaded || authBlocked || generationId) return;
+    try {
+      const saved = localStorage.getItem(ACTIVE_GENERATION_KEY);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as { id?: string; isDual?: boolean };
+      if (parsed.id) {
+        startTracking(parsed.id, !!parsed.isDual);
+        void pollGeneration(parsed.id, !!parsed.isDual);
+      }
+    } catch {
+      localStorage.removeItem(ACTIVE_GENERATION_KEY);
+    }
+  }, [authBlocked, authConfigLoaded, generationId, pollGeneration, startTracking]);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -1310,7 +1342,7 @@ export default function HomeContent() {
                   onClick={handlePreview}
                   disabled={
                     !isFormValid ||
-                    status === "loading" ||
+                    formDisabled ||
                     multiLevelMode ||
                     dualVersion ||
                     !!customImage
@@ -1320,9 +1352,9 @@ export default function HomeContent() {
                     flex items-center justify-center gap-2
                     transition-all duration-300 transform
                     ${
-                      status === "loading"
+                      formDisabled
                         ? "bg-slate-800 text-slate-500 cursor-wait"
-                        : status === "success"
+                        : status === "completed"
                         ? "bg-slate-800 text-slate-500"
                         : isFormValid
                         ? "bg-slate-700 hover:bg-slate-600 text-white shadow-lg hover:shadow-slate-500/20 hover:scale-[1.02] active:scale-[0.98]"
@@ -1335,15 +1367,15 @@ export default function HomeContent() {
                 </button>
                 <button
                   type="submit"
-                  disabled={!isFormValid || status === "loading"}
+                  disabled={!isFormValid || formDisabled}
                   className={`
                     flex-1 py-4 px-6 rounded-xl font-semibold text-base
                     flex items-center justify-center gap-2
                     transition-all duration-300 transform
                     ${
-                      status === "loading"
+                      formDisabled
                         ? "bg-slate-700 text-slate-400 cursor-wait"
-                        : status === "success"
+                        : status === "completed"
                         ? "bg-emerald-600 text-white"
                         : isFormValid
                         ? "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 hover:scale-[1.02] active:scale-[0.98]"
@@ -1351,10 +1383,10 @@ export default function HomeContent() {
                     }
                   `}
                 >
-                  {status === "loading" ? (
+                  {formDisabled ? (
                     <><Loader2 className="w-5 h-5 animate-spin" /><span>Genererer...</span></>
-                  ) : status === "success" ? (
-                    <><CheckCircle2 className="w-5 h-5" /><span>{isDual ? "ZIP lastet ned!" : "PDF lastet ned!"}</span></>
+                  ) : status === "completed" ? (
+                    <><CheckCircle2 className="w-5 h-5" /><span>{isDual ? "ZIP klar" : "PDF klar"}</span></>
                   ) : (
                     <><Sparkles className="w-5 h-5" /><span>{dualVersion ? "Lag ZIP" : customImage ? "Lag PDF med bilde" : "Generer PDF"}</span></>
                   )}
@@ -1364,9 +1396,15 @@ export default function HomeContent() {
               <GenerationStatus
                 status={status}
                 progress={progress}
-                errorMessage={errorMessage}
+                errorMessage={errorMessage || artifactError}
+                requestId={generation.requestId}
+                jobId={generationId}
+                artifact={artifact}
+                artifactAction={artifactAction}
                 isDual={isDual}
-                onDismissError={() => setStatus("idle")}
+                onDismissError={() => dispatchGeneration({ type: "reset" })}
+                onDownload={downloadArtifact}
+                onPreview={previewArtifact}
               />
             </div>
           </form>
@@ -1396,10 +1434,32 @@ export default function HomeContent() {
         <PreviewModal
           previewData={previewData}
           formDisabled={formDisabled}
-          isGenerating={status === "loading"}
+          isGenerating={formDisabled}
           onClose={() => setIsPreviewing(false)}
           onGeneratePdf={generatePdfFromPreview}
         />
+      )}
+
+      {pdfPreviewUrl && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/90 p-4">
+          <div className="flex h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-700 p-4">
+              <h2 className="font-semibold text-white">Forhåndsvis PDF</h2>
+              <button
+                type="button"
+                onClick={() => setPdfPreviewUrl(null)}
+                className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-600"
+              >
+                Lukk
+              </button>
+            </div>
+            <iframe
+              title="Forhåndsvisning av PDF"
+              src={pdfPreviewUrl}
+              className="min-h-0 flex-1 bg-white"
+            />
+          </div>
+        </div>
       )}
     </main>
   );

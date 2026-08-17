@@ -1,4 +1,22 @@
-export type Status = "idle" | "loading" | "success" | "error";
+export type GenerationStatus =
+  | "idle"
+  | "generating"
+  | "building_artifact"
+  | "completed"
+  | "needs_teacher_review"
+  | "failed"
+  | "cancelled";
+
+export interface ArtifactMetadata {
+  id: string;
+  job_id: string;
+  kind: "student_pdf" | "student_pdf_bundle" | string;
+  filename: string;
+  content_type: "application/pdf" | "application/zip" | string;
+  size_bytes: number;
+  preview_url: string | null;
+  download_url: string;
+}
 
 export interface OptionsState {
   deep_dive: boolean;
@@ -58,3 +76,5 @@ export interface LessonResponse {
   image_url?: string | null;
   language_exercises?: LanguageExercisesPayload | null;
 }
+
+export type Status = GenerationStatus;
