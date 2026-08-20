@@ -111,6 +111,28 @@ def _image_model() -> str:
     return os.getenv("GOOGLE_IMAGE_MODEL", "gemini-3.1-flash-image")
 
 
+def _image_api_timeout_ms() -> int:
+    return max(5, int(os.getenv("IMAGE_API_TIMEOUT", "60"))) * 1000
+
+
+def _image_api_attempts() -> int:
+    return max(1, min(int(os.getenv("IMAGE_API_MAX_ATTEMPTS", "2")), 3))
+
+
+def _google_http_options() -> dict:
+    return {
+        "timeout": _image_api_timeout_ms(),
+        "retry_options": {
+            "attempts": _image_api_attempts(),
+            "initial_delay": 1.0,
+            "max_delay": 4.0,
+            "exp_base": 2.0,
+            "jitter": 0.2,
+            "http_status_codes": [408, 429, 500, 502, 503, 504],
+        },
+    }
+
+
 def _crew_llm() -> Any:
     from crewai import LLM
 
@@ -121,7 +143,13 @@ def _crew_llm() -> Any:
     model = _text_model()
     if not model.startswith("gemini/"):
         model = f"gemini/{model.lower()}"
-    return LLM(model=model, api_key=key, temperature=0.2)
+    return LLM(
+        model=model,
+        api_key=key,
+        temperature=0.2,
+        timeout=_image_api_timeout_ms() / 1000,
+        client_params={"http_options": _google_http_options()},
+    )
 
 
 def _extract_json(value: object) -> Optional[dict]:
@@ -875,7 +903,7 @@ def generate_ai_image(prompt: str) -> Optional[str]:
         logger.warning("google-genai er ikke installert; KI-bilde hoppes over")
         return None
 
-    client = genai.Client(api_key=key)
+    client = genai.Client(api_key=key, http_options=_google_http_options())
     full_prompt = f"{prompt.strip()}\n{_AI_STYLE_RULES}".strip()
     image_bytes: Optional[bytes] = None
     mime_type = "image/png"

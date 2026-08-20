@@ -16,6 +16,11 @@ def test_pdf_is_materialized_before_step_four_is_published(monkeypatch):
         lambda **_kwargs: {
             "text": "Norge er et land i Europa.",
             "worksheet": "a) VIKTIGE BEGREPER\nEuropa: et kontinent.",
+            "truth_passport": {"status": "verified", "version": "2.0"},
+            "verification_content": "Kontrollert innhold",
+            "quarantine": [],
+            "quality_rounds": [],
+            "quality_stop_reason": "source_approved",
         },
     )
     monkeypatch.setattr(
@@ -69,7 +74,15 @@ def test_invalid_pdf_never_publishes_completed(monkeypatch):
     monkeypatch.setattr(
         main,
         "generate_lesson_content",
-        lambda **_kwargs: {"text": "Tekst", "worksheet": "Oppgave"},
+        lambda **_kwargs: {
+            "text": "Tekst",
+            "worksheet": "Oppgave",
+            "truth_passport": {"status": "verified", "version": "2.0"},
+            "verification_content": "Kontrollert innhold",
+            "quarantine": [],
+            "quality_rounds": [],
+            "quality_stop_reason": "source_approved",
+        },
     )
     monkeypatch.setattr(
         main,
@@ -87,6 +100,6 @@ def test_invalid_pdf_never_publishes_completed(monkeypatch):
         assert state["status"] == "failed"
         assert "artifact" not in state
         assert "pdf_bytes" not in state
-        assert state["last_event"]["type"] == "failed"
+        assert state["last_event"]["type"] == "error"
     finally:
         clear_progress(job_id)

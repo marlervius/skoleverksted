@@ -5,17 +5,24 @@ import json
 import random
 import hashlib
 import time
-import google.generativeai as genai
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, Process, LLM
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt
 
 if __package__:
-    from .config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
-    from .errors import GeminiQuotaExceededError
+    from .config import (
+        CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_API_KEY_CONFLICT, GOOGLE_MODEL,
+        MODEL_BACKOFF_MAX_SECONDS, MODEL_CALL_TIMEOUT_SECONDS, MODEL_MAX_ATTEMPTS,
+    )
+    from .errors import GeminiQuotaExceededError, ModelRateLimitError
+    from .generation_contract import classify_model_error, validate_model_outputs
 else:
-    from config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
-    from errors import GeminiQuotaExceededError
+    from config import (
+        CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_API_KEY_CONFLICT, GOOGLE_MODEL,
+        MODEL_BACKOFF_MAX_SECONDS, MODEL_CALL_TIMEOUT_SECONDS, MODEL_MAX_ATTEMPTS,
+    )
+    from errors import GeminiQuotaExceededError, ModelRateLimitError
+    from generation_contract import classify_model_error, validate_model_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +33,7 @@ _CACHE_TTL_SECONDS = CACHE_TTL_SECONDS
 
 def _should_retry_ai_error(exc: BaseException) -> bool:
     """Retry on Gemini rate limits / quota bursts (often clears after Retry-After-style delay)."""
-    if isinstance(exc, GeminiQuotaExceededError):
+    if isinstance(exc, (GeminiQuotaExceededError, ModelRateLimitError)):
         return True
     if isinstance(exc, RuntimeError):
         s = str(exc).lower()
@@ -46,11 +53,24 @@ def _wait_gemini_retry(retry_state: RetryCallState) -> float:
     msg = getattr(exc, "technical_detail", None) or str(exc)
     m = re.search(r"retry in ([\d.]+)\s*s", msg, re.IGNORECASE)
     if m:
-        return min(120.0, float(m.group(1)) + 5.0)
+        return min(MODEL_BACKOFF_MAX_SECONDS, float(m.group(1)) + 0.5)
     if isinstance(exc, GeminiQuotaExceededError):
-        return 45.0
-    # Fallback: 15, 30, 60 … capped
-    return min(90.0, 15.0 * (2 ** (retry_state.attempt_number - 1)))
+        return min(MODEL_BACKOFF_MAX_SECONDS, 2.0)
+    return min(MODEL_BACKOFF_MAX_SECONDS, 1.5 * (2 ** (retry_state.attempt_number - 1)))
+
+
+def _log_model_retry(retry_state: RetryCallState) -> None:
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    classified = classify_model_error(exc or RuntimeError("unknown provider error"))
+    logger.warning(
+        "generation_event=model_call_retry attempt=%s max_attempts=%s model=%s "
+        "service=google error_code=%s external_status=%s",
+        retry_state.attempt_number,
+        MODEL_MAX_ATTEMPTS,
+        GOOGLE_MODEL,
+        classified.code,
+        classified.external_status or "-",
+    )
 
 
 def _get_cache_key(topic, subject, level, options, difficulty_modifier, special_instructions, series, source_text=None) -> str:
@@ -536,10 +556,12 @@ def _init_agents() -> None:
             "Please set it before running the application."
         )
 
-    print(f"INFO: Using model: {model_name}")
-
-    # Configure the genai library with API key
-    genai.configure(api_key=google_api_key)
+    logger.info("Norsklæring bruker konfigurert Google-modell model=%s", model_name)
+    if GOOGLE_API_KEY_CONFLICT:
+        logger.warning(
+            "generation_event=model_configuration_warning error_code=google_gemini_key_conflict "
+            "resolution=google_api_key_preferred"
+        )
 
     # Set environment variables for LiteLLM fallback
     os.environ["GEMINI_API_KEY"] = google_api_key
@@ -550,6 +572,13 @@ def _init_agents() -> None:
         model=f"gemini/{model_name.lower()}",
         api_key=google_api_key,
         temperature=float(os.getenv("AI_TEMPERATURE", "0.35")),
+        timeout=MODEL_CALL_TIMEOUT_SECONDS,
+        client_params={
+            "http_options": {
+                "timeout": int(MODEL_CALL_TIMEOUT_SECONDS * 1000),
+                "retry_options": {"attempts": 1},
+            }
+        },
     )
 
     # Agent 1: Content Creator. A separate post-generation image crew handles
@@ -788,9 +817,10 @@ def extract_language_exercises(text: str) -> dict:
 
 
 @retry(
-    stop=stop_after_attempt(6),
+    stop=stop_after_attempt(MODEL_MAX_ATTEMPTS),
     wait=_wait_gemini_retry,
     retry=retry_if_exception(_should_retry_ai_error),
+    before_sleep=_log_model_retry,
     reraise=True,
 )
 def generate_lesson_content(
@@ -804,6 +834,8 @@ def generate_lesson_content(
     source_text: str = None,
     source_name: str = None,
     quality_generator_id: str = "norsk.learning_sheet",
+    on_stage=None,
+    generation_context: dict | None = None,
 ) -> dict:
     """
     Generate complete lesson content using the AI agents.
@@ -1469,26 +1501,45 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
         verbose=True,
     )
     
-    # Execute the crew
+    # Execute the crew. Provider requests have a native timeout and the
+    # decorator above owns the bounded rate-limit retry budget.
+    model_started = time.perf_counter()
+    context = generation_context or {}
+    logger.info(
+        "generation_event=model_call_started request_id=%s job_id=%s step_name=%s "
+        "attempt=1 model=%s service=google terminal_status=running",
+        context.get("request_id", "unknown"),
+        context.get("job_id", "unknown"),
+        "Genererer og strukturerer læringsinnhold",
+        GOOGLE_MODEL,
+    )
     try:
         result = crew.kickoff()
     except Exception as e:
-        print(f"ERROR: Crew execution failed: {e}")
-        raw = str(e)
-        if (
-            "429" in raw
-            or "RESOURCE_EXHAUSTED" in raw
-            or "Resource exhausted" in raw
-            or ("quota" in raw.lower() and "exceed" in raw.lower())
-        ):
-            user_msg = (
-                "Gemini: kvote eller hastighetsgrense er nådd. Appen prøver automatisk på nytt noen ganger. "
-                "Vedvarer det: vent noen minutter, unngå flernivå og «to nabonivå» samtidig (de bruker mange kall), "
-                "sjekk kvote/fakturering i Google AI Studio, eller sett GOOGLE_MODEL til en annen modell. "
-                "https://ai.google.dev/gemini-api/docs/rate-limits"
-            )
-            raise GeminiQuotaExceededError(user_msg, technical_detail=raw) from e
-        raise RuntimeError(f"AI agent execution failed: {raw}") from e
+        classified = classify_model_error(e)
+        logger.warning(
+            "generation_event=%s request_id=%s job_id=%s step_name=%s duration_ms=%.2f "
+            "attempt=1 model=%s service=google error_code=%s external_status=%s terminal_status=failed",
+            "model_call_timeout" if classified.code == "model_timeout" else "model_call_failed",
+            context.get("request_id", "unknown"),
+            context.get("job_id", "unknown"),
+            "Genererer og strukturerer læringsinnhold",
+            (time.perf_counter() - model_started) * 1000,
+            GOOGLE_MODEL,
+            classified.code,
+            classified.external_status or "-",
+        )
+        raise classified from e
+
+    logger.info(
+        "generation_event=model_call_completed request_id=%s job_id=%s step_name=%s "
+        "duration_ms=%.2f attempt=1 model=%s service=google terminal_status=running",
+        context.get("request_id", "unknown"),
+        context.get("job_id", "unknown"),
+        "Genererer og strukturerer læringsinnhold",
+        (time.perf_counter() - model_started) * 1000,
+        GOOGLE_MODEL,
+    )
     
     # Extract the outputs from each task (with safe access)
     raw_text_output = getattr(getattr(create_text_task, 'output', None), 'raw', "") or ""
@@ -1511,8 +1562,13 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
             teacher_key_content = (key_match.group(1) + key_match.group(2)).strip()
             worksheet_output = worksheet_output[:key_match.start()].strip()
 
-    # Parse the language exercises JSON
-    language_exercises = extract_language_exercises(language_exercises_output) if language_exercises_output else None
+    # Fail closed before the truth layer: empty text, missing worksheet or
+    # malformed structured language output must never become exportable.
+    language_exercises = validate_model_outputs(
+        text=text_output,
+        worksheet=worksheet_output,
+        language_exercises_raw=language_exercises_output or None,
+    )
 
     # Build series header for PDF (#11)
     series_header = ""
@@ -1522,6 +1578,9 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
     # Shared evidence-first audit. Text and worksheet are checked together so
     # an unsupported claim cannot survive merely because it appears in a task.
     from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
+
+    if on_stage:
+        on_stage("quality_assurance")
 
     truth_separator = "\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n"
     language_separator = "\n\n<<<SKOLEVERKSTED_SPRÅKOPPGAVER>>>\n\n"

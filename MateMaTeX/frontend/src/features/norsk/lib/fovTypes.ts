@@ -1,6 +1,6 @@
 import type { TruthPassport } from "@/lib/platform-api";
 
-export type Status = "idle" | "loading" | "success" | "error";
+export type { GenerationStatus as Status } from "./generationMachine";
 
 export interface OptionsState {
   deep_dive: boolean;

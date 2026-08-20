@@ -1,6 +1,7 @@
 import io
 from pathlib import Path
 
+import pytest
 from pypdf import PdfReader
 
 from ScriptoriumFOV.backend import main
@@ -20,6 +21,11 @@ def test_norsk_generation_publishes_and_serves_a_valid_pdf(monkeypatch):
         lambda **_kwargs: {
             "text": "Norge er et land i Europa.",
             "worksheet": "a) VIKTIGE BEGREPER\nEuropa: et kontinent.",
+            "truth_passport": {"status": "verified", "version": "2.0"},
+            "verification_content": "Kontrollert innhold",
+            "quarantine": [],
+            "quality_rounds": [],
+            "quality_stop_reason": "source_approved",
         },
     )
     monkeypatch.setattr(
@@ -50,5 +56,47 @@ def test_norsk_generation_publishes_and_serves_a_valid_pdf(monkeypatch):
         assert response.headers["x-artifact-id"] == state["artifact"]["id"]
         reader = PdfReader(io.BytesIO(response.body))
         assert len(reader.pages) >= 1
+    finally:
+        clear_progress(job_id)
+
+
+def test_preview_download_is_available_before_final_quality_approval():
+    """A teacher can inspect a valid PDF before the final export gate opens."""
+
+    job_id = "norsk-preview-before-approval"
+    clear_progress(job_id)
+    initialize_progress(job_id, 4, "Starter", request_id="request-preview")
+    pdf_bytes = PDF_FIXTURE.read_bytes()
+    artifact = main.ValidatedArtifact(
+        content=pdf_bytes,
+        content_type="application/pdf",
+        filename="Arbeidsliv.pdf",
+        kind="student_pdf",
+    )
+
+    try:
+        main._publish_validated_artifact(
+            job_id,
+            artifact,
+            payload_key="pdf_bytes",
+            total_steps=4,
+            quality_documents=[
+                {
+                    "content": "Kontrollert innhold",
+                    "truth_passport": {"status": "needs_review", "version": "1.0"},
+                    "quarantine": [],
+                }
+            ],
+            ready_message="PDF klar for lærerens kontroll.",
+        )
+
+        preview = main.download_pdf(job_id, None, preview=True)
+        assert preview.media_type == "application/pdf"
+        assert preview.headers["content-disposition"].startswith("inline;")
+        assert preview.body == pdf_bytes
+
+        with pytest.raises(main.HTTPException) as blocked:
+            main.download_pdf(job_id, None)
+        assert blocked.value.status_code == 409
     finally:
         clear_progress(job_id)

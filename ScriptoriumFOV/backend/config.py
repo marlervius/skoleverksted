@@ -16,8 +16,19 @@ load_dotenv()
 # AI / Gemini
 # ---------------------------------------------------------------------------
 
-GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+_google_key = os.getenv("GOOGLE_API_KEY", "").strip()
+_gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+# GOOGLE_API_KEY is canonical, but installations that still only provide
+# GEMINI_API_KEY keep working.  A conflict is exposed as a boolean only; secret
+# values must never be logged.
+GOOGLE_API_KEY: str = _google_key or _gemini_key
+GOOGLE_API_KEY_CONFLICT: bool = bool(_google_key and _gemini_key and _google_key != _gemini_key)
 GOOGLE_MODEL: str = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
+MODEL_CALL_TIMEOUT_SECONDS: float = float(os.getenv("MODEL_CALL_TIMEOUT", "75"))
+MODEL_MAX_ATTEMPTS: int = max(1, min(int(os.getenv("MODEL_MAX_ATTEMPTS", "3")), 4))
+MODEL_BACKOFF_MAX_SECONDS: float = float(os.getenv("MODEL_BACKOFF_MAX", "8"))
+GENERATION_MAX_SECONDS: int = max(30, int(os.getenv("NORSK_GENERATION_TIMEOUT", "360")))
+STATUS_STREAM_WAIT_SECONDS: int = max(5, int(os.getenv("NORSK_STREAM_WAIT", "30")))
 
 # ---------------------------------------------------------------------------
 # Lesson generation cache
@@ -30,6 +41,8 @@ CACHE_TTL_SECONDS: int = int(os.getenv("CACHE_TTL_SECONDS", str(3600 * 24)))  # 
 # ---------------------------------------------------------------------------
 
 IMAGE_DOWNLOAD_TIMEOUT_SECONDS: int = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "30"))
+IMAGE_API_TIMEOUT_SECONDS: int = int(os.getenv("IMAGE_API_TIMEOUT", "60"))
+IMAGE_API_MAX_ATTEMPTS: int = max(1, min(int(os.getenv("IMAGE_API_MAX_ATTEMPTS", "2")), 3))
 IMAGE_MAX_DIMENSION: int = int(os.getenv("IMAGE_MAX_DIMENSION", "800"))
 IMAGE_JPEG_QUALITY: int = int(os.getenv("IMAGE_JPEG_QUALITY", "85"))
 

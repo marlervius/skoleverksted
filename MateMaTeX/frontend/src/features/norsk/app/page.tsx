@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useReducer } from "react";
 import {
   FileText,
   Loader2,
@@ -47,10 +47,36 @@ import type {
   LessonResponse,
   OptionsState,
   SeriesState,
-  Status,
 } from "../lib/fovTypes";
 import { isProgressComplete, nextPollDelayMs } from "../lib/polling";
+import {
+  generationReducer,
+  getGenerationControls,
+  initialGenerationState,
+  isGenerating,
+  isPollingExpired,
+  type GenerationStatus as GenerationUiStatus,
+  type RecoveryAction,
+} from "../lib/generationMachine";
 import { serviceBackendUrl } from "@/lib/backend-url";
+
+interface BackendProgress {
+  job_id?: string;
+  request_id?: string;
+  step: number;
+  total_steps: number;
+  message: string;
+  step_name?: string;
+  job_status?: string;
+  event_type?: string;
+  error_code?: string;
+  error?: {
+    code?: string;
+    message?: string;
+    step_name?: string;
+  };
+  available_actions?: RecoveryAction[];
+}
 
 // ---------------------------------------------------------------------------
 // Root
@@ -105,15 +131,15 @@ export default function HomeContent() {
   const [showHistory, setShowHistory] = useState(false);
 
   // --- Generation state ---
-  const [status, setStatus] = useState<Status>("idle");
-  const [errorMessage, setErrorMessage] = useState("");
-  const [progress, setProgress] = useState<{ step: number; totalSteps: number; message: string } | null>(null);
-  const [generationId, setGenerationId] = useState<string | null>(null);
-  const [isDual, setIsDual] = useState(false);
+  const [generation, generationDispatch] = useReducer(generationReducer, initialGenerationState);
+  const { status, errorMessage, progress, jobId: generationId, isDual } = generation;
   const [previewData, setPreviewData] = useState<LessonResponse | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [imageFallbackNeeded, setImageFallbackNeeded] = useState(false);
   const pollingRef = useRef<boolean>(false);
+  const submissionRef = useRef<boolean>(false);
+  const activeJobRef = useRef<string | null>(null);
+  const pollStartedAtRef = useRef<number>(0);
 
   // --- Simple password gate (when backend has APP_PASSWORD set) ---
   const [authConfigLoaded, setAuthConfigLoaded] = useState(false);
@@ -230,8 +256,126 @@ export default function HomeContent() {
   useEffect(() => {
     return () => {
       pollingRef.current = false;
+      submissionRef.current = false;
+      activeJobRef.current = null;
     };
   }, []);
+
+  const beginGeneration = useCallback((message: string, totalSteps = 4) => {
+    if (submissionRef.current) return null;
+    const operationId = crypto.randomUUID();
+    submissionRef.current = true;
+    pollingRef.current = true;
+    activeJobRef.current = `pending:${operationId}`;
+    pollStartedAtRef.current = Date.now();
+    generationDispatch({
+      type: "started",
+      jobId: activeJobRef.current,
+      totalSteps,
+      message,
+    });
+    return operationId;
+  }, []);
+
+  const acceptGeneration = useCallback((data: {
+    generation_id: string;
+    request_id?: string;
+    dual?: boolean;
+    zip_download?: boolean;
+  }, message: string, totalSteps = 4) => {
+    activeJobRef.current = data.generation_id;
+    generationDispatch({
+      type: "started",
+      jobId: data.generation_id,
+      requestId: data.request_id,
+      totalSteps,
+      message,
+      isDual: !!data.dual || !!data.zip_download,
+    });
+  }, []);
+
+  const finishGeneration = useCallback((payload: {
+    jobId: string;
+    status: Exclude<GenerationUiStatus, "idle" | "generating">;
+    message: string;
+    requestId?: string;
+    stepName?: string;
+    errorCode?: string;
+    availableActions?: RecoveryAction[];
+  }) => {
+    if (activeJobRef.current && activeJobRef.current !== payload.jobId) return;
+    pollingRef.current = false;
+    submissionRef.current = false;
+    activeJobRef.current = payload.jobId;
+    generationDispatch({
+      type: "terminal_received",
+      jobId: payload.jobId,
+      status: payload.status,
+      message: payload.message,
+      requestId: payload.requestId,
+      stepName: payload.stepName,
+      errorCode: payload.errorCode,
+      availableActions: payload.availableActions,
+    });
+  }, []);
+
+  const failLocally = useCallback((error: unknown, fallback: string) => {
+    pollingRef.current = false;
+    submissionRef.current = false;
+    activeJobRef.current = null;
+    generationDispatch({
+      type: "local_failed",
+      message: error instanceof Error ? error.message : fallback,
+    });
+  }, []);
+
+  const resetGeneration = useCallback(() => {
+    pollingRef.current = false;
+    submissionRef.current = false;
+    activeJobRef.current = null;
+    generationDispatch({ type: "reset" });
+  }, []);
+
+  const isCurrentPoll = useCallback(
+    (jobId: string) => pollingRef.current && activeJobRef.current === jobId,
+    [],
+  );
+
+  const finishFromBackend = useCallback((jobId: string, data: BackendProgress) => {
+    const backendStatus = data.job_status;
+    const statusMap: Record<string, Exclude<GenerationUiStatus, "idle" | "generating">> = {
+      completed: "completed",
+      failed: "failed",
+      cancelled: "cancelled",
+      needs_user_action: "needs_user_action",
+      needs_teacher_review: "needs_teacher_review",
+    };
+    const terminalStatus = backendStatus ? statusMap[backendStatus] : undefined;
+    if (!terminalStatus) return false;
+    finishGeneration({
+      jobId,
+      status: terminalStatus,
+      message: data.error?.message || data.message,
+      requestId: data.request_id,
+      stepName: data.error?.step_name || data.step_name,
+      errorCode: data.error?.code || data.error_code,
+      availableActions: data.available_actions,
+    });
+    return true;
+  }, [finishGeneration]);
+
+  const expirePollingIfNeeded = useCallback(async (jobId: string) => {
+    if (!isPollingExpired(pollStartedAtRef.current)) return false;
+    pollingRef.current = false;
+    await authFetch(`${apiUrl}/generation/${jobId}/cancel`, { method: "POST" }).catch(() => undefined);
+    finishGeneration({
+      jobId,
+      status: "failed",
+      message: "Genereringen svarte ikke innen tidsgrensen. Jobben er stoppet, og du kan prøve igjen.",
+      errorCode: "generation_timeout",
+    });
+    return true;
+  }, [apiUrl, authFetch, finishGeneration]);
 
   // --- Derived validity ---
   const authBlocked = passwordRequired && !appPassword;
@@ -239,7 +383,8 @@ export default function HomeContent() {
     selectedMultiLevels.length >= 2 && selectedMultiLevels.length <= 3;
   const levelOk = multiLevelMode ? multiLevelsOk : !!level;
   const isFormValid = !!(subject && levelOk && topic.trim().length > 0 && !authBlocked);
-  const formDisabled = status === "loading" || authBlocked;
+  const formDisabled = isGenerating(generation) || authBlocked;
+  const generationControls = getGenerationControls(generation, isFormValid);
 
   function toggleMultiLevelCheckbox(lv: string) {
     setSelectedMultiLevels((prev) => {
@@ -350,6 +495,28 @@ export default function HomeContent() {
   // Image upload handler
   // ---------------------------------------------------------------------------
 
+  async function resumeWithUploadedImage(file: File) {
+    if (status !== "needs_user_action" || !generationId) return;
+    const parentJobId = generationId;
+    const operationId = beginGeneration("Behandler lærerens bilde fra kontrollert tekst …");
+    if (!operationId) return;
+    const formData = new FormData();
+    formData.append("image", file);
+    try {
+      const res = await authFetch(`${apiUrl}/generation/${parentJobId}/image/upload`, {
+        method: "POST",
+        headers: { "Idempotency-Key": operationId },
+        body: formData,
+      });
+      if (!res.ok) await throwFromResponse(res);
+      const data = await res.json();
+      acceptGeneration(data, "Behandler lærerens bilde fra kontrollert tekst …");
+      void pollProgress(data.generation_id, false);
+    } catch (error) {
+      failLocally(error, "Kunne ikke bruke bildet. Velg et annet bilde eller fortsett uten bilde.");
+    }
+  }
+
   function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
     setImageError(null);
     const file = e.target.files?.[0] || null;
@@ -369,14 +536,16 @@ export default function HomeContent() {
       return;
     }
     setCustomImage(file);
+    if (status === "needs_user_action") void resumeWithUploadedImage(file);
   }
 
   // ---------------------------------------------------------------------------
   // Core fetch helpers
   // ---------------------------------------------------------------------------
 
-  async function startGeneration(): Promise<{
+  async function startGeneration(idempotencyKey: string): Promise<{
     generation_id: string;
+    request_id?: string;
     dual?: boolean;
     zip_download?: boolean;
   }> {
@@ -386,7 +555,7 @@ export default function HomeContent() {
     if (multiLevelMode && multiLevelsOk && !customImage) {
       const res = await authFetch(`${apiUrl}/generate-multi-lesson`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
         body: JSON.stringify({
           topic: topic.trim(),
           subject,
@@ -409,7 +578,7 @@ export default function HomeContent() {
     if (dualVersion && !customImage && !multiLevelMode) {
       const res = await authFetch(`${apiUrl}/generate-dual-lesson`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
         body: JSON.stringify({
           topic: topic.trim(),
           subject,
@@ -445,6 +614,7 @@ export default function HomeContent() {
 
       const res = await authFetch(`${apiUrl}/generate-lesson-with-image`, {
         method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
         body: fd,
       });
       if (!res.ok) await throwFromResponse(res);
@@ -454,7 +624,7 @@ export default function HomeContent() {
     // Standard generation
     const res = await authFetch(baseUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({
         topic: topic.trim(),
         subject,
@@ -500,10 +670,10 @@ export default function HomeContent() {
   // Submit handler
   // ---------------------------------------------------------------------------
 
-  async function startPreview(): Promise<{ generation_id: string }> {
+  async function startPreview(idempotencyKey: string): Promise<{ generation_id: string; request_id?: string }> {
     const res = await authFetch(`${apiUrl}/generate-lesson-json`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({
         topic: topic.trim(),
         subject,
@@ -525,47 +695,33 @@ export default function HomeContent() {
   const handlePreview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isFormValid) return;
-
-    setStatus("loading");
-    setErrorMessage("");
-    setProgress({ step: 0, totalSteps: 3, message: "Starter forhåndsvisning..." });
-    setGenerationId(null);
-    pollingRef.current = true;
+    const operationId = beginGeneration("Starter forhåndsvisning …");
+    if (!operationId) return;
 
     try {
-      const data = await startPreview();
+      const data = await startPreview(operationId);
       const gId = data.generation_id;
-      setGenerationId(gId);
+      acceptGeneration(data, "Starter forhåndsvisning …");
 
       saveToHistory();
-      pollPreviewProgress(gId);
+      void pollPreviewProgress(gId);
     } catch (error) {
       console.error("Error starting preview:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Kunne ikke starte forhåndsvisning. Prøv igjen."
-      );
+      failLocally(error, "Kunne ikke starte forhåndsvisning. Prøv igjen.");
     }
   };
 
   const generatePdfFromPreview = async () => {
     if (!previewData) return;
 
-    setStatus("loading");
-    setErrorMessage("");
-    setProgress({ step: 0, totalSteps: 3, message: "Starter PDF-generering..." });
-    setGenerationId(null);
-    pollingRef.current = true;
+    const operationId = beginGeneration("Starter PDF-generering …");
+    if (!operationId) return;
     setIsPreviewing(false);
 
     try {
       const res = await authFetch(`${apiUrl}/generate-pdf-from-json`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": operationId },
         body: JSON.stringify({
           topic: previewData.topic,
           subject: previewData.subject,
@@ -586,59 +742,11 @@ export default function HomeContent() {
       if (!res.ok) await throwFromResponse(res);
       const data = await res.json();
       const gId = data.generation_id;
-      setGenerationId(gId);
-
-      // Re-use standard pollProgress since the final step downloads PDF
-      // Note: We pass dual=false
-      const pollFromPreview = async (id: string, attempt = 0) => {
-        if (!pollingRef.current) return;
-        try {
-          const statusRes = await authFetch(`${apiUrl}/generation-status/${id}`);
-          if (!statusRes.ok) throw new Error("Kunne ikke hente status");
-
-          const progressData = await statusRes.json();
-          setProgress({
-            step: progressData.step,
-            totalSteps: progressData.total_steps,
-            message: progressData.message,
-          });
-
-          if (progressData.step === 3) {
-            pollingRef.current = false;
-            await downloadPreviewFile(id, false);
-          } else if (progressData.step === -1) {
-            pollingRef.current = false;
-            throw new Error(progressData.message);
-          } else if (pollingRef.current) {
-            setTimeout(
-              () => pollFromPreview(id, attempt + 1),
-              nextPollDelayMs(attempt)
-            );
-          }
-        } catch (error) {
-          if (pollingRef.current) {
-            console.error("Error polling progress:", error);
-            setStatus("error");
-            setProgress(null);
-            pollingRef.current = false;
-            setErrorMessage(
-              error instanceof Error ? error.message : "Feil under generering. Prøv igjen."
-            );
-          }
-        }
-      };
-
-      pollFromPreview(gId);
+      acceptGeneration(data, "Starter PDF-generering …");
+      void pollProgress(gId, false);
     } catch (error) {
       console.error("Error generating from preview:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Kunne ikke generere PDF. Prøv igjen."
-      );
+      failLocally(error, "Kunne ikke generere PDF. Prøv igjen.");
     }
   };
 
@@ -658,31 +766,20 @@ export default function HomeContent() {
       return;
     }
 
-    setStatus("loading");
-    setErrorMessage("");
-    setProgress({ step: 0, totalSteps: 4, message: "Starter generering..." });
-    setGenerationId(null);
+    const operationId = beginGeneration("Starter generering …");
+    if (!operationId) return;
     setImageFallbackNeeded(false);
-    pollingRef.current = true;
 
     try {
-      const data = await startGeneration();
+      const data = await startGeneration(operationId);
       const gId = data.generation_id;
-      setGenerationId(gId);
-      setIsDual(!!data.dual || !!data.zip_download);
+      acceptGeneration(data, "Starter generering …");
 
       saveToHistory();
-      pollProgress(gId, !!data.dual);
+      void pollProgress(gId, !!data.dual || !!data.zip_download);
     } catch (error) {
       console.error("Error starting generation:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Kunne ikke starte generering. Prøv igjen."
-      );
+      failLocally(error, "Kunne ikke starte generering. Prøv igjen.");
     }
   };
 
@@ -690,25 +787,42 @@ export default function HomeContent() {
   // Polling
   // ---------------------------------------------------------------------------
 
-  const pollPreviewProgress = async (gId: string, attempt = 0) => {
-    if (!pollingRef.current) return;
+  async function pollPreviewProgress(gId: string, attempt = 0) {
+    if (!isCurrentPoll(gId) || await expirePollingIfNeeded(gId)) return;
 
     try {
-      const res = await authFetch(`${apiUrl}/generation-status/${gId}`);
+      const res = await authFetch(`${apiUrl}/generation-status/${gId}`, {
+        signal: AbortSignal.timeout(15_000),
+      });
       if (!res.ok) throw new Error("Kunne ikke hente status");
 
-      const progressData = await res.json();
+      const progressData = await res.json() as BackendProgress;
       if (
         typeof progressData.message === "string" &&
         progressData.message.includes("PDF-en er laget uten bilde")
       ) {
         setImageFallbackNeeded(true);
       }
-      setProgress({
+      generationDispatch({
+        type: "progress_received",
+        jobId: gId,
+        requestId: progressData.request_id,
         step: progressData.step,
         totalSteps: progressData.total_steps,
         message: progressData.message,
+        stepName: progressData.step_name,
       });
+
+      if (progressData.job_status === "completed") {
+        await downloadPreviewJson(gId, attempt);
+        return;
+      }
+      if (progressData.job_status === "needs_teacher_review") {
+        finishFromBackend(gId, progressData);
+        await downloadPreviewJson(gId, attempt, true);
+        return;
+      }
+      if (finishFromBackend(gId, progressData)) return;
 
       const previewIsReady = isProgressComplete(
         progressData.step,
@@ -718,26 +832,31 @@ export default function HomeContent() {
       if (previewIsReady) {
         await downloadPreviewJson(gId, attempt);
       } else if (progressData.step === -1) {
-        pollingRef.current = false;
-        throw new Error(progressData.message);
-      } else if (pollingRef.current) {
+        finishGeneration({
+          jobId: gId,
+          status: "failed",
+          message: progressData.error?.message || progressData.message,
+          requestId: progressData.request_id,
+          stepName: progressData.error?.step_name || progressData.step_name,
+          errorCode: progressData.error?.code || progressData.error_code,
+        });
+      } else if (isCurrentPoll(gId)) {
         setTimeout(
           () => pollPreviewProgress(gId, attempt + 1),
           nextPollDelayMs(attempt)
         );
       }
     } catch (error) {
-      if (pollingRef.current) {
+      if (isCurrentPoll(gId)) {
         console.error("Error polling preview progress:", error);
-        setStatus("error");
-        setProgress(null);
-        pollingRef.current = false;
-        setErrorMessage(
-          error instanceof Error ? error.message : "Feil under generering. Prøv igjen."
-        );
+        finishGeneration({
+          jobId: gId,
+          status: "failed",
+          message: error instanceof Error ? error.message : "Feil under generering. Prøv igjen.",
+        });
       }
     }
-  };
+  }
 
   const selectPreviewImage = (candidate: CommonsImageCandidate | null) => {
     setPreviewData((current) => {
@@ -763,70 +882,104 @@ export default function HomeContent() {
     });
   };
 
-  const retryWithImageMode = (nextMode: ImageMode) => {
+  const retryWithImageMode = async (nextMode: ImageMode) => {
     setImageMode(nextMode);
     setImageFallbackNeeded(false);
-    setStatus("idle");
-    window.setTimeout(() => formRef.current?.requestSubmit(), 0);
+    if (status !== "needs_user_action" || !generationId) {
+      resetGeneration();
+      window.setTimeout(() => formRef.current?.requestSubmit(), 0);
+      return;
+    }
+
+    const parentJobId = generationId;
+    const operationId = beginGeneration("Gjenopptar fra kontrollert tekst …");
+    if (!operationId) return;
+    try {
+      const res = await authFetch(`${apiUrl}/generation/${parentJobId}/image/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": operationId },
+        body: JSON.stringify({ image_mode: nextMode }),
+      });
+      if (!res.ok) await throwFromResponse(res);
+      const data = await res.json();
+      acceptGeneration(data, "Gjenopptar fra kontrollert tekst …");
+      void pollProgress(data.generation_id, false);
+    } catch (error) {
+      failLocally(error, "Kunne ikke gjenoppta bildebehandlingen. Prøv igjen.");
+    }
   };
 
-  const pollProgress = async (gId: string, dual: boolean, attempt = 0) => {
-    if (!pollingRef.current) return;
+  async function pollProgress(gId: string, dual: boolean, attempt = 0) {
+    if (!isCurrentPoll(gId) || await expirePollingIfNeeded(gId)) return;
 
     try {
-      const res = await authFetch(`${apiUrl}/generation-status/${gId}`);
+      const res = await authFetch(`${apiUrl}/generation-status/${gId}`, {
+        signal: AbortSignal.timeout(15_000),
+      });
       if (!res.ok) throw new Error("Kunne ikke hente status");
 
-      const progressData = await res.json();
+      const progressData = await res.json() as BackendProgress;
       if (
         typeof progressData.message === "string" &&
         progressData.message.includes("PDF-en er laget uten bilde")
       ) {
         setImageFallbackNeeded(true);
       }
-      setProgress({
+      generationDispatch({
+        type: "progress_received",
+        jobId: gId,
+        requestId: progressData.request_id,
         step: progressData.step,
         totalSteps: progressData.total_steps,
         message: progressData.message,
+        stepName: progressData.step_name,
       });
 
-      if (progressData.step === 4) {
-        pollingRef.current = false;
-        if (dual) {
-          await downloadPreviewFile(gId, true);
-        } else {
-          await downloadPreviewFile(gId, false);
-        }
+      if (progressData.job_status === "completed") {
+        await downloadPreviewFile(gId, dual);
+      } else if (progressData.job_status === "needs_teacher_review") {
+        finishFromBackend(gId, progressData);
+        await downloadPreviewJson(gId, attempt, true);
+      } else if (finishFromBackend(gId, progressData)) {
+        return;
+      } else if (progressData.step === 4) {
+        await downloadPreviewFile(gId, dual);
       } else if (progressData.step === -1) {
-        pollingRef.current = false;
-        throw new Error(progressData.message);
-      } else if (pollingRef.current) {
+        finishGeneration({
+          jobId: gId,
+          status: "failed",
+          message: progressData.error?.message || progressData.message,
+          requestId: progressData.request_id,
+          stepName: progressData.error?.step_name || progressData.step_name,
+          errorCode: progressData.error?.code || progressData.error_code,
+        });
+      } else if (isCurrentPoll(gId)) {
         setTimeout(
           () => pollProgress(gId, dual, attempt + 1),
           nextPollDelayMs(attempt)
         );
       }
     } catch (error) {
-      if (pollingRef.current) {
+      if (isCurrentPoll(gId)) {
         console.error("Error polling progress:", error);
-        setStatus("error");
-        setProgress(null);
-        pollingRef.current = false;
-        setErrorMessage(
-          error instanceof Error ? error.message : "Feil under generering. Prøv igjen."
-        );
+        finishGeneration({
+          jobId: gId,
+          status: "failed",
+          message: error instanceof Error ? error.message : "Feil under generering. Prøv igjen.",
+        });
       }
     }
-  };
+  }
 
   // ---------------------------------------------------------------------------
   // Download helpers
   // ---------------------------------------------------------------------------
 
-  async function downloadPreviewJson(gId: string, attempt = 0) {
+  async function downloadPreviewJson(gId: string, attempt = 0, teacherReview = false) {
     try {
       const res = await authFetch(`${apiUrl}/download-json/${gId}`);
       if (res.status === 202) {
+        if (!isCurrentPoll(gId)) return;
         setTimeout(
           () => pollPreviewProgress(gId, attempt + 1),
           nextPollDelayMs(attempt)
@@ -846,15 +999,17 @@ export default function HomeContent() {
         throw new Error("Serveren returnerte en ufullstendig forhåndsvisning");
       }
       pollingRef.current = false;
+      submissionRef.current = false;
       setPreviewData(data);
       setIsPreviewing(true);
-      setStatus("idle");
-      setProgress(null);
+      if (!teacherReview) resetGeneration();
     } catch (error) {
       console.error("Error fetching preview:", error);
-      setStatus("error");
-      setProgress(null);
-      setErrorMessage(error instanceof Error ? error.message : "Kunne ikke laste forhåndsvisning.");
+      finishGeneration({
+        jobId: gId,
+        status: "failed",
+        message: error instanceof Error ? error.message : "Kunne ikke laste forhåndsvisning.",
+      });
     }
   }
 
@@ -880,13 +1035,23 @@ export default function HomeContent() {
   }
 
   async function downloadPreviewFile(gId: string, zip: boolean) {
-    await downloadFile(
-      `${apiUrl}/${zip ? "download-zip" : "download-pdf"}/${gId}?preview=true`,
-      zip ? "FORHÅNDSVISNING_leksjoner.zip" : "FORHÅNDSVISNING_leksjon.pdf",
-    );
-    setStatus("success");
-    setProgress(null);
-    pollingRef.current = false;
+    try {
+      await downloadFile(
+        `${apiUrl}/${zip ? "download-zip" : "download-pdf"}/${gId}?preview=true`,
+        zip ? "FORHÅNDSVISNING_leksjoner.zip" : "FORHÅNDSVISNING_leksjon.pdf",
+      );
+      finishGeneration({
+        jobId: gId,
+        status: "completed",
+        message: zip ? "ZIP-forhåndsvisningen er klar." : "PDF-forhåndsvisningen er klar.",
+      });
+    } catch (error) {
+      finishGeneration({
+        jobId: gId,
+        status: "failed",
+        message: error instanceof Error ? error.message : "Kunne ikke laste ned forhåndsvisningen.",
+      });
+    }
   }
 
   async function approveExactGeneration(gId: string) {
@@ -898,18 +1063,15 @@ export default function HomeContent() {
     try {
       await approveExactGeneration(gId);
       await downloadFile(`${apiUrl}/download-pdf/${gId}`, "leksjon.pdf");
-      setStatus("success");
-      setProgress(null);
-      pollingRef.current = false;
-      setTimeout(() => setStatus("idle"), 3000);
+      finishGeneration({ jobId: gId, status: "completed", message: "PDF-en er lastet ned." });
+      setTimeout(resetGeneration, 3000);
     } catch (error) {
       console.error("Error downloading PDF:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error ? error.message : "Kunne ikke laste ned PDF. Prøv igjen."
-      );
+      finishGeneration({
+        jobId: gId,
+        status: "failed",
+        message: error instanceof Error ? error.message : "Kunne ikke laste ned PDF. Prøv igjen.",
+      });
     }
   };
 
@@ -917,20 +1079,49 @@ export default function HomeContent() {
     try {
       await approveExactGeneration(gId);
       await downloadFile(`${apiUrl}/download-zip/${gId}`, "leksjoner_dual.zip");
-      setStatus("success");
-      setProgress(null);
-      pollingRef.current = false;
-      setTimeout(() => setStatus("idle"), 3000);
+      finishGeneration({ jobId: gId, status: "completed", message: "ZIP-filen er lastet ned." });
+      setTimeout(resetGeneration, 3000);
     } catch (error) {
       console.error("Error downloading ZIP:", error);
-      setStatus("error");
-      setProgress(null);
-      pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error ? error.message : "Kunne ikke laste ned ZIP. Prøv igjen."
-      );
+      finishGeneration({
+        jobId: gId,
+        status: "failed",
+        message: error instanceof Error ? error.message : "Kunne ikke laste ned ZIP. Prøv igjen.",
+      });
     }
   };
+
+  function retryGeneration() {
+    resetGeneration();
+    window.setTimeout(() => formRef.current?.requestSubmit(), 0);
+  }
+
+  async function cancelActiveGeneration() {
+    const jobId = generationId;
+    pollingRef.current = false;
+    submissionRef.current = false;
+    if (!jobId || jobId.startsWith("pending:")) {
+      resetGeneration();
+      return;
+    }
+    try {
+      const res = await authFetch(`${apiUrl}/generation/${jobId}/cancel`, { method: "POST" });
+      if (!res.ok) await throwFromResponse(res);
+      const data = await res.json();
+      finishGeneration({
+        jobId,
+        status: "cancelled",
+        message: "Genereringen er avbrutt. Skjemadataene er beholdt.",
+        requestId: data.request_id,
+      });
+    } catch (error) {
+      finishGeneration({
+        jobId,
+        status: "failed",
+        message: error instanceof Error ? error.message : "Kunne ikke avbryte jobben.",
+      });
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Render
@@ -1518,8 +1709,7 @@ export default function HomeContent() {
                     type="button"
                     onClick={handlePreview}
                     disabled={
-                      !isFormValid ||
-                      status === "loading" ||
+                      generationControls.previewDisabled ||
                       multiLevelMode ||
                       dualVersion ||
                       !!customImage
@@ -1529,7 +1719,7 @@ export default function HomeContent() {
                       flex items-center justify-center gap-2 border
                       transition-colors focus:outline-none focus:ring-2 focus:ring-stone-300
                       ${
-                        status === "loading"
+                        isGenerating(generation)
                           ? "bg-stone-100 text-stone-400 border-stone-200 cursor-wait"
                           : isFormValid && !multiLevelMode && !dualVersion && !customImage
                           ? "bg-white text-stone-700 border-stone-300 hover:border-stone-400 hover:bg-stone-50"
@@ -1542,21 +1732,21 @@ export default function HomeContent() {
                   </button>
                 )}
                 <button
-                    type={status === "success" ? "button" : "submit"}
+                    type={status === "completed" ? "button" : "submit"}
                     onClick={
-                      status === "success" && generationId
+                      status === "completed" && generationId
                         ? () => (isDual ? downloadZip(generationId) : downloadPDF(generationId))
                         : undefined
                     }
-                  disabled={!isFormValid || status === "loading"}
+                  disabled={generationControls.primaryDisabled}
                   className={`
                     flex-1 py-3.5 px-6 rounded-lg font-semibold text-base
                     flex items-center justify-center gap-2
                     transition-colors focus:outline-none focus:ring-2 focus:ring-accent-600/30
                     ${
-                      status === "loading"
+                      isGenerating(generation)
                         ? "bg-stone-200 text-stone-500 cursor-wait"
-                        : status === "success"
+                        : status === "completed"
                         ? "bg-accent-700 text-white"
                         : isFormValid
                         ? "bg-accent-700 hover:bg-accent-800 text-white"
@@ -1564,9 +1754,9 @@ export default function HomeContent() {
                     }
                   `}
                 >
-                  {status === "loading" ? (
-                    <><Loader2 className="w-5 h-5 animate-spin" /><span>Genererer...</span></>
-                  ) : status === "success" ? (
+                  {isGenerating(generation) ? (
+                    <><Loader2 className="w-5 h-5 animate-spin" /><span>{generationControls.primaryLabel}</span></>
+                  ) : status === "completed" ? (
                     <><CheckCircle2 className="w-5 h-5" /><span>{isDual ? "Godkjenn og last ned ZIP" : "Godkjenn og last ned PDF"}</span></>
                   ) : (
                     <><Sparkles className="w-5 h-5" /><span>{
@@ -1586,10 +1776,18 @@ export default function HomeContent() {
                 status={status}
                 progress={progress}
                 errorMessage={errorMessage}
+                requestId={generation.requestId}
+                failedStepName={generation.failedStepName}
+                availableActions={generation.availableActions}
                 isDual={isDual}
-                onDismissError={() => setStatus("idle")}
+                onRetry={retryGeneration}
+                onCancel={() => void cancelActiveGeneration()}
+                onRetryImage={() => void retryWithImageMode(imageMode === "none" ? "ai" : imageMode)}
+                onContinueWithoutImage={() => void retryWithImageMode("none")}
+                onChooseCommons={() => void retryWithImageMode("commons")}
+                onUploadImage={() => fileInputRef.current?.click()}
               />
-              {status === "success" && <div className="mt-4 space-y-3"><RevisionActions onSelect={(instruction) => { setSpecialInstructions((current) => [current, instruction].filter(Boolean).join("\n")); window.setTimeout(() => formRef.current?.requestSubmit(), 0); }} /><GenerationFeedback module="norsk" /></div>}
+              {status === "completed" && <div className="mt-4 space-y-3"><RevisionActions onSelect={(instruction) => { setSpecialInstructions((current) => [current, instruction].filter(Boolean).join("\n")); resetGeneration(); window.setTimeout(() => formRef.current?.requestSubmit(), 0); }} /><GenerationFeedback module="norsk" /></div>}
               {imageFallbackNeeded && (
                 <div className="mt-4 p-4 rounded-lg bg-amber-50 border border-amber-200">
                   <p className="text-sm font-semibold text-amber-900">
@@ -1618,7 +1816,7 @@ export default function HomeContent() {
                     <button
                       type="button"
                       onClick={() => {
-                        setStatus("idle");
+                        resetGeneration();
                         fileInputRef.current?.click();
                       }}
                       className="btn-secondary px-3 py-2 text-xs"
@@ -1655,7 +1853,7 @@ export default function HomeContent() {
         <PreviewModal
           previewData={previewData}
           formDisabled={formDisabled}
-          isGenerating={status === "loading"}
+          isGenerating={isGenerating(generation)}
           onClose={() => setIsPreviewing(false)}
           onGeneratePdf={generatePdfFromPreview}
           onSelectImage={selectPreviewImage}

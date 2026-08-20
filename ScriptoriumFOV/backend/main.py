@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import logging
 import os
@@ -15,7 +16,7 @@ from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -45,14 +46,22 @@ if __package__:
         validate_pdf_artifact,
         validate_zip_artifact,
     )
-    from .config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
-    from .errors import GeminiQuotaExceededError
+    from .config import (
+        ALLOWED_IMAGE_TYPES, GENERATION_MAX_SECONDS, GOOGLE_MODEL, MAX_IMAGE_BYTES,
+        PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE, STATUS_STREAM_WAIT_SECONDS,
+    )
+    from .errors import (
+        GenerationCancelledError, GenerationError, ImageGenerationError,
+        ModelTimeoutError,
+    )
+    from .generation_contract import PIPELINE_STEPS, STEP_BY_KEY, PipelineStep, classify_model_error
     from .auth import app_password_configured, require_app_password, verify_password_plain
     from .pdf_service import create_lesson_pdf
     from .media_manager import image_processor
     from .progress_store import (
-        get_progress, initialize_progress, is_json_preview_ready, is_pdf_ready, is_zip_ready,
-        merge_progress, progress_backend_label, publish_event, update_progress,
+        TERMINAL_STATUSES, get_progress, initialize_progress, initialize_progress_once, is_json_preview_ready,
+        is_pdf_ready, is_zip_ready, list_events, merge_progress,
+        progress_backend_label, publish_event, update_progress,
     )
 else:
     from agents import generate_lesson_content
@@ -62,32 +71,29 @@ else:
         validate_pdf_artifact,
         validate_zip_artifact,
     )
-    from config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
-    from errors import GeminiQuotaExceededError
+    from config import (
+        ALLOWED_IMAGE_TYPES, GENERATION_MAX_SECONDS, GOOGLE_MODEL, MAX_IMAGE_BYTES,
+        PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE, STATUS_STREAM_WAIT_SECONDS,
+    )
+    from errors import GenerationCancelledError, GenerationError, ImageGenerationError, ModelTimeoutError
+    from generation_contract import PIPELINE_STEPS, STEP_BY_KEY, PipelineStep, classify_model_error
     from auth import app_password_configured, require_app_password, verify_password_plain
     from pdf_service import create_lesson_pdf
     from media_manager import image_processor
     from progress_store import (
-        get_progress, initialize_progress, is_json_preview_ready, is_pdf_ready, is_zip_ready,
-        merge_progress, progress_backend_label, publish_event, update_progress,
+        TERMINAL_STATUSES, get_progress, initialize_progress, initialize_progress_once, is_json_preview_ready,
+        is_pdf_ready, is_zip_ready, list_events, merge_progress,
+        progress_backend_label, publish_event, update_progress,
     )
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# User-visible error (never leak internal exception strings to clients)
-USER_FACING_GENERATION_ERROR = (
-    "Noe gikk galt under generering. Prøv igjen litt senere, eller kontakt support."
-)
-
-
 def _public_progress_error(exc: Exception) -> str:
-    """Log a safe error code and return a user-facing progress message."""
-    logger.error("Generation task failed error_type=%s", type(exc).__name__)
-    if isinstance(exc, GeminiQuotaExceededError):
-        return exc.user_message
-    return USER_FACING_GENERATION_ERROR
+    """Return only classified, safe text to progress JSON."""
+    classified = exc if isinstance(exc, GenerationError) else classify_model_error(exc)
+    return classified.public_message
 
 
 # Thread pool for CPU-bound PDF generation tasks
@@ -164,21 +170,134 @@ def _log_generation_event(
     size_bytes: int | None = None,
     terminal_status: str = "running",
     error_code: str = "",
+    step: PipelineStep | None = None,
+    attempt: int | None = None,
+    service: str = "",
+    model: str = "",
+    external_status: int | None = None,
 ) -> None:
     request_id, job_id = _job_context(generation_id)
+    progress = get_progress(generation_id) or {}
+    summary = progress.get("request_summary") or {}
     duration_ms = round((time.perf_counter() - started_at) * 1000, 2) if started_at else None
     logger.info(
         "generation_event=%s request_id=%s job_id=%s artifact_id=%s duration_ms=%s "
-        "size_bytes=%s terminal_status=%s error_code=%s",
+        "size_bytes=%s step_name=%s attempt=%s model=%s service=%s error_code=%s "
+        "external_status=%s terminal_status=%s product=%s level=%s image_mode=%s topic_hash=%s",
         event,
         request_id,
         job_id,
         artifact_id or "-",
         duration_ms if duration_ms is not None else "-",
         size_bytes if size_bytes is not None else "-",
-        terminal_status,
+        step.name if step else progress.get("step_name", "-"),
+        attempt if attempt is not None else progress.get("attempt", "-"),
+        model or progress.get("model", "-"),
+        service or progress.get("service", "-"),
         error_code or "-",
+        external_status or "-",
+        terminal_status,
+        summary.get("product", "norsklæring"),
+        summary.get("level", "-"),
+        summary.get("image_mode", "-"),
+        summary.get("topic_hash", "-"),
     )
+
+
+def _error_payload(exc: Exception, step: PipelineStep) -> tuple[GenerationError, dict]:
+    classified = exc if isinstance(exc, GenerationError) else classify_model_error(exc)
+    return classified, {
+        "code": classified.code,
+        "message": classified.public_message,
+        "step_key": step.key,
+        "step_name": step.name,
+        "retryable": classified.retryable,
+        "external_status": classified.external_status,
+    }
+
+
+def _step_started(generation_id: str, step: PipelineStep, message: str) -> float:
+    _raise_if_cancelled(generation_id)
+    started = time.perf_counter()
+    update_progress(
+        generation_id,
+        step.number,
+        len(PIPELINE_STEPS),
+        f"{step.name}: {message}",
+        step_key=step.key,
+        step_name=step.name,
+        attempt=1,
+        service="google" if step.number <= 3 else "typst",
+        model=GOOGLE_MODEL if step.number <= 3 else "typst",
+    )
+    _log_generation_event("generation_step_started", generation_id, step=step, attempt=1)
+    return started
+
+
+def _step_completed(generation_id: str, step: PipelineStep, started_at: float) -> None:
+    _log_generation_event(
+        "generation_step_completed",
+        generation_id,
+        step=step,
+        attempt=1,
+        started_at=started_at,
+    )
+
+
+def _raise_if_cancelled(generation_id: str) -> None:
+    progress = get_progress(generation_id) or {}
+    if progress.get("job_status") == "cancelled":
+        raise GenerationCancelledError()
+    deadline = float(progress.get("deadline_at") or 0)
+    if deadline and time.time() > deadline:
+        raise ModelTimeoutError()
+
+
+def _request_summary(request: object) -> dict:
+    topic = str(getattr(request, "topic", ""))
+    level = str(getattr(request, "level", ""))
+    if not level and getattr(request, "levels", None):
+        level = ",".join(str(item) for item in getattr(request, "levels"))
+    return {
+        "product": "norsklæring",
+        "level": level,
+        "subject": str(getattr(request, "subject", "")),
+        "image_mode": normalize_image_mode(getattr(request, "image_mode", "none")),
+        "topic_hash": hashlib.sha256(topic.encode("utf-8")).hexdigest()[:12],
+    }
+
+
+def _initialize_generation_job(
+    http_request: Request,
+    payload: object,
+    *,
+    kind: str,
+    total_steps: int = 4,
+    message: str = "Starter generering …",
+) -> tuple[str, str, bool]:
+    """Create an idempotent job identity and its initial durable progress row."""
+
+    request_id = _request_id(http_request)
+    raw_key = (http_request.headers.get("idempotency-key") or "").strip()[:160]
+    if hasattr(payload, "model_dump_json"):
+        payload_json = payload.model_dump_json(exclude_none=False)
+    else:
+        payload_json = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    if raw_key:
+        digest = hashlib.sha256(f"{kind}|{raw_key}|{payload_json}".encode("utf-8")).hexdigest()
+        generation_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"skoleverksted:norsk:{digest}"))
+    else:
+        generation_id = str(uuid.uuid4())
+    created = initialize_progress_once(
+        generation_id,
+        total_steps,
+        message,
+        request_id=request_id,
+        request_summary=_request_summary(payload),
+    )
+    if created:
+        _log_generation_event("norsk_generation_started", generation_id)
+    return generation_id, request_id, created
 
 
 def _artifact_metadata(generation_id: str, artifact: ValidatedArtifact) -> dict:
@@ -289,23 +408,168 @@ def _publish_validated_artifact(
     return metadata
 
 
-def _mark_generation_failed(generation_id: str, exc: Exception, total_steps: int) -> None:
-    error_code = f"{type(exc).__name__.lower()}"
+def _mark_generation_failed(
+    generation_id: str,
+    exc: Exception,
+    total_steps: int,
+    *,
+    step: PipelineStep | None = None,
+) -> None:
+    current = get_progress(generation_id) or {}
+    if current.get("job_status") == "cancelled" or isinstance(exc, GenerationCancelledError):
+        cancel_generation_state(generation_id)
+        return
+    selected_step = step or STEP_BY_KEY.get(str(current.get("step_key"))) or PIPELINE_STEPS[0]
+    classified, error = _error_payload(exc, selected_step)
     update_progress(
         generation_id,
         -1,
         total_steps,
-        _public_progress_error(exc),
-        event_type="failed",
+        classified.public_message,
+        event_type="error",
         job_status="failed",
-        error_code=error_code,
+        error_code=classified.code,
+        step_key=selected_step.key,
+        step_name=selected_step.name,
+        error=error,
+    )
+    publish_event(
+        generation_id,
+        "error",
+        message=classified.public_message,
+        job_status="failed",
+        error_code=classified.code,
+        error=error,
+    )
+    _log_generation_event(
+        "generation_failed",
+        generation_id,
+        terminal_status="failed",
+        error_code=classified.code,
+        step=selected_step,
+        external_status=classified.external_status,
     )
     _log_generation_event(
         "terminal_event_sent",
         generation_id,
         terminal_status="failed",
-        error_code=error_code,
+        error_code=classified.code,
+        step=selected_step,
+        external_status=classified.external_status,
     )
+
+
+def cancel_generation_state(generation_id: str) -> dict:
+    """Idempotently put one job in the cancelled terminal state."""
+
+    current = get_progress(generation_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Generation task not found")
+    if current.get("job_status") == "cancelled":
+        return current
+    if current.get("job_status") in TERMINAL_STATUSES:
+        return current
+    message = "Genereringen ble avbrutt."
+    publish_event(
+        generation_id,
+        "cancelled",
+        message=message,
+        job_status="cancelled",
+        error_code="generation_cancelled",
+        error={
+            "code": "generation_cancelled",
+            "message": message,
+            "step_key": current.get("step_key"),
+            "step_name": current.get("step_name"),
+            "retryable": False,
+            "external_status": None,
+        },
+    )
+    merge_progress(generation_id, available_actions=["retry"])
+    _log_generation_event("generation_cancelled", generation_id, terminal_status="cancelled")
+    _log_generation_event("terminal_event_sent", generation_id, terminal_status="cancelled")
+    return get_progress(generation_id) or {}
+
+
+def _mark_image_action_required(generation_id: str, exc: ImageGenerationError) -> None:
+    step = STEP_BY_KEY["image_processing"]
+    classified, error = _error_payload(exc, step)
+    actions = [
+        "retry_image",
+        "continue_without_image",
+        "choose_commons",
+        "upload_image",
+        "cancel",
+    ]
+    update_progress(
+        generation_id,
+        step.number,
+        len(PIPELINE_STEPS),
+        classified.public_message,
+        event_type="user_action_required",
+        job_status="needs_user_action",
+        error_code=classified.code,
+        step_key=step.key,
+        step_name=step.name,
+        error=error,
+        available_actions=actions,
+    )
+    publish_event(
+        generation_id,
+        "user_action_required",
+        message=classified.public_message,
+        job_status="needs_user_action",
+        error_code=classified.code,
+        error=error,
+        available_actions=actions,
+    )
+    _log_generation_event(
+        "image_generation_failed",
+        generation_id,
+        terminal_status="needs_user_action",
+        error_code=classified.code,
+        step=step,
+    )
+    _log_generation_event(
+        "terminal_event_sent",
+        generation_id,
+        terminal_status="needs_user_action",
+        error_code=classified.code,
+        step=step,
+    )
+
+
+def _mark_teacher_review_required(generation_id: str, content: dict) -> None:
+    step = STEP_BY_KEY["quality_assurance"]
+    message = (
+        "Faktakontrollen krever lærerens gjennomgang. Kontroller Truth Passport, "
+        "karantene og det redigerbare innholdet før eksport."
+    )
+    current = get_progress(generation_id) or {}
+    merge_progress(
+        generation_id,
+        json_data=current.get("json_data") or content,
+        content_checkpoint=content,
+    )
+    update_progress(
+        generation_id,
+        step.number,
+        len(PIPELINE_STEPS),
+        message,
+        event_type="review_required",
+        job_status="needs_teacher_review",
+        step_key=step.key,
+        step_name=step.name,
+        available_actions=["open_teacher_review", "cancel"],
+    )
+    publish_event(
+        generation_id,
+        "review_required",
+        message=message,
+        job_status="needs_teacher_review",
+        available_actions=["open_teacher_review", "cancel"],
+    )
+    _log_generation_event("terminal_event_sent", generation_id, terminal_status="needs_teacher_review", step=step)
 
 
 def _log_download_failure(generation_id: str, error_code: str) -> None:
@@ -329,7 +593,24 @@ def _content_quality_document(content: dict) -> dict:
     }
 
 
-def _require_norsk_documents(progress: dict, export_id: str, *, teacher: bool) -> None:
+def _require_norsk_documents(
+    progress: dict,
+    export_id: str,
+    *,
+    teacher: bool,
+    preview: bool = False,
+) -> None:
+    """Enforce export approval without blocking teacher-facing previews.
+
+    A preview is deliberately allowed to show a validated artifact even when
+    the truth passport still needs review. The teacher must be able to inspect
+    that artifact before deciding what to change or approve. Final downloads
+    and the approval endpoint continue through the global export gate.
+    """
+
+    if preview:
+        return
+
     documents = progress.get("quality_documents") or []
     if not documents:
         raise HTTPException(status_code=409, detail="Eksportporten er lukket: kvalitetsdata mangler.")
@@ -420,9 +701,19 @@ def generate_lesson_background(
     """Background task to generate the lesson PDF."""
     processed_image_path = pre_processed_image_path
     try:
-        # Step 1: Generate lesson content using AI agents
-        update_progress(generation_id, 1, 4, "Skriver pedagogisk tekst...")
-        logger.info(f"Generating lesson: {request.topic} ({request.subject}, {request.level})")
+        content_step = STEP_BY_KEY["content_generation"]
+        quality_step = STEP_BY_KEY["quality_assurance"]
+        content_started = _step_started(generation_id, content_step, "skriver tekst og oppgaver")
+        request_id, _job_id = _job_context(generation_id)
+        quality_started: list[float] = []
+
+        def on_stage(stage_key: str) -> None:
+            if stage_key == "quality_assurance" and not quality_started:
+                _step_completed(generation_id, content_step, content_started)
+                quality_started.append(
+                    _step_started(generation_id, quality_step, "kontrollerer fakta, kilder og struktur")
+                )
+
         content = generate_lesson_content(
             topic=request.topic,
             subject=request.subject,
@@ -433,91 +724,154 @@ def generate_lesson_background(
             series=getattr(request, 'series', None),
             source_text=getattr(request, 'source_text', None),
             source_name=getattr(request, 'source_name', None),
+            on_stage=on_stage,
+            generation_context={"request_id": request_id, "job_id": generation_id},
         )
+        if not quality_started:
+            _step_completed(generation_id, content_step, content_started)
+            quality_started.append(
+                _step_started(generation_id, quality_step, "kontrollerer cached eller ferdig modellinnhold")
+            )
+        _step_completed(generation_id, quality_step, quality_started[0])
 
-        # Step 2: Process the image (skip if caller already provided a local path)
-        image_mode = normalize_image_mode(getattr(request, "image_mode", "none"))
-        update_progress(
+        merge_progress(
             generation_id,
-            2,
-            4,
-            (
-                "Bildecrewet planlegger og kvalitetssikrer ett pedagogisk bilde..."
-                if image_mode != "none" and not pre_processed_image_path
-                else "Behandler bildevalg..."
-            ),
+            content_checkpoint=content,
+            request_checkpoint=request.model_dump(mode="json"),
+            quality_documents=[_content_quality_document(content)],
         )
-        processed_image_path, image_asset, image_caption, image_credit = _materialize_pedagogical_image(
+        if (content.get("truth_passport") or {}).get("status") != "verified":
+            _mark_teacher_review_required(generation_id, content)
+            return
+
+        processed_image_path = _complete_lesson_from_content(
+            generation_id,
             request,
             content,
             pre_processed_image_path=pre_processed_image_path,
         )
 
-        # Step 3: Create PDF from the generated content
-        update_progress(
-            generation_id,
-            3,
-            4,
-            "Bygger og kontrollerer PDF …",
-            event_type="artifact_building",
-        )
-        _log_generation_event("pdf_build_started", generation_id)
-        pdf_started_at = time.perf_counter()
-        pdf_bytes = create_lesson_pdf(
-            content_text=content["text"],
-            worksheet_text=content["worksheet"],
-            topic=request.topic,
-            level=request.level,
-            subject=request.subject,
-            image_path=processed_image_path,
-            image_caption=image_caption,
-            image_credit=image_credit,
-            language_exercises=content.get("language_exercises"),
-            options=request.options,
-            teacher_key_content=content.get("teacher_key_content", ""),
-            series_header=content.get("series_header", ""),
-            accessibility=getattr(request, 'accessibility', None),
-        )
-        _log_generation_event(
-            "pdf_build_completed",
-            generation_id,
-            started_at=pdf_started_at,
-            size_bytes=len(pdf_bytes),
-        )
-        _log_generation_event("pdf_validation_started", generation_id, size_bytes=len(pdf_bytes))
-        validated = validate_pdf_artifact(pdf_bytes, _safe_filename(request.topic) + ".pdf")
-        _log_generation_event(
-            "pdf_validation_completed",
-            generation_id,
-            size_bytes=validated.size_bytes,
-        )
-
-        # Step 4: Store PDF bytes in progress for retrieval
-        image_warning = (
-            " Ingen tilstrekkelig relevant og fritt tilgjengelig bilde ble funnet. "
-            "PDF-en er laget uten bilde; prøv Commons-søket på nytt, velg KI-illustrasjon "
-            "eller last opp et eget bilde."
-            if image_mode != "none" and not processed_image_path
-            else ""
-        )
-        _publish_validated_artifact(
-            generation_id,
-            validated,
-            payload_key="pdf_bytes",
-            total_steps=4,
-            quality_documents=[_content_quality_document(content)],
-            ready_message=(
-                "PDF-en er bygget, validert og lagret. PDF klar for nedlasting."
-                + image_warning
-            ),
-        )
-
-        logger.info("PDF generated successfully: %s (%s bytes)", validated.filename, validated.size_bytes)
-
     except Exception as e:
         _mark_generation_failed(generation_id, e, 4)
     finally:
         _cleanup_image(processed_image_path)
+
+
+def _complete_lesson_from_content(
+    generation_id: str,
+    request: "LessonRequest",
+    content: dict,
+    *,
+    pre_processed_image_path: str | None = None,
+) -> str | None:
+    """Run only image + verified-document stages from a safe text checkpoint."""
+
+    image_step = STEP_BY_KEY["image_processing"]
+    image_started = _step_started(generation_id, image_step, "behandler lærerens bildevalg")
+    image_mode = normalize_image_mode(getattr(request, "image_mode", "none"))
+    if image_mode != "none" and not pre_processed_image_path:
+        _log_generation_event(
+            "image_generation_started",
+            generation_id,
+            step=image_step,
+            service="google" if image_mode == "ai" else "wikimedia",
+        )
+    processed_image_path, image_asset, image_caption, image_credit = _materialize_pedagogical_image(
+        request,
+        content,
+        pre_processed_image_path=pre_processed_image_path,
+    )
+    if (image_mode != "none" or pre_processed_image_path) and not processed_image_path:
+        _mark_image_action_required(generation_id, ImageGenerationError())
+        return None
+    _step_completed(generation_id, image_step, image_started)
+    if processed_image_path:
+        _log_generation_event(
+            "image_generation_completed",
+            generation_id,
+            step=image_step,
+            service=(image_asset.source if image_asset else "teacher_upload"),
+        )
+
+    document_step = STEP_BY_KEY["document_build"]
+    document_started = _step_started(generation_id, document_step, "bygger, validerer og lagrer PDF")
+    update_progress(
+        generation_id,
+        document_step.number,
+        len(PIPELINE_STEPS),
+        f"{document_step.name}: bygger og kontrollerer PDF",
+        event_type="artifact_building",
+        step_key=document_step.key,
+        step_name=document_step.name,
+        service="typst",
+        model="typst",
+    )
+    _log_generation_event("pdf_build_started", generation_id, step=document_step)
+    pdf_started_at = time.perf_counter()
+    pdf_bytes = create_lesson_pdf(
+        content_text=content["text"],
+        worksheet_text=content["worksheet"],
+        topic=request.topic,
+        level=request.level,
+        subject=request.subject,
+        image_path=processed_image_path,
+        image_caption=image_caption,
+        image_credit=image_credit,
+        language_exercises=content.get("language_exercises"),
+        options=request.options,
+        teacher_key_content=content.get("teacher_key_content", ""),
+        series_header=content.get("series_header", ""),
+        accessibility=getattr(request, 'accessibility', None),
+    )
+    _log_generation_event(
+        "pdf_build_completed", generation_id, started_at=pdf_started_at,
+        size_bytes=len(pdf_bytes), step=document_step,
+    )
+    _log_generation_event("pdf_validation_started", generation_id, size_bytes=len(pdf_bytes), step=document_step)
+    validated = validate_pdf_artifact(pdf_bytes, _safe_filename(request.topic) + ".pdf")
+    _log_generation_event("pdf_validation_completed", generation_id, size_bytes=validated.size_bytes, step=document_step)
+    _publish_validated_artifact(
+        generation_id,
+        validated,
+        payload_key="pdf_bytes",
+        total_steps=len(PIPELINE_STEPS),
+        quality_documents=[_content_quality_document(content)],
+        ready_message="PDF-en er bygget, validert og lagret. PDF klar for nedlasting.",
+    )
+    _step_completed(generation_id, document_step, document_started)
+    _log_generation_event("generation_completed", generation_id, terminal_status="completed", step=document_step)
+    return processed_image_path
+
+
+def resume_lesson_from_checkpoint_background(
+    generation_id: str,
+    image_mode: Literal["none", "commons", "ai"],
+    pre_processed_image_path: str | None = None,
+) -> None:
+    """Retry only image/document work; the approved text is never regenerated."""
+
+    processed_path = pre_processed_image_path
+    try:
+        progress = get_progress(generation_id) or {}
+        content = progress.get("content_checkpoint")
+        request_data = progress.get("request_checkpoint")
+        if not isinstance(content, dict) or not isinstance(request_data, dict):
+            raise RuntimeError("generation_checkpoint_missing")
+        request = LessonRequest(**request_data)
+        request.image_mode = image_mode
+        update_progress(
+            generation_id, 2, len(PIPELINE_STEPS), "Gjenopptar fra kontrollert tekst …",
+            job_status="running", step_key="quality_assurance",
+            step_name=STEP_BY_KEY["quality_assurance"].name,
+        )
+        merge_progress(generation_id, terminal_status="", error={}, available_actions=[])
+        processed_path = _complete_lesson_from_content(
+            generation_id, request, content, pre_processed_image_path=pre_processed_image_path,
+        )
+    except Exception as exc:
+        _mark_generation_failed(generation_id, exc, len(PIPELINE_STEPS))
+    finally:
+        _cleanup_image(processed_path)
 
 
 limiter = Limiter(key_func=get_remote_address, default_limits=[RATE_LIMIT_PER_MINUTE])
@@ -777,6 +1131,65 @@ async def auth_verify(body: PasswordVerifyBody):
 # Progress / download endpoints
 # ---------------------------------------------------------------------------
 
+
+def _expire_stale_generation(generation_id: str) -> dict | None:
+    progress = get_progress(generation_id)
+    if not progress:
+        return None
+    if (
+        progress.get("job_status") not in TERMINAL_STATUSES
+        and float(progress.get("deadline_at") or 0)
+        and time.time() > float(progress["deadline_at"])
+    ):
+        step = STEP_BY_KEY.get(str(progress.get("step_key"))) or PIPELINE_STEPS[0]
+        _mark_generation_failed(generation_id, ModelTimeoutError(), len(PIPELINE_STEPS), step=step)
+        return get_progress(generation_id)
+    return progress
+
+
+def iter_generation_events(
+    generation_id: str,
+    *,
+    after: int = 0,
+    wait_timeout: float | None = None,
+):
+    """Yield ordered events and guarantee a terminal event before closing."""
+
+    cursor = max(0, int(after))
+    started = time.monotonic()
+    maximum_wait = float(wait_timeout if wait_timeout is not None else GENERATION_MAX_SECONDS + 5)
+    while True:
+        progress = _expire_stale_generation(generation_id)
+        if progress is None:
+            raise HTTPException(status_code=404, detail="Generation task not found")
+        events = list_events(generation_id, after=cursor)
+        for event in events:
+            cursor += 1
+            yield event
+        if progress.get("job_status") in TERMINAL_STATUSES:
+            return
+        if time.monotonic() - started >= maximum_wait:
+            step = STEP_BY_KEY.get(str(progress.get("step_key"))) or PIPELINE_STEPS[0]
+            _mark_generation_failed(generation_id, ModelTimeoutError(), len(PIPELINE_STEPS), step=step)
+            continue
+        time.sleep(0.25)
+
+
+@app.get("/generation-stream/{generation_id}")
+def generation_stream(generation_id: str, _auth: AuthPasswordDep, after: int = 0):
+    """SSE recovery stream with one explicit terminal lifecycle event."""
+
+    def stream():
+        for event in iter_generation_events(generation_id, after=after):
+            event_type = str(event.get("type") or "progress")
+            yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 @app.get("/generation-status/{generation_id}")
 def get_generation_status(generation_id: str, _auth: AuthPasswordDep):
     """
@@ -792,7 +1205,157 @@ def get_generation_status(generation_id: str, _auth: AuthPasswordDep):
     return {
         k: v
         for k, v in progress.items()
-        if not isinstance(v, bytes) and k not in {"quality_documents", "json_data"}
+        if not isinstance(v, bytes)
+        and k not in {
+            "quality_documents",
+            "json_data",
+            "content_checkpoint",
+            "request_checkpoint",
+        }
+    }
+
+
+@app.post("/generation/{generation_id}/cancel")
+def cancel_generation(generation_id: str, _auth: AuthPasswordDep):
+    try:
+        get_durable_job_queue().cancel(generation_id)
+    except Exception:
+        logger.info("Køen hadde ingen aktiv reservasjon ved avbrytelse job_id=%s", generation_id)
+    state = cancel_generation_state(generation_id)
+    return {
+        "generation_id": generation_id,
+        "request_id": state.get("request_id"),
+        "status": state.get("job_status"),
+        "event_type": state.get("event_type"),
+    }
+
+
+class ImageRetryRequest(BaseModel):
+    image_mode: Literal["none", "commons", "ai"]
+
+
+@app.post("/generation/{generation_id}/image/retry")
+def retry_generation_image(
+    generation_id: str,
+    body: ImageRetryRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    _auth: AuthPasswordDep,
+):
+    """Create an idempotent child job from the approved text checkpoint."""
+
+    parent = get_progress(generation_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="Generation task not found")
+    if parent.get("job_status") != "needs_user_action":
+        raise HTTPException(status_code=409, detail="Jobben venter ikke på et bildevalg.")
+    if not isinstance(parent.get("content_checkpoint"), dict):
+        raise HTTPException(status_code=409, detail="Kontrollert tekst-checkpoint mangler.")
+    payload = {"parent_job_id": generation_id, "image_mode": body.image_mode}
+    child_id, request_id, created = _initialize_generation_job(
+        request, payload, kind="image_retry", message="Gjenopptar fra kontrollert tekst …"
+    )
+    if created:
+        merge_progress(
+            child_id,
+            parent_job_id=generation_id,
+            content_checkpoint=parent["content_checkpoint"],
+            request_checkpoint=parent.get("request_checkpoint"),
+            quality_documents=parent.get("quality_documents"),
+            request_summary={
+                **(parent.get("request_summary") or {}),
+                "image_mode": body.image_mode,
+            },
+        )
+        background_tasks.add_task(
+            _run_durable_fov_job,
+            child_id,
+            "image_retry",
+            payload,
+            None,
+            resume_lesson_from_checkpoint_background,
+            child_id,
+            body.image_mode,
+        )
+    return {
+        "generation_id": child_id,
+        "request_id": request_id,
+        "parent_job_id": generation_id,
+        "replayed": not created,
+    }
+
+
+@app.post("/generation/{generation_id}/image/upload")
+async def upload_generation_image(
+    generation_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    _auth: AuthPasswordDep,
+    image: UploadFile = File(...),
+):
+    """Resume from the text checkpoint with a teacher-provided image."""
+
+    parent = get_progress(generation_id)
+    if not parent or parent.get("job_status") != "needs_user_action":
+        raise HTTPException(status_code=409, detail="Jobben venter ikke på et bildevalg.")
+    content_type = image.content_type or ""
+    if content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=415, detail="Bruk JPEG, PNG eller WebP.")
+    image_data = await image.read()
+    if not image_data or len(image_data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Bildet er tomt eller større enn 5 MB.")
+    suffix = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[content_type]
+    handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        handle.write(image_data)
+        raw_path = handle.name
+    finally:
+        handle.close()
+    try:
+        processed_path = image_processor.process_image_from_path(raw_path)
+    finally:
+        try:
+            os.unlink(raw_path)
+        except OSError:
+            pass
+    if not processed_path:
+        raise HTTPException(status_code=422, detail="Bildet kunne ikke behandles.")
+
+    payload = {
+        "parent_job_id": generation_id,
+        "image_mode": "upload",
+        "image_digest": hashlib.sha256(image_data).hexdigest(),
+    }
+    child_id, request_id, created = _initialize_generation_job(
+        request, payload, kind="image_upload", message="Gjenopptar med opplastet bilde …"
+    )
+    if created:
+        merge_progress(
+            child_id,
+            parent_job_id=generation_id,
+            content_checkpoint=parent.get("content_checkpoint"),
+            request_checkpoint=parent.get("request_checkpoint"),
+            quality_documents=parent.get("quality_documents"),
+            request_summary={**(parent.get("request_summary") or {}), "image_mode": "upload"},
+        )
+        background_tasks.add_task(
+            _run_durable_fov_job,
+            child_id,
+            "image_upload",
+            payload,
+            None,
+            resume_lesson_from_checkpoint_background,
+            child_id,
+            "none",
+            processed_path,
+        )
+    else:
+        _cleanup_image(processed_path)
+    return {
+        "generation_id": child_id,
+        "request_id": request_id,
+        "parent_job_id": generation_id,
+        "replayed": not created,
     }
 
 
@@ -804,7 +1367,7 @@ def download_pdf(generation_id: str, _auth: AuthPasswordDep, preview: bool = Fal
     Returns:
         PDF file download
     """
-    progress = get_progress(generation_id)
+    progress = _expire_stale_generation(generation_id)
     if progress is None:
         _log_download_failure(generation_id, "generation_not_found")
         raise HTTPException(status_code=404, detail="Generation task not found")
@@ -813,7 +1376,7 @@ def download_pdf(generation_id: str, _auth: AuthPasswordDep, preview: bool = Fal
         _log_download_failure(generation_id, "pdf_not_ready")
         raise HTTPException(status_code=202, detail="PDF not ready yet")
     try:
-        _require_norsk_documents(progress, "norsk.pdf", teacher=not preview)
+        _require_norsk_documents(progress, "norsk.pdf", teacher=not preview, preview=preview)
     except HTTPException:
         _log_download_failure(generation_id, "quality_gate_blocked")
         raise
@@ -869,7 +1432,7 @@ def download_zip(generation_id: str, _auth: AuthPasswordDep, preview: bool = Fal
         _log_download_failure(generation_id, "zip_not_ready")
         raise HTTPException(status_code=202, detail="ZIP not ready yet")
     try:
-        _require_norsk_documents(progress, "norsk.zip", teacher=not preview)
+        _require_norsk_documents(progress, "norsk.zip", teacher=not preview, preview=preview)
     except HTTPException:
         _log_download_failure(generation_id, "quality_gate_blocked")
         raise
@@ -951,7 +1514,7 @@ def _run_durable_fov_job(
         progress = get_progress(generation_id) or {}
         if progress.get("job_status") == "failed" or int(progress.get("step", 0)) < 0:
             queue.fail(generation_id, str(progress.get("message") or "Genereringen feilet"))
-        elif progress.get("job_status") in {"completed", "needs_teacher_review", "cancelled"}:
+        elif progress.get("job_status") in {"completed", "needs_teacher_review", "needs_user_action", "cancelled"}:
             queue.finish(generation_id)
         else:
             _mark_generation_failed(
@@ -962,7 +1525,7 @@ def _run_durable_fov_job(
             queue.fail(generation_id, "Genereringen avsluttet uten terminalstatus")
     except Exception as exc:
         progress = get_progress(generation_id) or {}
-        if progress.get("job_status") not in {"completed", "needs_teacher_review", "failed", "cancelled"}:
+        if progress.get("job_status") not in {"completed", "needs_teacher_review", "needs_user_action", "failed", "cancelled"}:
             _mark_generation_failed(generation_id, exc, int(progress.get("total_steps") or 4))
         if queue is not None:
             try:
@@ -984,20 +1547,17 @@ async def generate_lesson(
     Returns:
         JSON with generation_id for tracking progress via /generation-status/{id}
     """
-    generation_id = str(uuid.uuid4())
-    initialize_progress(
-        generation_id,
-        4,
-        "Starter generering...",
-        request_id=_request_id(request),
+    generation_id, request_id, created = _initialize_generation_job(
+        request, lesson_request, kind="lesson", message="Starter generering …"
     )
-    background_tasks.add_task(
-        _run_durable_fov_job,
-        generation_id, "lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_background,
-        generation_id, lesson_request,
-    )
+    if created:
+        background_tasks.add_task(
+            _run_durable_fov_job,
+            generation_id, "lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_background,
+            generation_id, lesson_request,
+        )
 
-    return {"generation_id": generation_id}
+    return {"generation_id": generation_id, "request_id": request_id, "replayed": not created}
 
 
 def generate_lesson_json_background(
@@ -1006,8 +1566,17 @@ def generate_lesson_json_background(
 ):
     """Background task to generate JSON preview."""
     try:
-        update_progress(generation_id, 1, 3, "Skriver pedagogisk tekst...")
-        
+        content_step = STEP_BY_KEY["content_generation"]
+        quality_step = STEP_BY_KEY["quality_assurance"]
+        content_started = _step_started(generation_id, content_step, "skriver tekst og oppgaver")
+        request_id, _job_id = _job_context(generation_id)
+        quality_started: list[float] = []
+
+        def on_stage(stage_key: str) -> None:
+            if stage_key == "quality_assurance" and not quality_started:
+                _step_completed(generation_id, content_step, content_started)
+                quality_started.append(_step_started(generation_id, quality_step, "kontrollerer innholdet"))
+
         content = generate_lesson_content(
             topic=lesson_request.topic,
             subject=lesson_request.subject,
@@ -1018,17 +1587,20 @@ def generate_lesson_json_background(
             series=lesson_request.series,
             source_text=lesson_request.source_text,
             source_name=lesson_request.source_name,
+            on_stage=on_stage,
+            generation_context={"request_id": request_id, "job_id": generation_id},
         )
-        
+        if not quality_started:
+            _step_completed(generation_id, content_step, content_started)
+            quality_started.append(_step_started(generation_id, quality_step, "kontrollerer cached innhold"))
+        _step_completed(generation_id, quality_step, quality_started[0])
+
         image_candidates: list[dict] = []
         selected_candidate: Optional[dict] = None
+        image_step = STEP_BY_KEY["image_processing"]
+        image_started = _step_started(generation_id, image_step, "avklarer bildevalg for forhåndsvisning")
         if normalize_image_mode(lesson_request.image_mode) == "commons":
-            update_progress(
-                generation_id,
-                2,
-                3,
-                "Bildecrewet finner og rangerer frie bildeforslag...",
-            )
+            _log_generation_event("image_generation_started", generation_id, step=image_step, service="wikimedia")
             image_candidates = discover_commons_images(
                 topic=lesson_request.topic,
                 subject=lesson_request.subject,
@@ -1043,6 +1615,7 @@ def generate_lesson_json_background(
                 ),
                 None,
             )
+        _step_completed(generation_id, image_step, image_started)
 
         merge_progress(
             generation_id,
@@ -1077,12 +1650,23 @@ def generate_lesson_json_background(
                 "quality_stop_reason": content.get("quality_stop_reason", ""),
                 "prompt_version": content.get("prompt_version"),
             },
+            content_checkpoint=content,
+            request_checkpoint=lesson_request.model_dump(mode="json"),
             quality_documents=[_content_quality_document(content)],
         )
+        if (content.get("truth_passport") or {}).get("status") != "verified":
+            _mark_teacher_review_required(generation_id, content)
+            return
         # Publish the completed step only after json_data is persisted. This
         # prevents clients from observing "ready" in the tiny interval before
         # the preview payload exists.
-        update_progress(generation_id, 3, 3, "Forhåndsvisning er kontrollert.", event_type="progress")
+        document_step = STEP_BY_KEY["document_build"]
+        update_progress(
+            generation_id, document_step.number, len(PIPELINE_STEPS),
+            f"{document_step.name}: forhåndsvisningen er kontrollert",
+            event_type="progress", job_status="completed",
+            step_key=document_step.key, step_name=document_step.name,
+        )
         publish_event(
             generation_id,
             "done",
@@ -1092,7 +1676,7 @@ def generate_lesson_json_background(
         _log_generation_event("terminal_event_sent", generation_id, terminal_status="completed")
 
     except Exception as e:
-        _mark_generation_failed(generation_id, e, 3)
+        _mark_generation_failed(generation_id, e, len(PIPELINE_STEPS))
 
 @app.post("/generate-lesson-json")
 @limiter.limit("5/minute")
@@ -1108,20 +1692,17 @@ async def generate_lesson_json(
     Returns:
         JSON with generation_id for tracking progress via /generation-status/{id}
     """
-    generation_id = str(uuid.uuid4())
-    initialize_progress(
-        generation_id,
-        3,
-        "Starter forhåndsvisning...",
-        request_id=_request_id(request),
+    generation_id, request_id, created = _initialize_generation_job(
+        request, lesson_request, kind="preview", message="Starter forhåndsvisning …"
     )
-    background_tasks.add_task(
-        _run_durable_fov_job,
-        generation_id, "preview", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_json_background,
-        generation_id, lesson_request,
-    )
+    if created:
+        background_tasks.add_task(
+            _run_durable_fov_job,
+            generation_id, "preview", lesson_request, request.headers.get("X-Skoleverksted-Project"), generate_lesson_json_background,
+            generation_id, lesson_request,
+        )
 
-    return {"generation_id": generation_id}
+    return {"generation_id": generation_id, "request_id": request_id, "replayed": not created}
 
 @app.get("/download-json/{generation_id}", response_model=LessonResponse)
 def download_json(generation_id: str, _auth: AuthPasswordDep):
@@ -1130,7 +1711,11 @@ def download_json(generation_id: str, _auth: AuthPasswordDep):
     if progress is None:
         raise HTTPException(status_code=404, detail="Generation task not found")
 
-    if not is_json_preview_ready(progress):
+    review_ready = (
+        progress.get("job_status") == "needs_teacher_review"
+        and isinstance(progress.get("json_data"), dict)
+    )
+    if not is_json_preview_ready(progress) and not review_ready:
         raise HTTPException(status_code=202, detail="JSON not ready yet")
 
     json_data = progress.get("json_data")
@@ -1266,20 +1851,17 @@ async def generate_pdf_from_json(
     _auth: AuthPasswordDep,
 ):
     """Generate PDF directly from preview content."""
-    generation_id = str(uuid.uuid4())
-    initialize_progress(
-        generation_id,
-        3,
-        "Starter PDF-generering...",
-        request_id=_request_id(request),
+    generation_id, request_id, created = _initialize_generation_job(
+        request, preview_request, kind="preview_pdf", message="Starter PDF-generering …"
     )
-    background_tasks.add_task(
-        _run_durable_fov_job,
-        generation_id, "preview_pdf", preview_request, request.headers.get("X-Skoleverksted-Project"), generate_pdf_from_json_background,
-        generation_id, preview_request,
-    )
-    
-    return {"generation_id": generation_id}
+    if created:
+        background_tasks.add_task(
+            _run_durable_fov_job,
+            generation_id, "preview_pdf", preview_request, request.headers.get("X-Skoleverksted-Project"), generate_pdf_from_json_background,
+            generation_id, preview_request,
+        )
+
+    return {"generation_id": generation_id, "request_id": request_id, "replayed": not created}
 
 # ---------------------------------------------------------------------------
 # #3 Dual-version generation
@@ -1428,20 +2010,17 @@ async def generate_dual_lesson(
 
     Returns a generation_id; poll /generation-status/{id} then download the ZIP from /download-zip/{id}.
     """
-    generation_id = str(uuid.uuid4())
-    initialize_progress(
-        generation_id,
-        4,
-        "Starter dual generering...",
-        request_id=_request_id(request),
+    generation_id, request_id, created = _initialize_generation_job(
+        request, lesson_request, kind="dual_lesson", message="Starter nabonivå-generering …"
     )
-    background_tasks.add_task(
-        _run_durable_fov_job,
-        generation_id, "dual_lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), _generate_dual_background,
-        generation_id, lesson_request,
-    )
+    if created:
+        background_tasks.add_task(
+            _run_durable_fov_job,
+            generation_id, "dual_lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), _generate_dual_background,
+            generation_id, lesson_request,
+        )
 
-    return {"generation_id": generation_id, "dual": True}
+    return {"generation_id": generation_id, "request_id": request_id, "dual": True, "replayed": not created}
 
 
 def _generate_multi_level_background(generation_id: str, lesson_req: "MultiLevelLessonRequest"):
@@ -1521,20 +2100,17 @@ async def generate_multi_lesson(
 
     Returns generation_id; poll /generation-status/{id} then download ZIP from /download-zip/{id}.
     """
-    generation_id = str(uuid.uuid4())
-    initialize_progress(
-        generation_id,
-        4,
-        "Starter flernivå-generering...",
-        request_id=_request_id(request),
+    generation_id, request_id, created = _initialize_generation_job(
+        request, lesson_request, kind="multi_lesson", message="Starter flernivå-generering …"
     )
-    background_tasks.add_task(
-        _run_durable_fov_job,
-        generation_id, "multi_lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), _generate_multi_level_background,
-        generation_id, lesson_request,
-    )
+    if created:
+        background_tasks.add_task(
+            _run_durable_fov_job,
+            generation_id, "multi_lesson", lesson_request, request.headers.get("X-Skoleverksted-Project"), _generate_multi_level_background,
+            generation_id, lesson_request,
+        )
 
-    return {"generation_id": generation_id, "zip_download": True}
+    return {"generation_id": generation_id, "request_id": request_id, "zip_download": True, "replayed": not created}
 
 
 # ---------------------------------------------------------------------------
@@ -1659,28 +2235,31 @@ async def generate_lesson_with_image(
         source_name=source_name,
     )
 
-    generation_id = str(uuid.uuid4())
-    initialize_progress(
+    generation_id, request_id, created = _initialize_generation_job(
+        request, lesson_request, kind="lesson_with_image", message="Starter generering med opplastet bilde …"
+    )
+    merge_progress(
         generation_id,
-        4,
-        "Starter generering med opplastet bilde...",
-        request_id=_request_id(request),
+        request_summary={**_request_summary(lesson_request), "image_mode": "upload"},
     )
 
     # Pass the pre-processed image path so background task skips URL download
-    background_tasks.add_task(
-        _run_durable_fov_job,
-        generation_id,
-        "lesson_with_image",
-        lesson_request,
-        request.headers.get("X-Skoleverksted-Project"),
-        generate_lesson_background,
-        generation_id,
-        lesson_request,
-        processed_image_path,
-    )
+    if created:
+        background_tasks.add_task(
+            _run_durable_fov_job,
+            generation_id,
+            "lesson_with_image",
+            lesson_request,
+            request.headers.get("X-Skoleverksted-Project"),
+            generate_lesson_background,
+            generation_id,
+            lesson_request,
+            processed_image_path,
+        )
+    else:
+        _cleanup_image(processed_image_path)
 
-    return {"generation_id": generation_id, "custom_image": True}
+    return {"generation_id": generation_id, "request_id": request_id, "custom_image": True, "replayed": not created}
 
 
 # ---------------------------------------------------------------------------
