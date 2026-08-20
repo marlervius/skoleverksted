@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Download, Sparkles } from "lucide-react";
+import { AlertCircle, Download, ShieldAlert, Sparkles } from "lucide-react";
 import type { Status } from "../lib/fovTypes";
 
 interface ProgressState {
@@ -84,6 +84,33 @@ export function GenerationStatus({
               className="text-red-700 text-sm mt-2 hover:text-red-800 underline focus:outline-none focus:ring-2 focus:ring-red-300 rounded"
             >
               Prøv igjen
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "needs_teacher_review") {
+    return (
+      <div
+        className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-lg"
+        role="alert"
+        aria-live="assertive"
+      >
+        <div className="flex items-start gap-3">
+          <div className="p-2 bg-amber-100 rounded-md">
+            <ShieldAlert className="w-5 h-5 text-amber-700" aria-hidden="true" />
+          </div>
+          <div>
+            <p className="text-amber-900 font-medium">Lærergjennomgang kreves</p>
+            <p className="text-amber-800 text-sm mt-1">{errorMessage}</p>
+            <button
+              type="button"
+              onClick={onDismissError}
+              className="text-amber-900 text-sm mt-2 hover:text-amber-950 underline focus:outline-none focus:ring-2 focus:ring-amber-300 rounded"
+            >
+              Tilbake til redigering
             </button>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import io
+from types import SimpleNamespace
 
 import pytest
 from pypdf import PdfReader
@@ -90,5 +91,54 @@ def test_preview_download_is_available_before_final_quality_approval():
         with pytest.raises(main.HTTPException) as blocked:
             main.download_pdf(job_id, None)
         assert blocked.value.status_code == 409
+    finally:
+        clear_progress(job_id)
+
+
+def test_preview_pdf_finishes_as_review_required_when_quality_gate_is_not_green(monkeypatch):
+    job_id = "norsk-preview-review-required"
+    clear_progress(job_id)
+    initialize_progress(job_id, 3, "Starter", request_id="request-review")
+
+    class FakePassport:
+        total_claims = 3
+        verified_claims = 0
+
+        def model_dump(self, mode="json"):
+            return {
+                "status": "source_unavailable",
+                "total_claims": self.total_claims,
+                "verified_claims": self.verified_claims,
+            }
+
+    quality = SimpleNamespace(
+        source_approved=False,
+        quality_status="needs_teacher_review",
+        approved_content="Kontrollert innhold",
+        passport=FakePassport(),
+        quarantine=[],
+        rounds=[],
+        stop_reason="truth_layer_unresolved_claims",
+    )
+    monkeypatch.setattr(main, "run_quality_pipeline", lambda **_kwargs: quality)
+
+    try:
+        request = main.PreviewPDFRequest(
+            topic="Arbeidsliv",
+            subject="Norsk",
+            level="A2.1",
+            text="Kontrollert tekst.",
+            worksheet="a) Oppgave",
+            options={"grammar_tasks": True},
+        )
+        main.generate_pdf_from_json_background(job_id, request)
+
+        state = main.get_progress(job_id)
+        assert state["job_status"] == "needs_teacher_review"
+        assert state["status"] == "needs_teacher_review"
+        assert state["step"] == 3
+        assert "Lærergjennomgang kreves" in state["message"]
+        assert "pdf_bytes" not in state
+        assert state["last_event"]["type"] == "review_required"
     finally:
         clear_progress(job_id)

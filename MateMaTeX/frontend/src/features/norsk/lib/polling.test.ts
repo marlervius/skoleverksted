@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isProgressComplete, nextPollDelayMs, progressErrorMessage } from "./polling";
+import {
+  isProgressComplete,
+  nextPollDelayMs,
+  progressErrorMessage,
+  progressReviewMessage,
+} from "./polling";
 
 describe("preview polling", () => {
   it("does not treat an intermediate image-search step as complete", () => {
@@ -36,5 +41,17 @@ describe("preview polling", () => {
         message: "Skriver pedagogisk tekst...",
       }),
     ).toBeNull();
+  });
+
+  it("surfaces review-required terminal jobs separately from failures", () => {
+    expect(
+      progressReviewMessage({
+        step: 3,
+        total_steps: 3,
+        job_status: "needs_teacher_review",
+        message: "Lærergjennomgang kreves før PDF kan godkjennes.",
+      }),
+    ).toBe("Lærergjennomgang kreves før PDF kan godkjennes.");
+    expect(progressErrorMessage({ job_status: "needs_teacher_review", step: 3 })).toBeNull();
   });
 });

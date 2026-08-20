@@ -1166,6 +1166,7 @@ def generate_pdf_from_json_background(
     try:
         separator = "\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n"
         language_separator = "\n\n<<<SKOLEVERKSTED_SPRÅKOPPGAVER>>>\n\n"
+        request_id = str((get_progress(generation_id) or {}).get("request_id") or "")
         quality = run_quality_pipeline(
             generator_id="norsk.preview_pdf",
             content=(
@@ -1175,9 +1176,61 @@ def generate_pdf_from_json_background(
             topic=request.topic,
             subject=request.subject,
             level=request.level,
+            request_id=request_id,
         )
         if not quality.source_approved:
-            raise ValueError("PDF-en ble blokkert av den globale kvalitetskontrollen.")
+            quality_document = {
+                "content": quality.approved_content,
+                "truth_passport": quality.passport.model_dump(mode="json"),
+                "quarantine": [item.model_dump(mode="json") for item in quality.quarantine],
+                "quality_rounds": [item.model_dump(mode="json") for item in quality.rounds],
+                "quality_stop_reason": quality.stop_reason,
+                "teacher_approved_at": None,
+                "approved_digest": "",
+            }
+            unresolved = max(
+                0,
+                int(quality.passport.total_claims or 0)
+                - int(quality.passport.verified_claims or 0),
+            )
+            claim_text = (
+                f" Kvalitetskontrollen fant {unresolved} påstand(er) uten godkjent kilde."
+                if unresolved
+                else " Kvalitetskontrollen fant innhold som må vurderes av lærer."
+            )
+            review_message = (
+                "Lærergjennomgang kreves før PDF kan godkjennes."
+                + claim_text
+                + " Legg inn kildetekst eller rediger innholdet, og prøv igjen."
+            )
+            merge_progress(
+                generation_id,
+                quality_documents=[quality_document],
+                quality_status=quality.quality_status,
+                quality_stop_reason=quality.stop_reason,
+                review_required=True,
+            )
+            update_progress(
+                generation_id,
+                3,
+                3,
+                review_message,
+                event_type="review_required",
+                job_status="needs_teacher_review",
+            )
+            publish_event(
+                generation_id,
+                "review_required",
+                message=review_message,
+                job_status="needs_teacher_review",
+            )
+            _log_generation_event(
+                "terminal_event_sent",
+                generation_id,
+                terminal_status="needs_teacher_review",
+                error_code="quality_gate_review_required",
+            )
+            return
         try:
             request.text, remainder = quality.approved_content.split(separator, 1)
             request.worksheet, language_payload = remainder.split(language_separator, 1)

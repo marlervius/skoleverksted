@@ -49,7 +49,12 @@ import type {
   SeriesState,
   Status,
 } from "../lib/fovTypes";
-import { isProgressComplete, nextPollDelayMs, progressErrorMessage } from "../lib/polling";
+import {
+  isProgressComplete,
+  nextPollDelayMs,
+  progressErrorMessage,
+  progressReviewMessage,
+} from "../lib/polling";
 import { serviceBackendUrl } from "@/lib/backend-url";
 
 // ---------------------------------------------------------------------------
@@ -692,6 +697,15 @@ export default function HomeContent() {
   // ---------------------------------------------------------------------------
 
   const handleTerminalProgress = (progressData: unknown): boolean => {
+    const reviewMessage = progressReviewMessage(progressData);
+    if (reviewMessage) {
+      pollingRef.current = false;
+      setStatus("needs_teacher_review");
+      setProgress(null);
+      setErrorMessage(reviewMessage);
+      return true;
+    }
+
     const terminalError = progressErrorMessage(progressData);
     if (!terminalError) return false;
 
