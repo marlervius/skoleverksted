@@ -49,7 +49,7 @@ import type {
   SeriesState,
   Status,
 } from "../lib/fovTypes";
-import { isProgressComplete, nextPollDelayMs } from "../lib/polling";
+import { isProgressComplete, nextPollDelayMs, progressErrorMessage } from "../lib/polling";
 import { serviceBackendUrl } from "@/lib/backend-url";
 
 // ---------------------------------------------------------------------------
@@ -597,6 +597,7 @@ export default function HomeContent() {
           if (!statusRes.ok) throw new Error("Kunne ikke hente status");
 
           const progressData = await statusRes.json();
+          if (handleTerminalProgress(progressData)) return;
           setProgress({
             step: progressData.step,
             totalSteps: progressData.total_steps,
@@ -690,6 +691,17 @@ export default function HomeContent() {
   // Polling
   // ---------------------------------------------------------------------------
 
+  const handleTerminalProgress = (progressData: unknown): boolean => {
+    const terminalError = progressErrorMessage(progressData);
+    if (!terminalError) return false;
+
+    pollingRef.current = false;
+    setStatus("error");
+    setProgress(null);
+    setErrorMessage(terminalError);
+    return true;
+  };
+
   const pollPreviewProgress = async (gId: string, attempt = 0) => {
     if (!pollingRef.current) return;
 
@@ -698,6 +710,7 @@ export default function HomeContent() {
       if (!res.ok) throw new Error("Kunne ikke hente status");
 
       const progressData = await res.json();
+      if (handleTerminalProgress(progressData)) return;
       if (
         typeof progressData.message === "string" &&
         progressData.message.includes("PDF-en er laget uten bilde")
@@ -778,6 +791,7 @@ export default function HomeContent() {
       if (!res.ok) throw new Error("Kunne ikke hente status");
 
       const progressData = await res.json();
+      if (handleTerminalProgress(progressData)) return;
       if (
         typeof progressData.message === "string" &&
         progressData.message.includes("PDF-en er laget uten bilde")
