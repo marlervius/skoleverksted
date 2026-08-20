@@ -44,3 +44,16 @@ export function progressErrorMessage(progress: unknown): string | null {
     ? "Genereringen ble avbrutt."
     : "Noe gikk galt under generering. Prøv igjen litt senere.";
 }
+
+/** Return the teacher-review message for a non-exportable terminal job. */
+export function progressReviewMessage(progress: unknown): string | null {
+  if (!progress || typeof progress !== "object") return null;
+
+  const data = progress as { job_status?: unknown; status?: unknown; message?: unknown };
+  const lifecycle = data.job_status ?? data.status;
+  if (lifecycle !== "needs_teacher_review") return null;
+
+  return typeof data.message === "string" && data.message.trim()
+    ? data.message
+    : "Lærergjennomgang kreves før PDF kan godkjennes.";
+}
