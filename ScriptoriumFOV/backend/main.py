@@ -291,6 +291,14 @@ def _publish_validated_artifact(
 
 def _mark_generation_failed(generation_id: str, exc: Exception, total_steps: int) -> None:
     error_code = f"{type(exc).__name__.lower()}"
+    request_id, job_id = _job_context(generation_id)
+    logger.error(
+        "generation_failed request_id=%s job_id=%s error_type=%s",
+        request_id,
+        job_id,
+        type(exc).__name__,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     update_progress(
         generation_id,
         -1,

@@ -15,3 +15,32 @@ export function isProgressComplete(step: unknown, totalSteps: unknown): boolean 
     current >= total
   );
 }
+
+/**
+ * Read terminal failures from the durable status contract instead of relying
+ * only on the numeric step. A failed worker can retain its last progress step
+ * while the terminal status is being persisted.
+ */
+export function progressErrorMessage(progress: unknown): string | null {
+  if (!progress || typeof progress !== "object") return null;
+
+  const data = progress as {
+    job_status?: unknown;
+    status?: unknown;
+    step?: unknown;
+    message?: unknown;
+  };
+  const lifecycle = data.job_status ?? data.status;
+  const step = Number(data.step);
+  const failedByStep = Number.isFinite(step) && step < 0;
+  if (lifecycle !== "failed" && lifecycle !== "cancelled" && !failedByStep) {
+    return null;
+  }
+
+  if (typeof data.message === "string" && data.message.trim()) {
+    return data.message;
+  }
+  return lifecycle === "cancelled"
+    ? "Genereringen ble avbrutt."
+    : "Noe gikk galt under generering. Prøv igjen litt senere.";
+}
