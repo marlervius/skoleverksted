@@ -329,7 +329,16 @@ def _content_quality_document(content: dict) -> dict:
     }
 
 
-def _require_norsk_documents(progress: dict, export_id: str, *, teacher: bool) -> None:
+def _require_norsk_documents(
+    progress: dict,
+    export_id: str,
+    *,
+    teacher: bool,
+    preview: bool = False,
+) -> None:
+    """Enforce final export approval without blocking teacher-facing previews."""
+    if preview:
+        return
     documents = progress.get("quality_documents") or []
     if not documents:
         raise HTTPException(status_code=409, detail="Eksportporten er lukket: kvalitetsdata mangler.")
@@ -813,7 +822,7 @@ def download_pdf(generation_id: str, _auth: AuthPasswordDep, preview: bool = Fal
         _log_download_failure(generation_id, "pdf_not_ready")
         raise HTTPException(status_code=202, detail="PDF not ready yet")
     try:
-        _require_norsk_documents(progress, "norsk.pdf", teacher=not preview)
+        _require_norsk_documents(progress, "norsk.pdf", teacher=not preview, preview=preview)
     except HTTPException:
         _log_download_failure(generation_id, "quality_gate_blocked")
         raise
@@ -869,7 +878,7 @@ def download_zip(generation_id: str, _auth: AuthPasswordDep, preview: bool = Fal
         _log_download_failure(generation_id, "zip_not_ready")
         raise HTTPException(status_code=202, detail="ZIP not ready yet")
     try:
-        _require_norsk_documents(progress, "norsk.zip", teacher=not preview)
+        _require_norsk_documents(progress, "norsk.zip", teacher=not preview, preview=preview)
     except HTTPException:
         _log_download_failure(generation_id, "quality_gate_blocked")
         raise
