@@ -54,4 +54,15 @@ describe("preview polling", () => {
     ).toBe("Lærergjennomgang kreves før PDF kan godkjennes.");
     expect(progressErrorMessage({ job_status: "needs_teacher_review", step: 3 })).toBeNull();
   });
+
+  it("never turns the ordinary source-quality stop into a red system error", () => {
+    const progress = {
+      step: 3,
+      total_steps: 3,
+      job_status: "needs_teacher_review",
+      message: "Forhåndsvisning blokkert: innholdet er ikke kildegodkjent",
+    };
+    expect(progressReviewMessage(progress)).toContain("Forhåndsvisning blokkert");
+    expect(progressErrorMessage(progress)).toBeNull();
+  });
 });

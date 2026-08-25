@@ -6,6 +6,7 @@ from pypdf import PdfReader
 
 from ScriptoriumFOV.backend import main
 from ScriptoriumFOV.backend.progress_store import clear_progress, initialize_progress
+from Skoleverksted.backend.platform.quality_gate import content_digest
 from ScriptoriumFOV.backend.tests.pdf_fixture import build_valid_pdf_bytes
 
 
@@ -22,6 +23,13 @@ def test_norsk_generation_publishes_and_serves_a_valid_pdf(monkeypatch):
         lambda **_kwargs: {
             "text": "Norge er et land i Europa.",
             "worksheet": "a) VIKTIGE BEGREPER\nEuropa: et kontinent.",
+            "verification_content": "Kontrollert innhold",
+            "truth_passport": {
+                "status": "verified",
+                "version": "2.0",
+                "content_revision": content_digest("Kontrollert innhold"),
+            },
+            "quality_status": "source_approved",
         },
     )
     monkeypatch.setattr(
@@ -95,7 +103,94 @@ def test_preview_download_is_available_before_final_quality_approval():
         clear_progress(job_id)
 
 
-def test_preview_pdf_finishes_as_review_required_when_quality_gate_is_not_green(monkeypatch):
+def test_source_approved_preview_requires_teacher_approval_then_downloads():
+    job_id = "norsk-approved-export"
+    clear_progress(job_id)
+    initialize_progress(job_id, 4, "Starter", request_id="request-approved")
+    content = "Kontrollert innhold"
+    quality_document = {
+        "content": content,
+        "truth_passport": {
+            "status": "verified",
+            "version": "2.0",
+            "content_revision": content_digest(content),
+        },
+        "quarantine": [],
+        "quality_rounds": [],
+        "quality_stop_reason": "source_approved",
+        "teacher_approved_at": None,
+        "approved_digest": "",
+    }
+    artifact = main.ValidatedArtifact(
+        content=PDF_FIXTURE,
+        content_type="application/pdf",
+        filename="Arbeidsliv.pdf",
+        kind="student_pdf",
+    )
+    try:
+        main._publish_validated_artifact(
+            job_id,
+            artifact,
+            payload_key="pdf_bytes",
+            total_steps=4,
+            quality_documents=[quality_document],
+            ready_message="PDF klar for lærerens kontroll.",
+        )
+        preview = main.download_pdf(job_id, None, preview=True)
+        assert preview.body == PDF_FIXTURE
+        with pytest.raises(main.HTTPException) as blocked:
+            main.download_pdf(job_id, None)
+        assert blocked.value.status_code == 409
+
+        approved = main.approve_generation(job_id, None)
+        assert approved["status"] == "approved"
+        response = main.download_pdf(job_id, None)
+        assert response.body == PDF_FIXTURE
+        assert response.headers["content-disposition"].startswith("attachment;")
+    finally:
+        clear_progress(job_id)
+
+
+def test_teacher_revision_invalidates_previous_approval():
+    job_id = "norsk-approval-revision"
+    clear_progress(job_id)
+    initialize_progress(job_id, 4, "Starter")
+    revised = "Kontrollert innhold, redigert av lærer"
+    quality_document = {
+        "content": revised,
+        "truth_passport": {
+            "status": "verified",
+            "version": "2.0",
+            "content_revision": content_digest(revised),
+        },
+        "quarantine": [],
+        "teacher_approved_at": "2026-08-25T20:00:00Z",
+        "approved_digest": content_digest(original),
+    }
+    artifact = main.ValidatedArtifact(
+        content=PDF_FIXTURE,
+        content_type="application/pdf",
+        filename="Arbeidsliv.pdf",
+        kind="student_pdf",
+    )
+    try:
+        main._publish_validated_artifact(
+            job_id,
+            artifact,
+            payload_key="pdf_bytes",
+            total_steps=4,
+            quality_documents=[quality_document],
+            ready_message="PDF klar.",
+        )
+        with pytest.raises(main.HTTPException) as blocked:
+            main.download_pdf(job_id, None)
+        assert blocked.value.status_code == 409
+        assert "annen innholdsversjon" in str(blocked.value.detail)
+    finally:
+        clear_progress(job_id)
+
+
+def test_preview_pdf_finishes_as_review_required_with_a_safe_draft(monkeypatch):
     job_id = "norsk-preview-review-required"
     clear_progress(job_id)
     initialize_progress(job_id, 3, "Starter", request_id="request-review")
@@ -121,6 +216,7 @@ def test_preview_pdf_finishes_as_review_required_when_quality_gate_is_not_green(
         stop_reason="truth_layer_unresolved_claims",
     )
     monkeypatch.setattr(main, "run_quality_pipeline", lambda **_kwargs: quality)
+    monkeypatch.setattr(main, "create_lesson_pdf", lambda **_kwargs: PDF_FIXTURE)
 
     try:
         request = main.PreviewPDFRequest(
@@ -139,6 +235,14 @@ def test_preview_pdf_finishes_as_review_required_when_quality_gate_is_not_green(
         assert state["step"] == 3
         assert "Lærergjennomgang kreves" in state["message"]
         assert "pdf_bytes" not in state
+        assert state["preview_pdf_bytes"] == PDF_FIXTURE
+        preview = main.download_pdf(job_id, None, preview=True)
+        assert preview.body == PDF_FIXTURE
+        assert preview.headers["cache-control"] == "no-store"
+        assert preview.headers["x-preview-draft"] == "true"
+        with pytest.raises(main.HTTPException) as blocked:
+            main.download_pdf(job_id, None)
+        assert blocked.value.status_code == 409
         assert state["last_event"]["type"] == "review_required"
     finally:
         clear_progress(job_id)

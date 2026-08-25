@@ -966,7 +966,8 @@ def create_typst_template(
     teacher_key_content: str = "",
     series_header: str = "",
     accessibility: Optional[dict] = None,
-    options: dict = None
+    options: dict = None,
+    draft: bool = False,
 ) -> str:
     """
     Create a Typst document template for the lesson plan.
@@ -1426,6 +1427,25 @@ def create_typst_template(
 ]
 '''
 
+    draft_banner = ""
+    if draft:
+        draft_banner = '''#align(center)[
+  #block(
+    width: 100%,
+    fill: rgb("#fef3c7"),
+    stroke: 1pt + rgb("#b45309"),
+    inset: 0.8em,
+    radius: 4pt,
+  )[
+    #text(fill: rgb("#92400e"), weight: "bold", size: 12pt)[UTKAST – IKKE KILDEGODKJENT]
+    #linebreak()
+    #text(fill: rgb("#92400e"), size: 9pt)[Kun for lærerens gjennomgang. Ikke del med elever.]
+  ]
+]
+
+#v(1em)
+'''
+
     # Build the Typst document
     typst_doc = f'''// Scriptorium - Lesson Plan
 // UTF-8 encoding for Norwegian characters (æ, ø, å)
@@ -1496,6 +1516,8 @@ def create_typst_template(
 {series_badge}
 
 {deep_dive_badge}
+
+{draft_banner}
 
 {image_section}
 
@@ -1739,6 +1761,7 @@ def create_lesson_pdf(
     teacher_key_content: str = "",
     series_header: str = "",
     accessibility: Optional[dict] = None,
+    draft: bool = False,
 ) -> bytes:
     """
     Create a PDF lesson plan from the AI-generated content.
@@ -1800,7 +1823,8 @@ def create_lesson_pdf(
         image_caption=image_caption,
         image_credit=image_credit,
         language_exercises=language_exercises,
-        options=options
+        options=options,
+        draft=draft,
     )
     
     # Compile to PDF using typst CLI
