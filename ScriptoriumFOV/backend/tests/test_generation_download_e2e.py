@@ -155,6 +155,7 @@ def test_teacher_revision_invalidates_previous_approval():
     job_id = "norsk-approval-revision"
     clear_progress(job_id)
     initialize_progress(job_id, 4, "Starter")
+    original = "Kontrollert innhold"
     revised = "Kontrollert innhold, redigert av lærer"
     quality_document = {
         "content": revised,
