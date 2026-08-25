@@ -804,6 +804,7 @@ def generate_lesson_content(
     source_text: str = None,
     source_name: str = None,
     quality_generator_id: str = "norsk.learning_sheet",
+    request_id: str = "",
 ) -> dict:
     """
     Generate complete lesson content using the AI agents.
@@ -1535,6 +1536,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
         topic=topic,
         subject=subject,
         level=level,
+        request_id=request_id,
     )
     truth_audit = type("QualityAudit", (), {"content": quality_result.approved_content, "passport": quality_result.passport})()
     if truth_separator in truth_audit.content and language_separator in truth_audit.content:
@@ -1580,6 +1582,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
         "quarantine": [item.model_dump(mode="json") for item in quality_result.quarantine],
         "quality_rounds": [item.model_dump(mode="json") for item in quality_result.rounds],
         "quality_stop_reason": quality_result.stop_reason,
+        "quality_status": quality_result.quality_status,
         "prompt_version": os.getenv("PROMPT_VERSION", "norsk-v2-grounded"),
     }
 

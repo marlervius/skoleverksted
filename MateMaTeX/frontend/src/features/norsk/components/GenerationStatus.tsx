@@ -15,6 +15,7 @@ interface Props {
   errorMessage: string;
   isDual: boolean;
   onDismissError: () => void;
+  onDownloadDraft?: () => void;
 }
 
 export function GenerationStatus({
@@ -23,6 +24,7 @@ export function GenerationStatus({
   errorMessage,
   isDual,
   onDismissError,
+  onDownloadDraft,
 }: Props) {
   if (status === "loading") {
     return (
@@ -105,13 +107,24 @@ export function GenerationStatus({
           <div>
             <p className="text-amber-900 font-medium">Lærergjennomgang kreves</p>
             <p className="text-amber-800 text-sm mt-1">{errorMessage}</p>
-            <button
-              type="button"
-              onClick={onDismissError}
-              className="text-amber-900 text-sm mt-2 hover:text-amber-950 underline focus:outline-none focus:ring-2 focus:ring-amber-300 rounded"
-            >
-              Tilbake til redigering
-            </button>
+            <div className="mt-3 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={onDismissError}
+                className="text-amber-900 text-sm hover:text-amber-950 underline focus:outline-none focus:ring-2 focus:ring-amber-300 rounded"
+              >
+                Tilbake til redigering
+              </button>
+              {onDownloadDraft && (
+                <button
+                  type="button"
+                  onClick={onDownloadDraft}
+                  className="text-amber-900 text-sm font-medium underline focus:outline-none focus:ring-2 focus:ring-amber-300 rounded"
+                >
+                  Last ned utkast-PDF
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

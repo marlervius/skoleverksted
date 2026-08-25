@@ -699,6 +699,19 @@ export default function HomeContent() {
   const handleTerminalProgress = (progressData: unknown): boolean => {
     const reviewMessage = progressReviewMessage(progressData);
     if (reviewMessage) {
+      if (progressData && typeof progressData === "object") {
+        const reviewPreview = (progressData as { review_preview?: unknown }).review_preview;
+        if (
+          reviewPreview &&
+          typeof reviewPreview === "object" &&
+          typeof (reviewPreview as { topic?: unknown }).topic === "string" &&
+          typeof (reviewPreview as { text?: unknown }).text === "string" &&
+          typeof (reviewPreview as { worksheet?: unknown }).worksheet === "string"
+        ) {
+          setPreviewData(reviewPreview as LessonResponse);
+          setIsPreviewing(true);
+        }
+      }
       pollingRef.current = false;
       setStatus("needs_teacher_review");
       setProgress(null);
@@ -714,6 +727,24 @@ export default function HomeContent() {
     setProgress(null);
     setErrorMessage(terminalError);
     return true;
+  };
+
+  const editPreviewContent = (field: "text" | "worksheet", value: string) => {
+    setPreviewData((current) => (current ? { ...current, [field]: value } : current));
+  };
+
+  const removeClaimFromDraft = (claimText: string) => {
+    const exact = claimText.trim();
+    if (!exact) return;
+    setPreviewData((current) => {
+      if (!current) return current;
+      const remove = (value: string) => value.split(exact).join("").replace(/\n{3,}/g, "\n\n").trim();
+      return {
+        ...current,
+        text: remove(current.text),
+        worksheet: remove(current.worksheet),
+      };
+    });
   };
 
   const pollPreviewProgress = async (gId: string, attempt = 0) => {
@@ -916,6 +947,18 @@ export default function HomeContent() {
     setProgress(null);
     pollingRef.current = false;
   }
+
+  const downloadDraftPreview = async () => {
+    if (!generationId) return;
+    try {
+      await downloadFile(
+        `${apiUrl}/${isDual ? "download-zip" : "download-pdf"}/${generationId}?preview=true`,
+        isDual ? "UTKAST_leksjoner.zip" : "UTKAST_leksjon.pdf",
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Kunne ikke laste ned utkastet.");
+    }
+  };
 
   async function approveExactGeneration(gId: string) {
     const res = await authFetch(`${apiUrl}/generation/${gId}/approve`, { method: "POST" });
@@ -1616,6 +1659,7 @@ export default function HomeContent() {
                 errorMessage={errorMessage}
                 isDual={isDual}
                 onDismissError={() => setStatus("idle")}
+                onDownloadDraft={status === "needs_teacher_review" ? downloadDraftPreview : undefined}
               />
               {status === "success" && <div className="mt-4 space-y-3"><RevisionActions onSelect={(instruction) => { setSpecialInstructions((current) => [current, instruction].filter(Boolean).join("\n")); window.setTimeout(() => formRef.current?.requestSubmit(), 0); }} /><GenerationFeedback module="norsk" /></div>}
               {imageFallbackNeeded && (
@@ -1687,6 +1731,8 @@ export default function HomeContent() {
           onClose={() => setIsPreviewing(false)}
           onGeneratePdf={generatePdfFromPreview}
           onSelectImage={selectPreviewImage}
+          onEditContent={editPreviewContent}
+          onRemoveClaim={removeClaimFromDraft}
         />
       )}
     </div>

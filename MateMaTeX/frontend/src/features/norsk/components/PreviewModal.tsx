@@ -9,7 +9,9 @@ import {
   Languages,
   Loader2,
   ShieldCheck,
+  ShieldAlert,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import type { CommonsImageCandidate, LessonResponse } from "../lib/fovTypes";
 import { TruthPassport } from "@/components/truth-passport";
@@ -21,6 +23,8 @@ interface Props {
   onClose: () => void;
   onGeneratePdf: () => void;
   onSelectImage: (candidate: CommonsImageCandidate | null) => void;
+  onEditContent: (field: "text" | "worksheet", value: string) => void;
+  onRemoveClaim: (claimText: string) => void;
 }
 
 export function PreviewModal({
@@ -30,6 +34,8 @@ export function PreviewModal({
   onClose,
   onGeneratePdf,
   onSelectImage,
+  onEditContent,
+  onRemoveClaim,
 }: Props) {
   const ex = previewData.language_exercises;
   const imageCandidates = previewData.image_candidates ?? [];
@@ -38,6 +44,10 @@ export function PreviewModal({
   const hasVocab = (ex?.vocabulary_tasks?.length ?? 0) > 0;
   const hasSyntax = (ex?.syntax_tasks?.length ?? 0) > 0;
   const hasAnyExercises = hasGrammar || hasVocab || hasSyntax;
+  const reviewRequired = previewData.truth_passport?.status !== "verified";
+  const unresolvedClaims = (previewData.truth_passport?.claims ?? []).filter(
+    (claim) => claim.status !== "verified" && claim.content_type !== "instruction",
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-stone-900/40 backdrop-blur-sm">
@@ -63,6 +73,21 @@ export function PreviewModal({
           </button>
         </div>
 
+        {reviewRequired && (
+          <div className="flex items-start gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3 sm:px-6">
+            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden="true" />
+            <div>
+              <p className="font-semibold text-amber-950">UTKAST – IKKE KILDEGODKJENT</p>
+              <p className="mt-1 text-sm text-amber-900">
+                Rediger eller fjern uavklarte påstander før du kjører kildekontroll på nytt. Dette innholdet kan ikke lastes ned som endelig læremiddel.
+              </p>
+              {previewData.quality_stop_reason && (
+                <p className="mt-1 text-xs text-amber-800">Stoppårsak: {previewData.quality_stop_reason}</p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-8">
           {previewData.truth_passport && (
@@ -79,6 +104,38 @@ export function PreviewModal({
                   <li key={String(item.claim_id ?? index)} className="rounded border border-amber-200 bg-white p-3">
                     <p className="font-medium">{String(item.original_text ?? "Ukjent påstand")}</p>
                     <p className="mt-1 text-xs">{String(item.reason ?? "Mangler sikker dokumentasjon")}</p>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveClaim(String(item.original_text ?? ""))}
+                      className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-amber-900 underline"
+                    >
+                      <Trash2 className="h-3 w-3" aria-hidden="true" /> Fjern fra utkastet
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {unresolvedClaims.length > 0 && (
+            <section className="rounded-xl border border-amber-300 bg-white p-4">
+              <h3 className="font-semibold text-stone-900">Uavklarte påstander</h3>
+              <p className="mt-1 text-sm text-stone-600">Se kilde, årsak og eventuelle kildeforsøk i faktapasset. Du kan fjerne påstanden direkte fra utkastet.</p>
+              <ul className="mt-3 space-y-2">
+                {unresolvedClaims.map((claim) => (
+                  <li key={claim.id} className="rounded border border-amber-200 bg-amber-50/50 p-3">
+                    <p className="text-sm font-medium text-stone-900">{claim.exact_text || claim.claim}</p>
+                    <p className="mt-1 text-xs text-stone-700">{claim.evidence || "Ingen godkjent dokumentasjon."}</p>
+                    {claim.source_attempts.length > 0 && (
+                      <p className="mt-1 text-xs text-stone-600">Kilder forsøkt: {claim.source_attempts.map((attempt) => attempt.title || attempt.url).join(" · ")}</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onRemoveClaim(claim.exact_text || claim.claim)}
+                      className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-stone-800 underline"
+                    >
+                      <Trash2 className="h-3 w-3" aria-hidden="true" /> Fjern fra utkastet
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -243,9 +300,18 @@ export function PreviewModal({
               <BookOpen className="w-4 h-4 text-accent-600" />
               Tekst
             </h3>
-            <pre className="whitespace-pre-wrap font-sans text-sm sm:text-base text-stone-700 bg-stone-50 p-6 rounded-lg border border-stone-200">
-              {previewData.text}
-            </pre>
+            {reviewRequired ? (
+              <textarea
+                value={previewData.text}
+                onChange={(event) => onEditContent("text", event.target.value)}
+                className="min-h-56 w-full whitespace-pre-wrap font-sans text-sm sm:text-base text-stone-700 bg-stone-50 p-6 rounded-lg border border-stone-200 focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-600/20"
+                aria-label="Rediger tekstutkast"
+              />
+            ) : (
+              <pre className="whitespace-pre-wrap font-sans text-sm sm:text-base text-stone-700 bg-stone-50 p-6 rounded-lg border border-stone-200">
+                {previewData.text}
+              </pre>
+            )}
           </div>
 
           {/* Worksheet */}
@@ -254,9 +320,18 @@ export function PreviewModal({
               <GraduationCap className="w-4 h-4 text-accent-600" />
               Oppgaver
             </h3>
-            <pre className="whitespace-pre-wrap font-sans text-sm sm:text-base text-stone-700 bg-stone-50 p-6 rounded-lg border border-stone-200">
-              {previewData.worksheet}
-            </pre>
+            {reviewRequired ? (
+              <textarea
+                value={previewData.worksheet}
+                onChange={(event) => onEditContent("worksheet", event.target.value)}
+                className="min-h-56 w-full whitespace-pre-wrap font-sans text-sm sm:text-base text-stone-700 bg-stone-50 p-6 rounded-lg border border-stone-200 focus:border-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-600/20"
+                aria-label="Rediger oppgaveutkast"
+              />
+            ) : (
+              <pre className="whitespace-pre-wrap font-sans text-sm sm:text-base text-stone-700 bg-stone-50 p-6 rounded-lg border border-stone-200">
+                {previewData.worksheet}
+              </pre>
+            )}
           </div>
 
           {/* Language Exercises */}
@@ -309,7 +384,7 @@ export function PreviewModal({
         <div className="p-4 sm:p-6 border-t border-stone-200 bg-white flex flex-col sm:flex-row justify-between items-center gap-4">
           <p className="text-sm text-stone-500 flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-accent-700" />
-            Ser dette bra ut?
+            {reviewRequired ? "Rediger utkastet og kontroller påstandene på nytt." : "Ser dette bra ut?"}
           </p>
           <div className="flex w-full sm:w-auto gap-3">
             <button
@@ -333,7 +408,7 @@ export function PreviewModal({
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  <span>Generer PDF nå</span>
+                  <span>{reviewRequired ? "Kjør kildekontroll på nytt" : "Generer PDF nå"}</span>
                 </>
               )}
             </button>

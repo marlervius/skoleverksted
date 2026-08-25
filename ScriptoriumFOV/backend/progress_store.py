@@ -27,9 +27,11 @@ _REDIS_CLIENT: Optional[Any] = None
 _REDIS_TRIED = False
 _LOCK = threading.RLock()
 
+RUNNING_STATUS = "running"
 TERMINAL_STATUSES = frozenset(
     {"completed", "needs_teacher_review", "failed", "cancelled"}
 )
+JOB_STATUSES = frozenset({RUNNING_STATUS, *TERMINAL_STATUSES})
 
 
 def _get_redis():
@@ -138,14 +140,14 @@ def initialize_progress(
         "step": 0,
         "total_steps": total_steps,
         "message": message,
-        "job_status": "running",
-        "status": "running",
+        "job_status": RUNNING_STATUS,
+        "status": RUNNING_STATUS,
         "terminal_status": None,
         "event_type": "progress",
         "timestamp": time.time(),
         "events": [],
     }
-    _append_event(state, generation_id, "progress", status="running")
+    _append_event(state, generation_id, "progress", status=RUNNING_STATUS)
     with _LOCK:
         _save(generation_id, state)
 
@@ -165,6 +167,8 @@ def update_progress(
 
     with _LOCK:
         state = dict(get_progress(generation_id) or {})
+        if state.get("job_status") == "cancelled":
+            return
         state.update(
             {
                 "job_id": generation_id,
@@ -192,8 +196,8 @@ def update_progress(
             if job_status in TERMINAL_STATUSES:
                 state["terminal_status"] = job_status
         else:
-            state.setdefault("job_status", "running")
-        state["status"] = state.get("job_status", "running")
+            state.setdefault("job_status", RUNNING_STATUS)
+        state["status"] = state.get("job_status", RUNNING_STATUS)
         _append_event(
             state,
             generation_id,
@@ -208,6 +212,8 @@ def merge_progress(generation_id: str, **fields: Any) -> None:
     """Merge fields (e.g. pdf_bytes, filename, json_data) without clearing step/message."""
     with _LOCK:
         state = dict(get_progress(generation_id) or {})
+        if state.get("job_status") == "cancelled":
+            return
         for k, v in fields.items():
             if v is not None:
                 state[k] = v
@@ -237,6 +243,8 @@ def publish_event(
         raise ValueError(f"Unsupported event type: {event_type}")
     with _LOCK:
         state = dict(get_progress(generation_id) or {})
+        if state.get("job_status") == "cancelled" and event_type != "cancelled":
+            return
         if message is not None:
             state["message"] = message
         if artifact is not None:
@@ -274,6 +282,30 @@ def clear_progress(generation_id: str) -> None:
             _MEMORY.pop(generation_id, None)
 
 
+def cancel_progress(generation_id: str, message: str = "Genereringen ble avbrutt.") -> bool:
+    """Atomically close a generation so late worker writes cannot resurrect it."""
+    with _LOCK:
+        state = dict(get_progress(generation_id) or {})
+        if not state:
+            return False
+        if state.get("job_status") in TERMINAL_STATUSES:
+            return state.get("job_status") == "cancelled"
+        state.update(
+            {
+                "job_status": "cancelled",
+                "status": "cancelled",
+                "terminal_status": "cancelled",
+                "message": message,
+                "timestamp": time.time(),
+            }
+        )
+        for key in ("pdf_bytes", "preview_pdf_bytes", "zip_bytes", "preview_zip_bytes", "json_data", "artifact"):
+            state.pop(key, None)
+        _append_event(state, generation_id, "cancelled", status="cancelled")
+        _save(generation_id, state)
+        return True
+
+
 def is_pdf_ready(progress: Optional[Dict[str, Any]]) -> bool:
     if not progress or progress.get("step") == -1:
         return False
@@ -282,6 +314,25 @@ def is_pdf_ready(progress: Optional[Dict[str, Any]]) -> bool:
         and progress.get("step", 0) > 0
         and bool(progress.get("pdf_bytes"))
         and progress.get("job_status", "completed") == "completed"
+        and (progress.get("artifact") or {}).get("content_type") == "application/pdf"
+    )
+
+
+def is_pdf_preview_ready(progress: Optional[Dict[str, Any]]) -> bool:
+    """Whether a teacher-facing draft or approved PDF is safe to preview."""
+    if not progress or progress.get("step") == -1:
+        return False
+    status = progress.get("job_status", RUNNING_STATUS)
+    payload = (
+        progress.get("preview_pdf_bytes")
+        if status == "needs_teacher_review"
+        else progress.get("pdf_bytes")
+    )
+    return (
+        progress.get("step") == progress.get("total_steps")
+        and progress.get("step", 0) > 0
+        and bool(payload)
+        and status in {"completed", "needs_teacher_review"}
         and (progress.get("artifact") or {}).get("content_type") == "application/pdf"
     )
 
@@ -298,6 +349,25 @@ def is_zip_ready(progress: Optional[Dict[str, Any]]) -> bool:
     )
 
 
+def is_zip_preview_ready(progress: Optional[Dict[str, Any]]) -> bool:
+    """Whether a teacher-facing draft or approved ZIP is safe to preview."""
+    if not progress or progress.get("step") == -1:
+        return False
+    status = progress.get("job_status", RUNNING_STATUS)
+    payload = (
+        progress.get("preview_zip_bytes")
+        if status == "needs_teacher_review"
+        else progress.get("zip_bytes")
+    )
+    return (
+        progress.get("step") == progress.get("total_steps")
+        and progress.get("step", 0) > 0
+        and bool(payload)
+        and status in {"completed", "needs_teacher_review"}
+        and (progress.get("artifact") or {}).get("content_type") == "application/zip"
+    )
+
+
 def is_json_preview_ready(progress: Optional[Dict[str, Any]]) -> bool:
     if not progress or progress.get("step") == -1:
         return False
@@ -305,5 +375,5 @@ def is_json_preview_ready(progress: Optional[Dict[str, Any]]) -> bool:
         progress.get("step") == progress.get("total_steps")
         and progress.get("step", 0) > 0
         and bool(progress.get("json_data"))
-        and progress.get("job_status", "completed") == "completed"
+        and progress.get("job_status", "completed") in {"completed", "needs_teacher_review"}
     )
