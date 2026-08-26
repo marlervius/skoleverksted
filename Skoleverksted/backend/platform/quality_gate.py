@@ -360,7 +360,8 @@ def verify_teacher_export(
     content: str,
     topic: str,
     subject: str,
-    level: str,    teacher_approved: bool,
+    level: str,
+    teacher_approved: bool,
     provided_sources: Iterable[object] = (),
 ) -> QualityGateResult:
     """Verify an ad-hoc editor/export payload and bind approval to its hash.
@@ -708,6 +709,7 @@ def run_quality_pipeline(
             },
         )
     return result
+
 
 def require_export_ready(
     *,
