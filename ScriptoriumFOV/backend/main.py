@@ -397,8 +397,7 @@ def _quality_document_is_source_approved(document: dict) -> bool:
 
 def _quality_review_payload(
     documents: list[dict],
-    *,
-    artifact: dict | None = None,
+    *,    artifact: dict | None = None,
 ) -> dict:
     """Public, teacher-facing quality data without exposing binary payloads."""
     return {
@@ -797,8 +796,7 @@ class MultiLevelLessonRequest(BaseModel):
         min_length=2,
         max_length=3,
         description="Two or three distinct CEFR sub-levels for the same topic",
-    )
-    difficulty_modifier: Optional[int] = Field(default=None, ge=-2, le=2)
+    )    difficulty_modifier: Optional[int] = Field(default=None, ge=-2, le=2)
     options: dict[str, bool] = Field(default_factory=dict)
     special_instructions: Optional[str] = Field(default=None, max_length=500)
     series: Optional[dict] = Field(default=None)
@@ -854,6 +852,11 @@ class PreviewPDFRequest(BaseModel):
     language_exercises: Optional[dict] = None
     options: dict[str, bool]
     accessibility: Optional[dict] = None
+    provided_sources: list[dict] = Field(
+        default_factory=list,
+        max_length=50,
+        description="Concrete sources retained from the preceding truth audit.",
+    )
 
 
 class ImageCandidateResponse(BaseModel):
@@ -1197,8 +1200,7 @@ def _run_durable_fov_job(
         elif progress.get("job_status") not in {"completed", "needs_teacher_review", "failed", "cancelled"}:
             _mark_generation_failed(generation_id, exc, int(progress.get("total_steps") or 4))
         if queue is not None:
-            try:
-                if progress.get("job_status") == "cancelled" or isinstance(exc, JobCancelled):
+            try:                if progress.get("job_status") == "cancelled" or isinstance(exc, JobCancelled):
                     queue.cancel(generation_id)
                 else:
                     queue.fail(generation_id, "Genereringen feilet")
@@ -1400,18 +1402,22 @@ def generate_pdf_from_json_background(
 ):
     """Background task to generate PDF directly from JSON (skipping AI steps)."""
     try:
-        separator = "\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n"
-        language_separator = "\n\n<<<SKOLEVERKSTED_SPRÅKOPPGAVER>>>\n\n"
+        verification_document = json.dumps(
+            {
+                "text": request.text,
+                "worksheet": request.worksheet,
+                "language_exercises": request.language_exercises,
+            },
+            ensure_ascii=False,
+        )
         request_id = str((get_progress(generation_id) or {}).get("request_id") or "")
         quality = run_quality_pipeline(
             generator_id="norsk.preview_pdf",
-            content=(
-                f"{request.text}{separator}{request.worksheet}{language_separator}"
-                f"{json.dumps(request.language_exercises, ensure_ascii=False)}"
-            ),
+            content=verification_document,
             topic=request.topic,
             subject=request.subject,
             level=request.level,
+            provided_sources=request.provided_sources,
             request_id=request_id,
         )
         quality_document = _quality_result_document(quality)
@@ -1420,14 +1426,24 @@ def generate_pdf_from_json_background(
         original_worksheet = request.worksheet
         original_language_exercises = request.language_exercises
         try:
-            request.text, remainder = quality.approved_content.split(separator, 1)
-            request.worksheet, language_payload = remainder.split(language_separator, 1)
-            request.language_exercises = json.loads(language_payload)
-        except (ValueError, json.JSONDecodeError) as exc:
+            revised_document = json.loads(quality.approved_content)
+            if not isinstance(revised_document, dict):
+                raise ValueError("kontrollert innhold er ikke et objekt")
+            revised_text = revised_document.get("text")
+            revised_worksheet = revised_document.get("worksheet")
+            revised_language = revised_document.get("language_exercises")
+            if not isinstance(revised_text, str) or not isinstance(revised_worksheet, str):
+                raise ValueError("kontrollerte tekstfelt mangler")
+            if revised_language is not None and not isinstance(revised_language, dict):
+                raise ValueError("språkoppgavene er ikke et objekt")
+            request.text = revised_text
+            request.worksheet = revised_worksheet
+            request.language_exercises = revised_language
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
             if source_approved:
                 raise ValueError("Kontrollert innhold kunne ikke deles trygt tilbake i PDF-feltene.") from exc
             # A review draft must remain visible even if the controller could
-            # not safely split a revised structured payload. It is explicitly
+            # not safely parse a revised structured payload. It is explicitly
             # watermarked and can never be served by the final export route.
             request.text = original_text
             request.worksheet = original_worksheet
@@ -1529,6 +1545,9 @@ def generate_pdf_from_json_background(
                 "quarantine": quality_document.get("quarantine", []),
                 "quality_rounds": quality_document.get("quality_rounds", []),
                 "quality_stop_reason": quality_document.get("quality_stop_reason", ""),
+                "provided_sources": (
+                    quality_document.get("truth_passport") or {}
+                ).get("sources", []),
             },
         )
 
@@ -1597,8 +1616,7 @@ def _generate_single_pdf(
         options=req.options,
         difficulty_modifier=req.difficulty_modifier,
         special_instructions=req.special_instructions,
-        series=req.series,
-        source_text=req.source_text,
+        series=req.series,        source_text=req.source_text,
         source_name=req.source_name,
         quality_generator_id=quality_generator_id,
         request_id="",
@@ -1997,8 +2015,7 @@ async def startup_log_auth_mode():
     if app_password_configured():
         logger.info("APP_PASSWORD is set — generation endpoints require Bearer auth.")
     else:
-        logger.warning(
-            "APP_PASSWORD is not set — generation endpoints are open. "
+        logger.warning(            "APP_PASSWORD is not set — generation endpoints are open. "
             "Set APP_PASSWORD in production."
         )
 
