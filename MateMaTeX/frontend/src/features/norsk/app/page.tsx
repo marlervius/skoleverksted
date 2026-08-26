@@ -397,7 +397,8 @@ export default function HomeContent() {
           subject,
           levels: sortLevelsByCefr(selectedMultiLevels),
           options,
-          difficulty_modifier: difficultyModifier,          special_instructions: specialInstructions || null,
+          difficulty_modifier: difficultyModifier,
+          special_instructions: specialInstructions || null,
           source_text: sourceText || null,
           source_name: sourceText ? sourceName || "lærerens kildemateriale" : null,
           series: seriesEnabled ? series : null,
@@ -496,8 +497,7 @@ export default function HomeContent() {
       429: "For mange forespørsler. Vent litt og prøv igjen.",
     };
     throw new Error(
-      data.detail || statusMessages[res.status] || `Feil: ${res.status}`
-    );
+      data.detail || statusMessages[res.status] || `Feil: ${res.status}`    );
   }
 
   // ---------------------------------------------------------------------------
@@ -799,7 +799,8 @@ export default function HomeContent() {
     }
   };
 
-  const selectPreviewImage = (candidate: CommonsImageCandidate | null) => {    setPreviewData((current) => {
+  const selectPreviewImage = (candidate: CommonsImageCandidate | null) => {
+    setPreviewData((current) => {
       if (!current) return current;
       if (!candidate) {
         return {
@@ -998,8 +999,7 @@ export default function HomeContent() {
       setStatus("error");
       setProgress(null);
       pollingRef.current = false;
-      setErrorMessage(
-        error instanceof Error ? error.message : "Kunne ikke laste ned ZIP. Prøv igjen."
+      setErrorMessage(        error instanceof Error ? error.message : "Kunne ikke laste ned ZIP. Prøv igjen."
       );
     }
   };
@@ -1198,7 +1198,8 @@ export default function HomeContent() {
                     </div>
                     <div className="flex justify-between text-xs text-stone-400 mt-2">
                       <span>-2</span><span>-1</span>
-                      <span className="text-stone-700 font-medium">Standard</span>                      <span>+1</span><span>+2</span>
+                      <span className="text-stone-700 font-medium">Standard</span>
+                      <span>+1</span><span>+2</span>
                     </div>
                     {difficultyModifier !== null && difficultyModifier !== 0 && (
                       <div className="flex items-center justify-between mt-2">
@@ -1497,8 +1498,7 @@ export default function HomeContent() {
                     accept="image/jpeg,image/png,image/webp"
                     onChange={handleImageChange}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    disabled={formDisabled || multiLevelMode}
-                  />
+                    disabled={formDisabled || multiLevelMode}                  />
                   {customImage ? (
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 min-w-0">
@@ -1598,3 +1598,143 @@ export default function HomeContent() {
                     className={`
                       flex-1 py-3.5 px-6 rounded-lg font-medium text-base
                       flex items-center justify-center gap-2 border
+                      transition-colors focus:outline-none focus:ring-2 focus:ring-stone-300
+                      ${
+                        status === "loading"
+                          ? "bg-stone-100 text-stone-400 border-stone-200 cursor-wait"
+                          : isFormValid && !multiLevelMode && !dualVersion && !customImage
+                          ? "bg-white text-stone-700 border-stone-300 hover:border-stone-400 hover:bg-stone-50"
+                          : "bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed"
+                      }
+                    `}
+                  >
+                    <FileText className="w-5 h-5" />
+                    <span>Forhåndsvis først</span>
+                  </button>
+                )}
+                <button
+                    type={status === "success" ? "button" : "submit"}
+                    onClick={
+                      status === "success" && generationId
+                        ? () => (isDual ? downloadZip(generationId) : downloadPDF(generationId))
+                        : undefined
+                    }
+                  disabled={!isFormValid || status === "loading"}
+                  className={`
+                    flex-1 py-3.5 px-6 rounded-lg font-semibold text-base
+                    flex items-center justify-center gap-2
+                    transition-colors focus:outline-none focus:ring-2 focus:ring-accent-600/30
+                    ${
+                      status === "loading"
+                        ? "bg-stone-200 text-stone-500 cursor-wait"
+                        : status === "success"
+                        ? "bg-accent-700 text-white"
+                        : isFormValid
+                        ? "bg-accent-700 hover:bg-accent-800 text-white"
+                        : "bg-stone-200 text-stone-400 cursor-not-allowed"
+                    }
+                  `}
+                >
+                  {status === "loading" ? (
+                    <><Loader2 className="w-5 h-5 animate-spin" /><span>Genererer...</span></>
+                  ) : status === "success" ? (
+                    <><CheckCircle2 className="w-5 h-5" /><span>{isDual ? "Godkjenn og last ned ZIP" : "Godkjenn og last ned PDF"}</span></>
+                  ) : (
+                    <><Sparkles className="w-5 h-5" /><span>{
+                      dualVersion
+                        ? "Lag ZIP"
+                        : customImage
+                        ? "Lag PDF med bilde"
+                        : imageMode === "commons" && !multiLevelMode
+                        ? "Finn bilder og velg"
+                        : "Generer PDF"
+                    }</span></>
+                  )}
+                </button>
+              </div>
+
+              <GenerationStatus
+                status={status}
+                progress={progress}
+                errorMessage={errorMessage}
+                isDual={isDual}
+                onDismissError={() => setStatus("idle")}
+                onDownloadDraft={status === "needs_teacher_review" ? downloadDraftPreview : undefined}
+              />
+              {status === "success" && <div className="mt-4 space-y-3"><RevisionActions onSelect={(instruction) => { setSpecialInstructions((current) => [current, instruction].filter(Boolean).join("\n")); window.setTimeout(() => formRef.current?.requestSubmit(), 0); }} /><GenerationFeedback module="norsk" /></div>}
+              {imageFallbackNeeded && (
+                <div className="mt-4 p-4 rounded-lg bg-amber-50 border border-amber-200">
+                  <p className="text-sm font-semibold text-amber-900">
+                    Ingen passende Commons-bilde ble funnet
+                  </p>
+                  <p className="text-xs text-amber-800 mt-1">
+                    PDF-en er laget uten bilde. KI brukes bare dersom du velger det selv.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => retryWithImageMode("commons")}
+                      className="btn-secondary px-3 py-2 text-xs"
+                    >
+                      <ImageIcon className="w-4 h-4" aria-hidden="true" />
+                      Prøv Commons på nytt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => retryWithImageMode("ai")}
+                      className="btn-secondary px-3 py-2 text-xs"
+                    >
+                      <Sparkles className="w-4 h-4" aria-hidden="true" />
+                      Lag KI-illustrasjon
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStatus("idle");
+                        fileInputRef.current?.click();
+                      }}
+                      className="btn-secondary px-3 py-2 text-xs"
+                    >
+                      <Upload className="w-4 h-4" aria-hidden="true" />
+                      Last opp eget bilde
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </form>
+
+          {/* Info Cards */}
+          <div className="grid grid-cols-2 gap-3 mt-5">
+            <div className="rounded-lg border border-stone-200 bg-white px-4 py-3">
+              <h3 className="text-stone-800 font-medium text-sm">Tilpasset innhold</h3>
+              <p className="text-stone-400 text-xs mt-0.5">AI-generert tekst tilpasset språknivå</p>
+            </div>
+            <div className="rounded-lg border border-stone-200 bg-white px-4 py-3">
+              <h3 className="text-stone-800 font-medium text-sm">Ferdig PDF</h3>
+              <p className="text-stone-400 text-xs mt-0.5">Klar til print med oppgaver</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <footer className="mt-10 text-center text-stone-400 text-xs">
+          <p>Norsklæring · Læringsark for voksenopplæring</p>
+        </footer>
+      </div>
+
+      {isPreviewing && previewData && (
+        <PreviewModal
+          previewData={previewData}
+          formDisabled={formDisabled}
+          isGenerating={status === "loading"}
+          onClose={() => setIsPreviewing(false)}
+          onGeneratePdf={generatePdfFromPreview}
+          onSelectImage={selectPreviewImage}
+          onEditContent={editPreviewContent}
+          onRemoveClaim={removeClaimFromDraft}
+        />
+      )}
+    </div>
+  );
+}
