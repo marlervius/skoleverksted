@@ -53,13 +53,57 @@ def _wait_gemini_retry(retry_state: RetryCallState) -> float:
     return min(90.0, 15.0 * (2 ** (retry_state.attempt_number - 1)))
 
 
-def _get_cache_key(topic, subject, level, options, difficulty_modifier, special_instructions, series, source_text=None) -> str:
+def _get_cache_key(
+    topic,
+    subject,
+    level,
+    options,
+    difficulty_modifier,
+    special_instructions,
+    series,
+    source_text=None,
+    source_name=None,
+) -> str:
     """Generate a unique deterministic hash for a given set of lesson parameters."""
     options_str = json.dumps(options, sort_keys=True) if options else ""
     series_str = json.dumps(series, sort_keys=True) if series else ""
-    source_hash = hashlib.sha256((source_text or "").encode("utf-8")).hexdigest() if source_text else ""
+    source_identity = f"{source_name or ''}\0{source_text or ''}"
+    source_hash = (
+        hashlib.sha256(source_identity.encode("utf-8")).hexdigest()
+        if source_text or source_name
+        else ""
+    )
     key_string = f"{topic}|{subject}|{level}|{options_str}|{difficulty_modifier}|{special_instructions}|{series_str}|{source_hash}"
     return hashlib.md5(key_string.encode('utf-8')).hexdigest()
+
+
+_SOURCE_URL_PATTERN = re.compile(r"https://[^\s<>\]\[()\"']+")
+
+
+def _provided_truth_sources(source_text: str | None, source_name: str | None) -> list[dict]:
+    """Extract explicit teacher URLs so later quality passes can reuse them.
+
+    Pasted source text remains useful generation context, but it is not treated
+    as independently verifiable evidence unless the teacher supplied a concrete
+    HTTPS page. Every returned source is still evaluated claim by claim by the
+    truth layer; the URL alone never makes a claim green.
+    """
+    urls: list[str] = []
+    for value in (source_name or "", source_text or ""):
+        for match in _SOURCE_URL_PATTERN.findall(value):
+            url = match.rstrip(".,;:!?")
+            if url not in urls:
+                urls.append(url)
+    title = (source_name or "Lærerens kilde").strip()[:300]
+    return [
+        {
+            "title": title if not title.startswith("https://") else url,
+            "url": url,
+            "origin": "teacher",
+            "fetch_status": "provided",
+        }
+        for url in urls[:20]
+    ]
 
 
 # =============================================================================
@@ -497,8 +541,7 @@ def format_task_instructions(selected_tasks: list, is_english: bool) -> str:
                Instruksjon: "{task['instruction']}"
                Format: {task['format']}
                Eksempel items: {task['example']}
-            """
-    
+            """    
     return instructions
 
 # Load environment variables
@@ -841,7 +884,17 @@ def generate_lesson_content(
     options = default_options
 
     # Check cache first
-    cache_key = _get_cache_key(topic, subject, level, options, difficulty_modifier, special_instructions, series, source_text)
+    cache_key = _get_cache_key(
+        topic,
+        subject,
+        level,
+        options,
+        difficulty_modifier,
+        special_instructions,
+        series,
+        source_text,
+        source_name,
+    )
     current_time = time.time()
     
     # Clean up expired cache entries randomly to prevent memory leaks (10% chance per call)
@@ -998,7 +1051,6 @@ def generate_lesson_content(
         """
     else:
         utdanningsvalg_note = ""
-
     source_context = ""
     if source_text and source_text.strip():
         source_context = f"""
@@ -1497,8 +1549,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
     if create_worksheet_task:
         worksheet_output = getattr(getattr(create_worksheet_task, 'output', None), 'raw', "") or ""
     language_exercises_output = ""
-    if create_language_exercises_task:
-        language_exercises_output = getattr(getattr(create_language_exercises_task, 'output', None), 'raw', "") or ""
+    if create_language_exercises_task:        language_exercises_output = getattr(getattr(create_language_exercises_task, 'output', None), 'raw', "") or ""
     
     # Parse the text to extract the image URL
     text_output, image_url = extract_image_url(raw_text_output)
@@ -1520,43 +1571,51 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
     if series and series.get("series_theme"):
         series_header = f"Leksjon {series.get('lesson_number', 1)} av {series.get('total_lessons', 1)} · {series.get('series_theme', '')}"
 
-    # Shared evidence-first audit. Text and worksheet are checked together so
-    # an unsupported claim cannot survive merely because it appears in a task.
+    # Submit one canonical JSON document. This lets the quality controller
+    # repair or quarantine the exact affected field without losing the
+    # surrounding lesson structure, then re-audit the revised document.
     from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
 
-    truth_separator = "\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n"
-    language_separator = "\n\n<<<SKOLEVERKSTED_SPRÅKOPPGAVER>>>\n\n"
-    language_payload = json.dumps(language_exercises, ensure_ascii=False)
+    verification_document = json.dumps(
+        {
+            "text": text_output,
+            "worksheet": worksheet_output,
+            "language_exercises": language_exercises,
+        },
+        ensure_ascii=False,
+    )
     quality_result = run_quality_pipeline(
         generator_id=quality_generator_id,
-        content=(
-            f"{text_output}{truth_separator}{worksheet_output}"
-            f"{language_separator}{language_payload}"
-        ),
+        content=verification_document,
         topic=topic,
         subject=subject,
         level=level,
+        provided_sources=_provided_truth_sources(source_text, source_name),
         request_id=request_id,
     )
-    truth_audit = type("QualityAudit", (), {"content": quality_result.approved_content, "passport": quality_result.passport})()
-    if truth_separator in truth_audit.content and language_separator in truth_audit.content:
-        text_output, remainder = truth_audit.content.split(truth_separator, 1)
-        worksheet_output, revised_language = remainder.split(language_separator, 1)
-        try:
-            parsed_language = json.loads(revised_language)
-            if parsed_language is None or isinstance(parsed_language, dict):
-                language_exercises = parsed_language
-            else:
-                raise ValueError("språkoppgavene er ikke et objekt")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            truth_audit.passport.status = "needs_review"
-            truth_audit.passport.limitations.append(
-                "Kontrollerte språkoppgaver kunne ikke valideres etter retting."
-            )
-    else:
+    truth_audit = type(
+        "QualityAudit",
+        (),
+        {"content": quality_result.approved_content, "passport": quality_result.passport},
+    )()
+    try:
+        revised_document = json.loads(truth_audit.content)
+        if not isinstance(revised_document, dict):
+            raise ValueError("kontrollert innhold er ikke et objekt")
+        revised_text = revised_document.get("text")
+        revised_worksheet = revised_document.get("worksheet")
+        revised_language = revised_document.get("language_exercises")
+        if not isinstance(revised_text, str) or not isinstance(revised_worksheet, str):
+            raise ValueError("kontrollerte tekstfelt mangler")
+        if revised_language is not None and not isinstance(revised_language, dict):
+            raise ValueError("språkoppgavene er ikke et objekt")
+        text_output = revised_text
+        worksheet_output = revised_worksheet
+        language_exercises = revised_language
+    except (TypeError, ValueError, json.JSONDecodeError):
         truth_audit.passport.status = "needs_review"
         truth_audit.passport.limitations.append(
-            "Kontrollert innhold kunne ikke deles trygt tilbake i dokumentfeltene."
+            "Kontrollert innhold kunne ikke valideres som et strukturert læringsark."
         )
     if truth_audit.passport.status != "verified":
         text_output = (
