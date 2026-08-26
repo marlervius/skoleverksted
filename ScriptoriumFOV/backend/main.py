@@ -397,7 +397,8 @@ def _quality_document_is_source_approved(document: dict) -> bool:
 
 def _quality_review_payload(
     documents: list[dict],
-    *,    artifact: dict | None = None,
+    *,
+    artifact: dict | None = None,
 ) -> dict:
     """Public, teacher-facing quality data without exposing binary payloads."""
     return {
@@ -796,7 +797,8 @@ class MultiLevelLessonRequest(BaseModel):
         min_length=2,
         max_length=3,
         description="Two or three distinct CEFR sub-levels for the same topic",
-    )    difficulty_modifier: Optional[int] = Field(default=None, ge=-2, le=2)
+    )
+    difficulty_modifier: Optional[int] = Field(default=None, ge=-2, le=2)
     options: dict[str, bool] = Field(default_factory=dict)
     special_instructions: Optional[str] = Field(default=None, max_length=500)
     series: Optional[dict] = Field(default=None)
@@ -1200,7 +1202,8 @@ def _run_durable_fov_job(
         elif progress.get("job_status") not in {"completed", "needs_teacher_review", "failed", "cancelled"}:
             _mark_generation_failed(generation_id, exc, int(progress.get("total_steps") or 4))
         if queue is not None:
-            try:                if progress.get("job_status") == "cancelled" or isinstance(exc, JobCancelled):
+            try:
+                if progress.get("job_status") == "cancelled" or isinstance(exc, JobCancelled):
                     queue.cancel(generation_id)
                 else:
                     queue.fail(generation_id, "Genereringen feilet")
@@ -1616,7 +1619,8 @@ def _generate_single_pdf(
         options=req.options,
         difficulty_modifier=req.difficulty_modifier,
         special_instructions=req.special_instructions,
-        series=req.series,        source_text=req.source_text,
+        series=req.series,
+        source_text=req.source_text,
         source_name=req.source_name,
         quality_generator_id=quality_generator_id,
         request_id="",
@@ -2015,7 +2019,8 @@ async def startup_log_auth_mode():
     if app_password_configured():
         logger.info("APP_PASSWORD is set — generation endpoints require Bearer auth.")
     else:
-        logger.warning(            "APP_PASSWORD is not set — generation endpoints are open. "
+        logger.warning(
+            "APP_PASSWORD is not set — generation endpoints are open. "
             "Set APP_PASSWORD in production."
         )
 
