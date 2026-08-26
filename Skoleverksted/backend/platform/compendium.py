@@ -504,7 +504,8 @@ def _call_google_json(
     max_attempts: int | None = None,
     cancel_check: Callable[[], bool] | None = None,
     request_id: str = "",
-) -> tuple[dict[str, Any], list[CompendiumSource]]:    from google import genai
+) -> tuple[dict[str, Any], list[CompendiumSource]]:
+    from google import genai
     from google.genai import types
 
     google_key = os.getenv("GOOGLE_API_KEY", "").strip()
@@ -1004,6 +1005,7 @@ def generate_compendium_chapter(compendium: Compendium, chapter_id: str) -> Comp
     prompt = f"""
 Du er researcheren og fagforfatteren i et kritisk redigert skolekompendium.
 Bruk Google-søk til å undersøke kapitlet. Returner bare ett JSON-objekt.
+
 Kompendium: {compendium.title}
 Tema: {compendium.topic}
 Fag/nivå/målgruppe: {compendium.subject}, {compendium.level}, {compendium.audience}
@@ -1502,7 +1504,8 @@ def apply_repair_plan(
 
 def _metrics(
     passport: TruthPassport | None,
-    quality_issues: list[TextQualityIssue],    *,
+    quality_issues: list[TextQualityIssue],
+    *,
     content: str | None = None,
 ) -> RepairMetrics:
     if passport is None or (
@@ -2001,7 +2004,8 @@ JSON:
     )
     notes.extend(
         note
-        for note in truth_passport.limitations        if note not in notes
+        for note in truth_passport.limitations
+        if note not in notes
     )
     applied_changes = [change for change in repair_changes if change.result == "applied"]
     unresolved_changes = [change for change in repair_changes if change.result == "unresolved"]
