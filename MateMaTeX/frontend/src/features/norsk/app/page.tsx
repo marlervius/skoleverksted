@@ -497,7 +497,8 @@ export default function HomeContent() {
       429: "For mange forespørsler. Vent litt og prøv igjen.",
     };
     throw new Error(
-      data.detail || statusMessages[res.status] || `Feil: ${res.status}`    );
+      data.detail || statusMessages[res.status] || `Feil: ${res.status}`
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -999,7 +1000,8 @@ export default function HomeContent() {
       setStatus("error");
       setProgress(null);
       pollingRef.current = false;
-      setErrorMessage(        error instanceof Error ? error.message : "Kunne ikke laste ned ZIP. Prøv igjen."
+      setErrorMessage(
+        error instanceof Error ? error.message : "Kunne ikke laste ned ZIP. Prøv igjen."
       );
     }
   };
@@ -1498,7 +1500,8 @@ export default function HomeContent() {
                     accept="image/jpeg,image/png,image/webp"
                     onChange={handleImageChange}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    disabled={formDisabled || multiLevelMode}                  />
+                    disabled={formDisabled || multiLevelMode}
+                  />
                   {customImage ? (
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 min-w-0">
