@@ -397,7 +397,8 @@ def _source_quality_notes(sources: list[CompendiumSource]) -> list[str]:
                 )
             elif (parsed.path or "/").rstrip("/") == "":
                 note = (
-                    f'Kilden «{title}» peker bare til en forside. Finn den '                    "konkrete siden som dokumenterer påstanden."
+                    f'Kilden «{title}» peker bare til en forside. Finn den '
+                    "konkrete siden som dokumenterer påstanden."
                 )
             else:
                 continue
@@ -503,8 +504,7 @@ def _call_google_json(
     max_attempts: int | None = None,
     cancel_check: Callable[[], bool] | None = None,
     request_id: str = "",
-) -> tuple[dict[str, Any], list[CompendiumSource]]:
-    from google import genai
+) -> tuple[dict[str, Any], list[CompendiumSource]]:    from google import genai
     from google.genai import types
 
     google_key = os.getenv("GOOGLE_API_KEY", "").strip()
@@ -803,7 +803,8 @@ Ikke finn opp offisielle kompetansemål, kilder eller boktitler.
 JSON:
 {{
   "title": "...",
-  "scope_contract": {{    "reference_date": "...",
+  "scope_contract": {{
+    "reference_date": "...",
     "geography": "...",
     "inclusion_criteria": ["..."],
     "exclusions": ["..."],
@@ -1003,7 +1004,6 @@ def generate_compendium_chapter(compendium: Compendium, chapter_id: str) -> Comp
     prompt = f"""
 Du er researcheren og fagforfatteren i et kritisk redigert skolekompendium.
 Bruk Google-søk til å undersøke kapitlet. Returner bare ett JSON-objekt.
-
 Kompendium: {compendium.title}
 Tema: {compendium.topic}
 Fag/nivå/målgruppe: {compendium.subject}, {compendium.level}, {compendium.audience}
@@ -1202,6 +1202,7 @@ def _normalise_anchor(value: str) -> str:
 def _line_prefix(value: str) -> tuple[str, str]:
     match = re.match(r"^(\s{0,3}(?:[-+*]|\d+[.)])\s+)(.*)$", value)
     return (match.group(1), match.group(2)) if match else ("", value)
+
 
 def _sentence_candidates(value: str, offset: int) -> list[_RepairTarget]:
     candidates: list[_RepairTarget] = []
@@ -1501,8 +1502,7 @@ def apply_repair_plan(
 
 def _metrics(
     passport: TruthPassport | None,
-    quality_issues: list[TextQualityIssue],
-    *,
+    quality_issues: list[TextQualityIssue],    *,
     content: str | None = None,
 ) -> RepairMetrics:
     if passport is None or (
@@ -1601,7 +1601,8 @@ def repair_preconditions(
         30,
     )
     if not repair_notes:
-        raise ValueError("Kapitlet har ingen kontrollmerknader eller svake kilder å rette.")    return chapter, repair_notes
+        raise ValueError("Kapitlet har ingen kontrollmerknader eller svake kilder å rette.")
+    return chapter, repair_notes
 
 
 def repair_compendium_chapter(
@@ -2000,8 +2001,7 @@ JSON:
     )
     notes.extend(
         note
-        for note in truth_passport.limitations
-        if note not in notes
+        for note in truth_passport.limitations        if note not in notes
     )
     applied_changes = [change for change in repair_changes if change.result == "applied"]
     unresolved_changes = [change for change in repair_changes if change.result == "unresolved"]
@@ -2101,3 +2101,31 @@ JSON:
             first_revisions = [
                 change.reason
                 for change in first.changes
+                if change.result == "applied"
+            ]
+            second_pass.revision_summary = [
+                *first_revisions,
+                *second_pass.revision_summary,
+            ][:30]
+        return second_pass
+    observe(
+        "truth_audit",
+        truth_status=truth_passport.status,
+        coverage_percent=truth_passport.coverage_percent,
+        verified_claims=truth_passport.verified_claims,
+        total_claims=truth_passport.total_claims,
+        quality_issue_count=len(quality_issues),
+        failure_status=failure_status,
+        independent_check_approved=verified,
+        proposed_change_count=len(repair_changes),
+        applied_change_count=len(applied_changes),
+        unresolved_change_count=len(unresolved_changes),
+        manual_review_count=len(manual_changes),
+        source_count=len(sources),
+        content_hash_before=_hash(content_before),
+        content_hash_after=_hash(repaired_content),
+        content_revision=truth_passport.content_revision,
+        content_chars_after=len(repaired_content),
+        chapter_status=chapter_status,
+    )
+    return CompendiumChapter.model_validate(updated)
