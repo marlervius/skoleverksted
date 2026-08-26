@@ -541,7 +541,8 @@ def format_task_instructions(selected_tasks: list, is_english: bool) -> str:
                Instruksjon: "{task['instruction']}"
                Format: {task['format']}
                Eksempel items: {task['example']}
-            """    
+            """
+    
     return instructions
 
 # Load environment variables
@@ -1051,6 +1052,7 @@ def generate_lesson_content(
         """
     else:
         utdanningsvalg_note = ""
+
     source_context = ""
     if source_text and source_text.strip():
         source_context = f"""
@@ -1549,7 +1551,8 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
     if create_worksheet_task:
         worksheet_output = getattr(getattr(create_worksheet_task, 'output', None), 'raw', "") or ""
     language_exercises_output = ""
-    if create_language_exercises_task:        language_exercises_output = getattr(getattr(create_language_exercises_task, 'output', None), 'raw', "") or ""
+    if create_language_exercises_task:
+        language_exercises_output = getattr(getattr(create_language_exercises_task, 'output', None), 'raw', "") or ""
     
     # Parse the text to extract the image URL
     text_output, image_url = extract_image_url(raw_text_output)
