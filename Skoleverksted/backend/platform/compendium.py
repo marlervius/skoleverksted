@@ -397,8 +397,7 @@ def _source_quality_notes(sources: list[CompendiumSource]) -> list[str]:
                 )
             elif (parsed.path or "/").rstrip("/") == "":
                 note = (
-                    f'Kilden «{title}» peker bare til en forside. Finn den '
-                    "konkrete siden som dokumenterer påstanden."
+                    f'Kilden «{title}» peker bare til en forside. Finn den '                    "konkrete siden som dokumenterer påstanden."
                 )
             else:
                 continue
@@ -432,25 +431,28 @@ def _response_text(response: object) -> str:
 def _grounding_sources(response: object) -> list[CompendiumSource]:
     sources: list[CompendiumSource] = []
     try:
-        candidates = getattr(response, "candidates", None) or []
-        metadata = getattr(candidates[0], "grounding_metadata", None) if candidates else None
-        chunks = getattr(metadata, "grounding_chunks", None) or []
-        for chunk in chunks:
-            web = getattr(chunk, "web", None)
-            raw_url = _text(getattr(web, "uri", ""), 1000)
-            url = _canonical_source_url(raw_url)
-            if not url and _is_transient_source_url(raw_url):
-                url = _resolve_grounding_redirect(raw_url)
-            title = _text(getattr(web, "title", ""), 300)
-            if url and not any(item.url == url for item in sources):
-                sources.append(
-                    CompendiumSource(
-                        title=title or url,
-                        url=url,
-                        origin="grounding",
-                        fetch_status="grounded",
+        # Search-enabled responses can contain more than one candidate. Source
+        # metadata from every candidate belongs to the same grounded model call
+        # and must survive into later verification rounds.
+        for candidate in getattr(response, "candidates", None) or []:
+            metadata = getattr(candidate, "grounding_metadata", None)
+            chunks = getattr(metadata, "grounding_chunks", None) or []
+            for chunk in chunks:
+                web = getattr(chunk, "web", None)
+                raw_url = _text(getattr(web, "uri", ""), 1000)
+                url = _canonical_source_url(raw_url)
+                if not url and _is_transient_source_url(raw_url):
+                    url = _resolve_grounding_redirect(raw_url)
+                title = _text(getattr(web, "title", ""), 300)
+                if url and not any(item.url == url for item in sources):
+                    sources.append(
+                        CompendiumSource(
+                            title=title or url,
+                            url=url,
+                            origin="grounding",
+                            fetch_status="grounded",
+                        )
                     )
-                )
     except Exception:
         logger.debug("Kunne ikke lese grounding-metadata", exc_info=True)
     return sources[:40]
@@ -465,19 +467,23 @@ def _is_transient_source_url(value: str) -> bool:
 
 def _resolve_grounding_redirect(value: str) -> str:
     """Resolve Google's temporary citation URL without downloading the page."""
-    try:
-        request = Request(
-            value,
-            headers={
-                "User-Agent": "Skoleverksted/1.0 (+https://skoleverksted.vercel.app)",
-                "Range": "bytes=0-0",
-            },
-        )
-        with urlopen(request, timeout=5) as response:
-            return _canonical_source_url(response.geturl())
-    except Exception:
-        logger.info("Kunne ikke løse midlertidig grounding-adresse", exc_info=True)
-        return ""
+    user_agent = "Skoleverksted/1.0 (+https://skoleverksted.vercel.app)"
+    # Some publishers reject byte-range requests even though the redirect is
+    # valid. Retry without Range; opening the response does not read its body.
+    for headers in (
+        {"User-Agent": user_agent, "Range": "bytes=0-0"},
+        {"User-Agent": user_agent},
+    ):
+        try:
+            request = Request(value, headers=headers)
+            with urlopen(request, timeout=8) as response:
+                resolved = _canonical_source_url(response.geturl())
+                if resolved:
+                    return resolved
+        except Exception:
+            continue
+    logger.info("Kunne ikke løse midlertidig grounding-adresse")
+    return ""
 
 
 def _structured_tools_unsupported(exc: Exception) -> bool:
@@ -797,8 +803,7 @@ Ikke finn opp offisielle kompetansemål, kilder eller boktitler.
 JSON:
 {{
   "title": "...",
-  "scope_contract": {{
-    "reference_date": "...",
+  "scope_contract": {{    "reference_date": "...",
     "geography": "...",
     "inclusion_criteria": ["..."],
     "exclusions": ["..."],
@@ -1198,7 +1203,6 @@ def _line_prefix(value: str) -> tuple[str, str]:
     match = re.match(r"^(\s{0,3}(?:[-+*]|\d+[.)])\s+)(.*)$", value)
     return (match.group(1), match.group(2)) if match else ("", value)
 
-
 def _sentence_candidates(value: str, offset: int) -> list[_RepairTarget]:
     candidates: list[_RepairTarget] = []
     for match in re.finditer(r".+?(?:[.!?]+(?=\s|$)|$)", value):
@@ -1597,8 +1601,7 @@ def repair_preconditions(
         30,
     )
     if not repair_notes:
-        raise ValueError("Kapitlet har ingen kontrollmerknader eller svake kilder å rette.")
-    return chapter, repair_notes
+        raise ValueError("Kapitlet har ingen kontrollmerknader eller svake kilder å rette.")    return chapter, repair_notes
 
 
 def repair_compendium_chapter(
@@ -2098,31 +2101,3 @@ JSON:
             first_revisions = [
                 change.reason
                 for change in first.changes
-                if change.result == "applied"
-            ]
-            second_pass.revision_summary = [
-                *first_revisions,
-                *second_pass.revision_summary,
-            ][:30]
-        return second_pass
-    observe(
-        "truth_audit",
-        truth_status=truth_passport.status,
-        coverage_percent=truth_passport.coverage_percent,
-        verified_claims=truth_passport.verified_claims,
-        total_claims=truth_passport.total_claims,
-        quality_issue_count=len(quality_issues),
-        failure_status=failure_status,
-        independent_check_approved=verified,
-        proposed_change_count=len(repair_changes),
-        applied_change_count=len(applied_changes),
-        unresolved_change_count=len(unresolved_changes),
-        manual_review_count=len(manual_changes),
-        source_count=len(sources),
-        content_hash_before=_hash(content_before),
-        content_hash_after=_hash(repaired_content),
-        content_revision=truth_passport.content_revision,
-        content_chars_after=len(repaired_content),
-        chapter_status=chapter_status,
-    )
-    return CompendiumChapter.model_validate(updated)
