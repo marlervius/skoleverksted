@@ -432,25 +432,28 @@ def _response_text(response: object) -> str:
 def _grounding_sources(response: object) -> list[CompendiumSource]:
     sources: list[CompendiumSource] = []
     try:
-        candidates = getattr(response, "candidates", None) or []
-        metadata = getattr(candidates[0], "grounding_metadata", None) if candidates else None
-        chunks = getattr(metadata, "grounding_chunks", None) or []
-        for chunk in chunks:
-            web = getattr(chunk, "web", None)
-            raw_url = _text(getattr(web, "uri", ""), 1000)
-            url = _canonical_source_url(raw_url)
-            if not url and _is_transient_source_url(raw_url):
-                url = _resolve_grounding_redirect(raw_url)
-            title = _text(getattr(web, "title", ""), 300)
-            if url and not any(item.url == url for item in sources):
-                sources.append(
-                    CompendiumSource(
-                        title=title or url,
-                        url=url,
-                        origin="grounding",
-                        fetch_status="grounded",
+        # Search-enabled responses can contain more than one candidate. Source
+        # metadata from every candidate belongs to the same grounded model call
+        # and must survive into later verification rounds.
+        for candidate in getattr(response, "candidates", None) or []:
+            metadata = getattr(candidate, "grounding_metadata", None)
+            chunks = getattr(metadata, "grounding_chunks", None) or []
+            for chunk in chunks:
+                web = getattr(chunk, "web", None)
+                raw_url = _text(getattr(web, "uri", ""), 1000)
+                url = _canonical_source_url(raw_url)
+                if not url and _is_transient_source_url(raw_url):
+                    url = _resolve_grounding_redirect(raw_url)
+                title = _text(getattr(web, "title", ""), 300)
+                if url and not any(item.url == url for item in sources):
+                    sources.append(
+                        CompendiumSource(
+                            title=title or url,
+                            url=url,
+                            origin="grounding",
+                            fetch_status="grounded",
+                        )
                     )
-                )
     except Exception:
         logger.debug("Kunne ikke lese grounding-metadata", exc_info=True)
     return sources[:40]
@@ -465,19 +468,23 @@ def _is_transient_source_url(value: str) -> bool:
 
 def _resolve_grounding_redirect(value: str) -> str:
     """Resolve Google's temporary citation URL without downloading the page."""
-    try:
-        request = Request(
-            value,
-            headers={
-                "User-Agent": "Skoleverksted/1.0 (+https://skoleverksted.vercel.app)",
-                "Range": "bytes=0-0",
-            },
-        )
-        with urlopen(request, timeout=5) as response:
-            return _canonical_source_url(response.geturl())
-    except Exception:
-        logger.info("Kunne ikke løse midlertidig grounding-adresse", exc_info=True)
-        return ""
+    user_agent = "Skoleverksted/1.0 (+https://skoleverksted.vercel.app)"
+    # Some publishers reject byte-range requests even though the redirect is
+    # valid. Retry without Range; opening the response does not read its body.
+    for headers in (
+        {"User-Agent": user_agent, "Range": "bytes=0-0"},
+        {"User-Agent": user_agent},
+    ):
+        try:
+            request = Request(value, headers=headers)
+            with urlopen(request, timeout=8) as response:
+                resolved = _canonical_source_url(response.geturl())
+                if resolved:
+                    return resolved
+        except Exception:
+            continue
+    logger.info("Kunne ikke løse midlertidig grounding-adresse")
+    return ""
 
 
 def _structured_tools_unsupported(exc: Exception) -> bool:

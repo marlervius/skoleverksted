@@ -854,6 +854,11 @@ class PreviewPDFRequest(BaseModel):
     language_exercises: Optional[dict] = None
     options: dict[str, bool]
     accessibility: Optional[dict] = None
+    provided_sources: list[dict] = Field(
+        default_factory=list,
+        max_length=50,
+        description="Concrete sources retained from the preceding truth audit.",
+    )
 
 
 class ImageCandidateResponse(BaseModel):
@@ -1400,18 +1405,22 @@ def generate_pdf_from_json_background(
 ):
     """Background task to generate PDF directly from JSON (skipping AI steps)."""
     try:
-        separator = "\n\n<<<SKOLEVERKSTED_OPPGAVER>>>\n\n"
-        language_separator = "\n\n<<<SKOLEVERKSTED_SPRÅKOPPGAVER>>>\n\n"
+        verification_document = json.dumps(
+            {
+                "text": request.text,
+                "worksheet": request.worksheet,
+                "language_exercises": request.language_exercises,
+            },
+            ensure_ascii=False,
+        )
         request_id = str((get_progress(generation_id) or {}).get("request_id") or "")
         quality = run_quality_pipeline(
             generator_id="norsk.preview_pdf",
-            content=(
-                f"{request.text}{separator}{request.worksheet}{language_separator}"
-                f"{json.dumps(request.language_exercises, ensure_ascii=False)}"
-            ),
+            content=verification_document,
             topic=request.topic,
             subject=request.subject,
             level=request.level,
+            provided_sources=request.provided_sources,
             request_id=request_id,
         )
         quality_document = _quality_result_document(quality)
@@ -1420,14 +1429,24 @@ def generate_pdf_from_json_background(
         original_worksheet = request.worksheet
         original_language_exercises = request.language_exercises
         try:
-            request.text, remainder = quality.approved_content.split(separator, 1)
-            request.worksheet, language_payload = remainder.split(language_separator, 1)
-            request.language_exercises = json.loads(language_payload)
-        except (ValueError, json.JSONDecodeError) as exc:
+            revised_document = json.loads(quality.approved_content)
+            if not isinstance(revised_document, dict):
+                raise ValueError("kontrollert innhold er ikke et objekt")
+            revised_text = revised_document.get("text")
+            revised_worksheet = revised_document.get("worksheet")
+            revised_language = revised_document.get("language_exercises")
+            if not isinstance(revised_text, str) or not isinstance(revised_worksheet, str):
+                raise ValueError("kontrollerte tekstfelt mangler")
+            if revised_language is not None and not isinstance(revised_language, dict):
+                raise ValueError("språkoppgavene er ikke et objekt")
+            request.text = revised_text
+            request.worksheet = revised_worksheet
+            request.language_exercises = revised_language
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
             if source_approved:
                 raise ValueError("Kontrollert innhold kunne ikke deles trygt tilbake i PDF-feltene.") from exc
             # A review draft must remain visible even if the controller could
-            # not safely split a revised structured payload. It is explicitly
+            # not safely parse a revised structured payload. It is explicitly
             # watermarked and can never be served by the final export route.
             request.text = original_text
             request.worksheet = original_worksheet
@@ -1529,6 +1548,9 @@ def generate_pdf_from_json_background(
                 "quarantine": quality_document.get("quarantine", []),
                 "quality_rounds": quality_document.get("quality_rounds", []),
                 "quality_stop_reason": quality_document.get("quality_stop_reason", ""),
+                "provided_sources": (
+                    quality_document.get("truth_passport") or {}
+                ).get("sources", []),
             },
         )
 

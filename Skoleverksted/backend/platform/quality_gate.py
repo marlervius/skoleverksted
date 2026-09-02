@@ -252,14 +252,19 @@ def _remove_exact_claim(content: str, exact: str) -> tuple[str, bool]:
     return (before.rstrip() + joiner + after.lstrip()).strip(), True
 
 
-def _remove_exact_claim_from_json(content: str, exact: str) -> tuple[str, bool]:
-    """Remove one unambiguous claim from a JSON string value.
+def _remove_exact_claim_from_json(
+    content: str,
+    exact: str,
+    *,
+    action: str = "remove",
+    replacement: str = "",
+) -> tuple[str, bool]:
+    """Repair one unambiguous claim inside JSON string values.
 
-    Several generators submit structured JSON as their canonical verification
-    document.  Treating that serialization as prose makes a perfectly complete
-    sentence look unsafe to remove because it is surrounded by JSON quotes.  We
-    therefore inspect string *values*, apply the same sentence-boundary rules
-    there, and serialize the otherwise unchanged structure again.
+    A qualified replacement is applied only when the claim occurs once in the
+    complete document. The exact revised JSON is always audited again before it
+    can become source-approved. If a precise replacement/removal is unsafe, the
+    complete affected field is withheld so unresolved text cannot leak.
     """
     try:
         payload = json.loads(content)
@@ -267,30 +272,33 @@ def _remove_exact_claim_from_json(content: str, exact: str) -> tuple[str, bool]:
         return content, False
 
     exact = exact.strip()
+    safe_replacement = replacement.strip()
     if not exact:
         return content, False
 
-    removed = False
+    changed = False
+    occurrences = content.count(exact)
     withheld_notice = "[Utelatt: denne delen kunne ikke kildeverifiseres.]"
 
     def revise(value: object) -> object:
-        nonlocal removed
+        nonlocal changed
         if isinstance(value, str) and exact in value:
-            # A unique, complete sentence can be removed precisely.  If the
-            # fragment is repeated (inside this field or elsewhere in the JSON)
-            # there is no safe single target, so withhold every affected field.
-            # This is intentionally conservative: losing surrounding prose is
-            # preferable to leaking one unresolved claim into student material.
+            if (
+                action == "qualify"
+                and safe_replacement
+                and safe_replacement != exact
+                and occurrences == 1
+            ):
+                changed = True
+                return value.replace(exact, safe_replacement, 1)
+
+            # A unique, complete sentence can be removed precisely. If the
+            # fragment is repeated or partial, withhold every affected field.
             revised, applied = _remove_exact_claim(value, exact)
-            if applied and content.count(exact) == 1:
-                removed = True
+            if applied and occurrences == 1:
+                changed = True
                 return revised
-            # A model can return only an entity or phrase as ``exact_text``.
-            # Removing that fragment may change the meaning of the surrounding
-            # sentence, so quarantine the complete JSON field instead.  This
-            # deliberately sacrifices some safe prose rather than leaking an
-            # unresolved claim into student material.
-            removed = True
+            changed = True
             return withheld_notice
         if isinstance(value, list):
             return [revise(item) for item in value]
@@ -299,7 +307,7 @@ def _remove_exact_claim_from_json(content: str, exact: str) -> tuple[str, bool]:
         return value
 
     revised_payload = revise(payload)
-    if not removed:
+    if not changed:
         return content, False
     return json.dumps(revised_payload, ensure_ascii=False), True
 
@@ -340,7 +348,12 @@ def _withhold_unresolved_claims(
         if not removed:
             revised, removed = _remove_exact_claim(current, exact)
         if not removed:
-            revised, removed = _remove_exact_claim_from_json(current, exact)
+            revised, removed = _remove_exact_claim_from_json(
+                current,
+                exact,
+                action=claim.action,
+                replacement=claim.replacement,
+            )
         if removed:
             current = revised
             handled = True

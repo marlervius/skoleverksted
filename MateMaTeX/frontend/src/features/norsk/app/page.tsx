@@ -583,6 +583,9 @@ export default function HomeContent() {
           image_credit: previewData.image_credit || "",
           image_source_page: previewData.image_source_page || null,
           language_exercises: previewData.language_exercises,
+          provided_sources: Array.isArray(previewData.truth_passport?.sources)
+            ? previewData.truth_passport.sources
+            : [],
           options,
           accessibility,
         }),
