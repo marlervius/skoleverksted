@@ -127,6 +127,23 @@ class TestMathRetryRouting:
         assert should_retry_math(state) == "content_quality"
         assert state.edited_latex_body == state.verified_latex_body
 
+    def test_skip_editor_for_hefte(self):
+        """Booklets skip the whole-document editor rewrite for faster generation."""
+        state = PipelineState(
+            request=GenerationRequest(
+                grade="VG1 1T", topic="Funksjoner", material_type="hefte"
+            ),
+            verified_latex_body="\\section*{Fasit} $2+2=4$",
+            math_verification=VerificationResult(
+                claims_checked=1,
+                claims_correct=1,
+                all_correct=True,
+            ),
+            math_verification_attempts=1,
+        )
+        assert should_retry_math(state) == "content_quality"
+        assert state.edited_latex_body == state.verified_latex_body
+
     def test_first_correction_runs_when_mostly_unparseable(self):
         """Confirmed errors always get one correction pass before blocking."""
         state = PipelineState(

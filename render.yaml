@@ -40,6 +40,10 @@ services:
         value: google
       - key: FALLBACK_MODEL
         value: gemini-3.1-flash-lite
+      # The whole-document editor rewrite is optional and is the slowest
+      # stage. Keep booklets on the deterministic fast path as well.
+      - key: SKIP_EDITOR_MATERIAL_TYPES
+        value: arbeidsark,hefte,prøve,differensiert
       - key: PROMPT_VERSION
         value: skoleverksted-v3
       - key: MAX_CONCURRENT_JOBS

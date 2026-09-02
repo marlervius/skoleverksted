@@ -113,6 +113,16 @@ const BASE_PIPELINE_ORDER = [
   "layout",
 ];
 
+// Keep the progress timeline aligned with the backend's default fast path.
+// These products still run deterministic math, LaTeX and content checks; they
+// simply do not invoke the optional whole-document editor rewrite.
+const DEFAULT_EDITOR_SKIP_TYPES = new Set([
+  "arbeidsark",
+  "hefte",
+  "prøve",
+  "differensiert",
+]);
+
 export function PipelineProgress() {
   const steps = useAppStore((s) => s.steps);
   const currentAgent = useAppStore((s) => s.currentAgent);
@@ -137,7 +147,10 @@ export function PipelineProgress() {
   };
 
   // Dynamically add fixer/fallback to the timeline if they are used
-  const displayOrder = [...BASE_PIPELINE_ORDER];
+  const editorSkipped = DEFAULT_EDITOR_SKIP_TYPES.has(request.materialType);
+  const displayOrder = BASE_PIPELINE_ORDER.filter(
+    (agentKey) => !(editorSkipped && agentKey === "editor"),
+  );
   if (completedAgents.has("latex_fixer") || currentAgent === "latex_fixer") {
     displayOrder.push("latex_fixer");
   }
