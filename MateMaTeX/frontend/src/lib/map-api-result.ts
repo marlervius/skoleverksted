@@ -109,6 +109,16 @@ export function mapApiResultToGenerationResult(
     contentQuality: mapContentQuality(raw.content_quality),
     layoutReport: mapLayoutReport(raw.layout_report),
     layoutFixAttempts: Number(raw.layout_fix_attempts ?? 0),
+    truthPassport:
+      raw.truth_passport && typeof raw.truth_passport === "object"
+        ? (raw.truth_passport as GenerationResult["truthPassport"])
+        : undefined,
+    sourceApproved:
+      typeof raw.source_approved === "boolean" ? raw.source_approved : undefined,
+    teacherApprovedAt:
+      typeof raw.teacher_approved_at === "string" ? raw.teacher_approved_at : undefined,
+    qualityStopReason:
+      typeof raw.quality_stop_reason === "string" ? raw.quality_stop_reason : undefined,
     steps,
     mathVerification: {
       claimsChecked: Number(mv.claims_checked ?? 0),

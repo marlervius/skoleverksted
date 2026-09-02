@@ -26,7 +26,19 @@ export async function GET(
 
   const preview = req.nextUrl.searchParams.get("preview") === "true";
   const url = `${backend}/generate/${encodeURIComponent(jobId)}/pdf${preview ? "?preview=true" : ""}`;
-  const upstream = await fetch(url, { headers, cache: "no-store" });
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, { headers, cache: "no-store" });
+  } catch {
+    return Response.json(
+      {
+        detail: "Matematikkserveren er midlertidig utilgjengelig. Prøv igjen om litt.",
+        code: "backend_unavailable",
+        retryable: true,
+      },
+      { status: 502 },
+    );
+  }
 
   if (!upstream.ok) {
     const text = await upstream.text().catch(() => "");
@@ -58,10 +70,22 @@ export async function POST(
   const key = process.env.MATE_API_KEY?.trim();
   if (key) headers["X-API-Key"] = key;
 
-  const upstream = await fetch(
-    `${backend}/generate/${encodeURIComponent(jobId)}/approve`,
-    { method: "POST", headers, cache: "no-store" },
-  );
+  let upstream: Response;
+  try {
+    upstream = await fetch(
+      `${backend}/generate/${encodeURIComponent(jobId)}/approve`,
+      { method: "POST", headers, cache: "no-store" },
+    );
+  } catch {
+    return Response.json(
+      {
+        detail: "Matematikkserveren er midlertidig utilgjengelig. Prøv igjen om litt.",
+        code: "backend_unavailable",
+        retryable: true,
+      },
+      { status: 502 },
+    );
+  }
   const body = await upstream.text().catch(() => "");
   return new Response(body, {
     status: upstream.status,

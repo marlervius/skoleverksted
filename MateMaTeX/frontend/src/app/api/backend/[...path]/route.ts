@@ -86,7 +86,19 @@ async function proxyRequest(req: NextRequest, pathSegments: string[]) {
     init.body = body;
   }
 
-  const upstream = await fetch(url, init);
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, init);
+  } catch {
+    return Response.json(
+      {
+        detail: "Matematikkserveren er midlertidig utilgjengelig. Prøv igjen om litt.",
+        code: "backend_unavailable",
+        retryable: true,
+      },
+      { status: 502 },
+    );
+  }
   const responseHeaders = new Headers();
   const upstreamType = upstream.headers.get("content-type");
   if (upstreamType) {

@@ -49,3 +49,19 @@ def test_pdflatex_needs_no_font_loader(monkeypatch):
     assert compiler.engine_is_usable("pdflatex") is True
     assert compiler.resolve_engine("auto") == "pdflatex"
     _reset_cache()
+
+
+def test_compile_reports_permission_error_as_controlled_export_failure(monkeypatch):
+    monkeypatch.setattr(compiler, "resolve_engine", lambda _preferred=None: "pdflatex")
+
+    def denied(*_args, **_kwargs):
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr(compiler.subprocess, "run", denied)
+
+    pdf_path, log = compiler.compile_to_pdf_with_log(
+        r"\documentclass{article}\begin{document}Test\end{document}",
+    )
+
+    assert pdf_path is None
+    assert "tilgang nektet" in log

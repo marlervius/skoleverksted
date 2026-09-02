@@ -67,6 +67,22 @@ def quality_max_revision_rounds() -> int:
 
 MAX_REVISION_ROUNDS = DEFAULT_MAX_REVISION_ROUNDS
 
+# Mathematics has its own deterministic evidence chain: SymPy verifies
+# mathematical claims and the LaTeX checker verifies the rendered document.
+# Do not send ordinary mathematical notation through the web fact auditor;
+# doing so makes a provider outage look like a bad answer key and blocks PDF
+# generation for otherwise valid worksheets.  A custom auditor is still
+# honoured below so tests and explicitly requested review workflows remain
+# fail-closed.
+MATHEMATICS_GENERATORS: frozenset[str] = frozenset(
+    {
+        "matematikk.material",
+        "matematikk.differentiated",
+        "matematikk.exercise_variant",
+        "matematikk.editor_ai_action",
+    }
+)
+
 # This is the contract surface.  A new generator must be registered here and
 # covered by the contract test before it can be shipped through the unified app.
 GENERATOR_CONTRACTS: frozenset[str] = frozenset(
@@ -130,6 +146,45 @@ def claim_is_resolved(claim: TruthClaim) -> bool:
         content_type=claim.content_type,
         status=claim.status,
         source_urls=claim.source_urls,
+    )
+
+
+def _mathematics_truth_audit(
+    *,
+    content: str,
+    topic: str,
+    subject: str,
+) -> TruthAudit:
+    """Create the explicit non-web passport for deterministic math content.
+
+    This is not a blanket approval for mathematical correctness.  The shared
+    pipeline still runs ``deterministic_math_failures`` and the math graph
+    already rejects incorrect SymPy answers.  The passport simply records
+    that web evidence is not the applicable gate for notation, exercises,
+    transformations, and answer keys.
+    """
+    return TruthAudit(
+        content=content,
+        passport=TruthPassport(
+            version="2.0",
+            content_revision=content_digest(content),
+            status="verified",
+            topic=topic,
+            subject=subject,
+            coverage_percent=100,
+            verified_claims=0,
+            total_claims=0,
+            claims=[],
+            sources=[],
+            limitations=[
+                "Matematikkinnhold vurderes med SymPy og LaTeX-kontroll, ikke web-faktasøk.",
+                "Eventuelle eksterne virkelighetsopplysninger i teksten må fortsatt leses av lærer.",
+            ],
+            summary=(
+                "Matematikkens uttrykk og fasit følger den deterministiske "
+                "SymPy-kontrollen. Web-faktasøk er ikke nødvendig for dette innholdet."
+            ),
+        ),
     )
 
 
@@ -435,6 +490,16 @@ def run_quality_pipeline(
             raise QualityLayerTimeout("truth layer budget exhausted")
         if cancel_check and cancel_check():
             raise QualityLayerCancelled("truth layer cancelled")
+        if generator_id in MATHEMATICS_GENERATORS and audit is audit_truth:
+            emit_progress(
+                "Matematikkontroll: bruker SymPy/LaTeX – web-faktasøk er ikke nødvendig",
+                round_number=round_number,
+            )
+            return _mathematics_truth_audit(
+                content=current,
+                topic=topic,
+                subject=subject,
+            )
         kwargs: dict[str, object] = {
             "content": current,
             "topic": topic,

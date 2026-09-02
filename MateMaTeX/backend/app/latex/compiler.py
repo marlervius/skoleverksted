@@ -183,6 +183,9 @@ def compile_to_pdf_with_log(
             except FileNotFoundError as e:
                 logger.error("latex_engine_not_found", engine=binary, error=str(e))
                 return None, f"LaTeX-motor ikke funnet: '{binary}'."
+            except PermissionError as e:
+                logger.error("latex_engine_not_executable", engine=binary, error=str(e))
+                return None, f"LaTeX-motoren kan ikke startes (tilgang nektet): '{binary}'."
             except subprocess.TimeoutExpired as e:
                 logger.error("latex_timeout", engine=binary, error=str(e))
                 return None, f"{engine_name} tidsavbrudd (>180s)."

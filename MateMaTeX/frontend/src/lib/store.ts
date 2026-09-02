@@ -5,6 +5,7 @@
 import { create } from "zustand";
 import type { ErrorCategory } from "@/lib/map-api-result";
 import { categorizeError } from "@/lib/map-api-result";
+import type { TruthPassport } from "@/lib/platform-api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -106,6 +107,10 @@ export interface GenerationResult {
   contentQuality?: ContentQualityReport;
   layoutReport?: LayoutReport;
   layoutFixAttempts?: number;
+  truthPassport?: TruthPassport;
+  sourceApproved?: boolean;
+  teacherApprovedAt?: string;
+  qualityStopReason?: string;
   steps: AgentStep[];
   mathVerification: {
     claimsChecked: number;

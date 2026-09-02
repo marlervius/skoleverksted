@@ -14,6 +14,7 @@ from Skoleverksted.backend.platform.quality_gate import (
     deterministic_math_failures,
     require_export_ready,
     run_quality_pipeline,
+    verify_teacher_export,
 )
 from Skoleverksted.backend.platform.quality_runtime import QualityLayerCancelled
 from Skoleverksted.backend.platform.truth import TruthAudit
@@ -443,6 +444,65 @@ def test_inconsistent_task_answer_is_blocked_as_a_math_claim():
     )
     assert not result.source_approved
     assert result.passport.status == "needs_review"
+
+
+def test_default_mathematics_policy_does_not_require_web_fact_audit():
+    content = (
+        "## Lineære funksjoner\n"
+        "Finn stigningstallet til linjen gjennom punktene (1, 3) og (3, 7). "
+        "Vis utregningen og kontroller svaret med en annen metode."
+    )
+
+    result = run_quality_pipeline(
+        generator_id="matematikk.material",
+        content=content,
+        topic="Lineære funksjoner",
+        subject="Matematikk",
+        level="VG1",
+    )
+
+    assert result.source_approved
+    assert result.passport.status == "verified"
+    assert result.passport.total_claims == 0
+    assert "web-faktasøk" in result.passport.summary.lower()
+    assert len(result.rounds) == 1
+
+
+def test_default_mathematics_policy_still_blocks_deterministically_wrong_equalities():
+    content = "## Regning\nRegn ut uttrykket og bruk svaret: 2 + 2 = 5."
+
+    result = run_quality_pipeline(
+        generator_id="matematikk.material",
+        content=content,
+        topic="Regning",
+        subject="Matematikk",
+        level="VG1",
+    )
+
+    assert not result.source_approved
+    assert result.passport.status == "needs_review"
+    assert result.deterministic_failures == ["2 + 2 = 5"]
+
+
+def test_mathematics_export_gate_accepts_clean_content_without_web_evidence():
+    content = (
+        "## Lineære funksjoner\n"
+        "Finn stigningstallet til linjen gjennom punktene (1, 3) og (3, 7). "
+        "Vis utregningen og kontroller svaret med en annen metode."
+    )
+
+    result = verify_teacher_export(
+        generator_id="matematikk.material",
+        export_id="matematikk.pdf",
+        content=content,
+        topic="Lineære funksjoner",
+        subject="Matematikk",
+        level="VG1",
+        teacher_approved=True,
+    )
+
+    assert result.source_approved
+    assert result.passport.status == "verified"
 
 
 def test_teacher_added_source_can_turn_reverification_green():

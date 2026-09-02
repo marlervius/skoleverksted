@@ -47,6 +47,7 @@ import {
 import { agentLabel } from "@/lib/agent-labels";
 import { PdfViewer } from "@/components/pdf-viewer";
 import { ExportModal } from "@/components/export-modal";
+import { TruthPassport } from "@/components/truth-passport";
 import { saveYearPlanMaterial, type MaterialKind } from "@/lib/platform-api";
 import {
   readMathematicsYearPlanContext,
@@ -635,6 +636,12 @@ export function ResultView() {
               <p className="text-xs text-text-secondary">
                 Dokumentet inneholder seksjonene Grunnleggende, Standard og Avansert.
               </p>
+            </div>
+          )}
+
+          {result.truthPassport && (
+            <div className="mb-6">
+              <TruthPassport passport={result.truthPassport} />
             </div>
           )}
 

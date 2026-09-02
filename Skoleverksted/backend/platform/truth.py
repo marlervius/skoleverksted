@@ -475,6 +475,10 @@ Krav:
 - Del teksten i atomiske kontrollpunkter og klassifiser hvert punkt. Rene
   oppgaver, læringsmål, språkeksempler og refleksjonsspørsmål skal IKKE
   registreres som eksterne faktapåstander.
+- For matematikk: bruk mathematics for matematiske uttrykk, definisjoner,
+  omforminger og oppgaver. Disse skal kontrolleres av matematikkens
+  deterministiske kontroll, ikke behandles som web-fakta. Registrer bare
+  påstander om den virkelige verden som external_factual_claim.
 - Bruk content_type nøyaktig: external_factual_claim for virkelige personer,
   steder, datoer, hendelser, institusjoner, statistikk og andre opplysninger
   om verden; grammar_claim for språkfaglige regler; translation for oversettelser;

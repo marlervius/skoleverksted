@@ -10,6 +10,7 @@ import type {
   StreamCurrentAgentPayload,
   StreamStepPayload,
 } from "@/types/generation";
+import type { TruthPassport } from "@/lib/platform-api";
 import { internalServiceBackendUrl } from "@/lib/backend-url";
 
 function getApiBase(): string {
@@ -159,6 +160,10 @@ export interface GenerationResultApi {
   pdf_available?: boolean;
   math_verification: Record<string, unknown>;
   content_quality?: Record<string, unknown>;
+  truth_passport?: TruthPassport | null;
+  source_approved?: boolean;
+  teacher_approved_at?: string;
+  quality_stop_reason?: string;
   latex_compilation: Record<string, unknown>;
   layout_report?: Record<string, unknown>;
   steps: Array<Record<string, unknown>>;

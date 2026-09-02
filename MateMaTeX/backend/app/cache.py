@@ -25,6 +25,10 @@ logger = structlog.get_logger()
 
 # Cache storage directory
 CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
+# Bump when the final verification/export semantics change. This prevents an
+# older PDF-less or fact-audit-blocked math result from being served after a
+# deployment that has repaired the pipeline.
+FULL_PIPELINE_CACHE_VERSION = "v2-math-quality"
 
 
 @dataclass
@@ -229,7 +233,7 @@ class SemanticCache:
 
     def _full_key(self, request: GenerationRequest) -> str:
         """Full result cache key: entire request."""
-        raw = request.model_dump_json()
+        raw = f"{FULL_PIPELINE_CACHE_VERSION}:{request.model_dump_json()}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def _get(self, key: str, agent: str) -> str | None:
