@@ -9,7 +9,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .models import (
     ACTIVE_REPAIR_STATUSES,
@@ -363,16 +363,21 @@ class PlatformStore:
         return project
 
     def upsert_job(self, job: Job) -> Job:
-        payload = job.model_dump()
         with self._lock, self._connection() as conn:
-            conn.execute(
-                """INSERT INTO jobs(id,module,status,project_id,payload,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?)
-                   ON CONFLICT(id) DO UPDATE SET
-                     module=excluded.module,status=excluded.status,project_id=excluded.project_id,
-                     payload=excluded.payload,updated_at=excluded.updated_at""",
-                (job.id, job.module, job.status, job.project_id, self._json(payload), job.created_at, job.updated_at),
-            )
+            self._save_job(conn, job)
+        return job
+
+    def _save_job(self, conn: Any, job: Job) -> Job:
+        """Persist one shared job on an already-open store transaction."""
+        payload = job.model_dump()
+        conn.execute(
+            """INSERT INTO jobs(id,module,status,project_id,payload,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 module=excluded.module,status=excluded.status,project_id=excluded.project_id,
+                 payload=excluded.payload,updated_at=excluded.updated_at""",
+            (job.id, job.module, job.status, job.project_id, self._json(payload), job.created_at, job.updated_at),
+        )
         return job
 
     def update_job_state(
@@ -1250,12 +1255,17 @@ class PlatformStore:
         failure_reason: str = "",
         expected_statuses: tuple[str, ...] = ACTIVE_REPAIR_STATUSES,
         terminal_event: tuple[str, dict[str, Any]] | None = None,
+        mirror_job_factory: Callable[[RepairJob, Job | None], Job] | None = None,
     ) -> RepairJob | None:
-        """Write a terminal status and release the chapter lock."""
+        """Write a terminal status, mirror it, and release the chapter lock."""
         with self._exclusive() as conn:
             job = self._read_repair_job(conn, job_id)
             if job is None or job.status not in expected_statuses:
                 return None
+            existing_mirror = None
+            if mirror_job_factory is not None:
+                row = conn.execute("SELECT payload FROM jobs WHERE id=?", (job_id,)).fetchone()
+                existing_mirror = Job.model_validate_json(row["payload"]) if row else None
             job.status = status  # type: ignore[assignment]
             job.message = message[:400]
             job.result_token = result_token or job.result_token
@@ -1268,6 +1278,8 @@ class PlatformStore:
             job.finished_at = utc_now()
             job.updated_at = job.finished_at
             finished = self._save_repair_job(conn, job)
+            if mirror_job_factory is not None:
+                self._save_job(conn, mirror_job_factory(finished, existing_mirror))
             if terminal_event is not None:
                 stage, payload = terminal_event
                 entry = RepairLedgerEntry(
