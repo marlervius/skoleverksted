@@ -360,18 +360,17 @@ class RepairService:
             failure_reason=failure_reason,
             expected_statuses=expected_statuses,
             terminal_event=terminal_event,
+            mirror_job_factory=self._build_mirror,
         )
         if finished is None:
             # Cancelled or recovered while we worked; that record wins.
             return self._store.get_repair_job(job.id)
-        self._mirror(finished)
         return finished
 
-    def _mirror(self, job: RepairJob) -> Job | None:
-        """Keep the shared job ledger honest so /jobs and /queue stay usable."""
+    def _build_mirror(self, job: RepairJob, existing: Job | None = None) -> Job:
+        """Build the shared ledger row for a repair state transition."""
         status, progress, retryable = _MIRROR_STATUS[job.status]
-        existing = self._store.get_job(job.id)
-        mirrored = Job(
+        return Job(
             id=job.id,
             module="platform",
             kind=REPAIR_JOB_KIND,
@@ -397,8 +396,11 @@ class RepairService:
             created_at=existing.created_at if existing else job.created_at,
             updated_at=utc_now(),
         )
+
+    def _mirror(self, job: RepairJob) -> Job | None:
+        """Keep the shared job ledger honest so /jobs and /queue stay usable."""
         try:
-            return self._store.upsert_job(mirrored)
+            return self._store.upsert_job(self._build_mirror(job, self._store.get_job(job.id)))
         except Exception:
             logger.warning("Kunne ikke speile reparasjonsjobb %s i jobbledgeren", job.id, exc_info=True)
             return None
