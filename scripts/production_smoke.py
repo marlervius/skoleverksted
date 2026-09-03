@@ -47,6 +47,11 @@ def run_once() -> list[str]:
     status, ready = request(f"{BACKEND}/health/ready")
     if status != 200 or not isinstance(ready, dict) or ready.get("status") != "ready":
         errors.append(f"backend readiness: HTTP {status} {ready}")
+    elif ready.get("runtime", {}).get("latex_engine") != "pdflatex":
+        errors.append(
+            "backend readiness: mathematics PDF engine is not the "
+            "memory-safe production engine (expected pdflatex)"
+        )
 
     for path in ("/", "/fag", "/norsk", "/matematikk"):
         page_status, _ = request(f"{FRONTEND}{path}")

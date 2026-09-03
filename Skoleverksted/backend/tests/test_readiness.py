@@ -22,6 +22,7 @@ class ReadinessTests(unittest.TestCase):
                 "PROMPT_VERSION": "school-v3",
                 "GOOGLE_MODEL": "gemini-test",
                 "GOOGLE_IMAGE_MODEL": "image-test",
+                "LATEX_ENGINE": "pdflatex",
             },
             which=commands.get,
         )
@@ -32,6 +33,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertTrue(report["redis_configured"])
         self.assertEqual(report["release"], "abcdef123456")
         self.assertEqual(report["runtime"]["prompt_version"], "school-v3")
+        self.assertEqual(report["runtime"]["latex_engine"], "pdflatex")
         self.assertNotIn("super-secret", str(report))
         self.assertNotIn("math-secret", str(report))
         self.assertNotIn("norsk-secret", str(report))
@@ -50,6 +52,7 @@ class ReadinessTests(unittest.TestCase):
             set(report["missing"]),
             {"storage", "google_ai", "matematikk_access", "norsk_access", "typst", "pdflatex"},
         )
+        self.assertEqual(report["runtime"]["latex_engine"], "auto")
 
 
 if __name__ == "__main__":

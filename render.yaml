@@ -28,6 +28,12 @@ services:
         value: /usr/local/bin/typst
       - key: PDFLATEX_PATH
         value: /usr/bin/pdflatex
+      # The Starter instance is limited to 512 MB. LuaLaTeX (the application
+      # default in auto mode) pushes the shared three-module process over that
+      # limit during mathematics PDF compilation. Keep the production service
+      # on the substantially lighter pdfLaTeX engine.
+      - key: LATEX_ENGINE
+        value: pdflatex
       - key: AI_TEMPERATURE
         value: "0.35"
       - key: GOOGLE_MODEL

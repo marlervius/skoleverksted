@@ -44,8 +44,9 @@ def build_readiness(
     prompt_version = env.get("PROMPT_VERSION", "unknown").strip() or "unknown"
     google_model = env.get("GOOGLE_MODEL", "unknown").strip() or "unknown"
     image_model = env.get("GOOGLE_IMAGE_MODEL", "unknown").strip() or "unknown"
+    latex_engine = env.get("LATEX_ENGINE", "auto").strip().lower() or "auto"
     config_fingerprint = hashlib.sha256(
-        f"{prompt_version}|{google_model}|{image_model}".encode("utf-8")
+        f"{prompt_version}|{google_model}|{image_model}|{latex_engine}".encode("utf-8")
     ).hexdigest()[:12]
 
     return ready, {
@@ -61,6 +62,7 @@ def build_readiness(
             "prompt_version": prompt_version,
             "google_model": google_model,
             "image_model": image_model,
+            "latex_engine": latex_engine,
             "config_fingerprint": config_fingerprint,
         },
     }

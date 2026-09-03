@@ -16,6 +16,10 @@ must survive restarts and deploys.
    - `ALLOWED_ORIGINS`: same origin. Multiple origins can be comma-separated.
 4. Create the Blueprint and wait for `/health/ready` to pass.
 
+The checked-in Blueprint sets `LATEX_ENGINE=pdflatex`. Keep this setting on the
+512 MB Starter service: the shared process can exceed the memory limit when
+LuaLaTeX is selected by the application's `auto` mode.
+
 Render generates `MATE_API_KEY`. Copy its value from the backend service to the
 frontend host as `MATE_API_KEY`; it is used only by the server-side frontend
 proxy. Configure the frontend with:
