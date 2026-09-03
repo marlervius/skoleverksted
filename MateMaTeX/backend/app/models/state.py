@@ -312,7 +312,7 @@ class PipelineState(BaseModel):
         default="",
         description=(
             "Why status is completed_with_warnings: 'unparseable' | 'incorrect' | "
-            "'fallback' | 'content_quality' (comma-separated)"
+            "'fallback' | 'content_quality' | 'latex_compilation' (comma-separated)"
         ),
     )
 

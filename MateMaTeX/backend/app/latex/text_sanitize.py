@@ -29,7 +29,15 @@ _PLACEHOLDER_PREFIX = "\x00MMTX"
 _MATH_RE = re.compile(
     r"(\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))"
 )
-_CMD_RE = re.compile(r"(\\[a-zA-Z@]+(?:\[[^\]]*\])?(?:\{[^{}]*\})*)")
+# Include the optional LaTeX star in the protected command.  Without it,
+# markdown cleanup turns valid constructs such as ``\section*`` and
+# enumitem's ``label=\alph*)`` into different (and sometimes uncompilable)
+# LaTeX.
+_CMD_RE = re.compile(r"(\\[a-zA-Z@]+\*?(?:\[[^\]]*\])?(?:\{[^{}]*\})*)")
+
+_ENUMITEM_COUNTER_RE = re.compile(
+    r"(\blabel\s*=\s*[([]?\\(?:alph|Alph|arabic|roman|Roman))(?!\*)"
+)
 
 
 def normalize_text(text: str) -> str:
@@ -72,4 +80,8 @@ def strip_markdown(text: str) -> str:
 
 def sanitize_latex_body(text: str) -> str:
     """Full pipeline: normalize Unicode, then strip markdown outside math."""
-    return strip_markdown(normalize_text(text))
+    sanitized = strip_markdown(normalize_text(text))
+    # Gemini occasionally omits enumitem's required ``*`` counter marker.
+    # Repair the narrow, known-safe forms instead of spending another full LLM
+    # call re-emitting a large document.
+    return _ENUMITEM_COUNTER_RE.sub(r"\1*", sanitized)

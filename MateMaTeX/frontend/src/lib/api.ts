@@ -250,6 +250,11 @@ function pollDelayMs(attempt: number): number {
   return attempt < 90 ? 500 : 1500;
 }
 
+// The backend permits a generation pipeline to run for 420 seconds. Keep the
+// lightweight status watcher alive for roughly nine minutes so it cannot give
+// up while a valid repair/fallback pass is still inside that budget.
+const MAX_JOB_POLL_ATTEMPTS = 420;
+
 const JOB_GONE_MESSAGE =
   "Serveren mistet jobben (ofte etter omstart på Render). " +
   "Genereringen kan ha fullført — sjekk Historikk, eller prøv igjen.";
@@ -280,7 +285,7 @@ async function pollJobLoop(
   onGiveUp?: (message: string) => void
 ): Promise<boolean> {
   let notFoundStreak = 0;
-  for (let i = 0; i < 180; i++) {
+  for (let i = 0; i < MAX_JOB_POLL_ATTEMPTS; i++) {
     if (signal.cancelled || abortedJobs.has(jobId)) return false;
     if (i > 0) {
       await sleep(pollDelayMs(i));
@@ -457,7 +462,7 @@ export async function watchGenerationJob(
   activeWatchSignals.add(signal);
   try {
     let notFoundStreak = 0;
-    for (let i = 0; i < 180; i++) {
+    for (let i = 0; i < MAX_JOB_POLL_ATTEMPTS; i++) {
       if (signal.cancelled || abortedJobs.has(jobId)) return false;
       if (i > 0) {
         await sleep(pollDelayMs(i));
