@@ -31,6 +31,7 @@ class RenderBlueprintTests(unittest.TestCase):
             env_vars["SKOLEVERKSTED_DB_PATH"]["value"],
             "/var/data/platform/skoleverksted.sqlite3",
         )
+        self.assertEqual(env_vars["LATEX_ENGINE"]["value"], "pdflatex")
         self.assertFalse(env_vars["GOOGLE_API_KEY"]["sync"])
         self.assertNotIn("value", env_vars["GOOGLE_API_KEY"])
         self.assertEqual(env_vars["GOOGLE_MODEL"]["value"], "gemini-3.8-flash")
