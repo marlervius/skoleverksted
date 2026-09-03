@@ -537,6 +537,28 @@ def finalize(state: PipelineState) -> PipelineState:
     state.total_tokens = sum(s.total_tokens for s in state.steps)
     state.current_agent = None
 
+    # A mathematics generation is not deliverable without a compiled PDF.
+    # Previously the failed fallback path could report
+    # ``completed_with_warnings`` with latex_compiled=false, leaving the UI to
+    # announce success for a result it could never preview or download.
+    has_pdf_file = bool(state.pdf_path) and Path(state.pdf_path).is_file()
+    if not state.latex_compilation.success or not (state.pdf_base64 or has_pdf_file):
+        state.status = PipelineStatus.FAILED
+        state.error_message = (
+            "PDF-en kunne ikke kompileres etter automatiske reparasjonsforsøk. "
+            "Materialet leveres ikke; prøv genereringen på nytt."
+        )
+        state.warning_reason = "latex_compilation"
+        state.pdf_base64 = ""
+        state.pdf_path = ""
+        logger.warning(
+            "finalize_blocked_no_pdf",
+            job_id=state.job_id,
+            latex_compiled=state.latex_compilation.success,
+            errors=state.latex_compilation.errors[:3],
+        )
+        return state
+
     has_unparseable = mv.claims_unparseable > 0
     has_fail_open_incorrect = mv.claims_incorrect > 0 and config.verification_fail_open
     reasons: list[str] = []
@@ -567,7 +589,6 @@ def finalize(state: PipelineState) -> PipelineState:
     # PDF-less "completed" state would make later cache hits return a document
     # the UI can never render (the result view just spins), which looks like a
     # hang to the user.
-    has_pdf_file = bool(state.pdf_path) and Path(state.pdf_path).is_file()
     if state.pdf_base64 or has_pdf_file:
         try:
             from app.cache import get_cache

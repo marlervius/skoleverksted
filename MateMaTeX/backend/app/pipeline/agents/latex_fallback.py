@@ -12,6 +12,7 @@ import structlog
 
 from app.config import get_config
 from app.latex.preamble import wrap_with_style
+from app.latex.text_sanitize import sanitize_latex_body
 from app.models.state import AgentRole, AgentStep, PipelineState
 from app.verification.latex_checker import LatexChecker
 
@@ -59,7 +60,7 @@ Dette dokumentet inneholdt avansert grafikk (f.eks. TikZ-figurer) som feilet und
 For å sikre at du likevel får oppgavene og teksten, har systemet fjernet problematiske figurer.
 \end{tcolorbox}
 """
-        body = fallback_warning + "\n" + body
+        body = sanitize_latex_body(fallback_warning + "\n" + body)
 
         state.final_latex_body = body
         state.edited_latex_body = body

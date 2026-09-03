@@ -10,6 +10,8 @@ from datetime import datetime
 import structlog
 
 from app.config import get_config
+from app.latex.preamble import wrap_with_style
+from app.latex.text_sanitize import sanitize_latex_body
 from app.models.llm import LLMInterface
 from app.models.state import AgentRole, AgentStep, PipelineState
 from app.pipeline.prompts.latex_fixer import SYSTEM_PROMPT, build_fixer_prompt
@@ -33,12 +35,14 @@ def _try_rule_based_fix(full_document: str) -> str | None:
 
     Returns the fixed document if a safe change was made, else None.
     """
+    normalized_document = sanitize_latex_body(full_document)
+    changed = normalized_document != full_document
+    full_document = normalized_document
+
     match = re.search(r"(.*\\begin\{document\})(.*)(\\end\{document\}.*)", full_document, re.DOTALL)
     if not match:
         return None
     head, body, tail = match.group(1), match.group(2), match.group(3)
-
-    changed = False
 
     # 1. Close unclosed environments (in reverse order of opening).
     begins = re.findall(r"\\begin\{([^}]+)\}", body)
@@ -70,6 +74,49 @@ def _try_rule_based_fix(full_document: str) -> str | None:
     if not changed:
         return None
     return head + body + tail
+
+
+def _normalize_fixed_document(
+    response: str,
+    *,
+    original_document: str,
+    pdf_style,
+) -> str:
+    """Return a complete fixer document or preserve the original safely."""
+    fixed_doc = response.strip()
+    fixed_doc = re.sub(r'^```(?:latex|tex)?\s*\n?', '', fixed_doc)
+    fixed_doc = re.sub(r'\n?```\s*$', '', fixed_doc).strip()
+
+    # Strip prose before the first LaTeX document marker.
+    starts = [
+        index
+        for marker in (r'\documentclass', r'\begin{document}')
+        if (index := fixed_doc.find(marker)) >= 0
+    ]
+    if starts and min(starts) > 0:
+        removed = min(starts)
+        logger.debug("latex_fixer_stripped_prose", chars_removed=removed)
+        fixed_doc = fixed_doc[removed:].strip()
+
+    fixed_doc = sanitize_latex_body(fixed_doc)
+    body_match = re.search(
+        r'\\begin\{document\}(.*?)\\end\{document\}',
+        fixed_doc,
+        re.DOTALL,
+    )
+    if body_match and r'\documentclass' not in fixed_doc:
+        logger.info("latex_fixer_rewrapped_body_only_response")
+        return wrap_with_style(body_match.group(1).strip(), pdf_style)
+
+    if (
+        r'\documentclass' not in fixed_doc
+        or r'\begin{document}' not in fixed_doc
+        or r'\end{document}' not in fixed_doc
+    ):
+        logger.warning("latex_fixer_incomplete_document", doc_start=fixed_doc[:100])
+        return original_document
+
+    return fixed_doc
 
 
 def run_latex_fixer(state: PipelineState) -> PipelineState:
@@ -120,31 +167,12 @@ def run_latex_fixer(state: PipelineState) -> PipelineState:
         )
 
         response = llm.invoke(SYSTEM_PROMPT, user_prompt)
-        fixed_doc = response.strip()
-
-        # Clean LLM output: strip markdown code fences that LLMs often add
-        import re as _re
-        # Remove ```latex ... ``` or ``` ... ``` wrapping
-        fixed_doc = _re.sub(r'^```(?:latex|tex)?\s*\n?', '', fixed_doc)
-        fixed_doc = _re.sub(r'\n?```\s*$', '', fixed_doc)
-        fixed_doc = fixed_doc.strip()
-
-        # Strip any prose the LLM prepended before the actual LaTeX document
-        for latex_start_marker in (r'\documentclass', r'\begin{document}'):
-            idx = fixed_doc.find(latex_start_marker)
-            if idx > 0:
-                logger.debug("latex_fixer_stripped_prose", chars_removed=idx)
-                fixed_doc = fixed_doc[idx:].strip()
-                break
-
-        # Validate that the fixed document still contains \begin{document}
-        if r'\begin{document}' not in fixed_doc:
-            logger.warning("latex_fixer_missing_begin_document", doc_start=fixed_doc[:100])
-            # Fall back to the original document — don't overwrite with garbage
-            fixed_doc = state.full_document
-        else:
-            # The fixer returns the full document (with preamble)
-            state.full_document = fixed_doc
+        fixed_doc = _normalize_fixed_document(
+            response,
+            original_document=state.full_document,
+            pdf_style=state.request.pdf_style,
+        )
+        state.full_document = fixed_doc
 
         # Also extract body for consistency
         import re

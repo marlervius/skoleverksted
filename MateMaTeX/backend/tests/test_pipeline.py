@@ -218,6 +218,8 @@ class TestFinalizeStatus:
         state = PipelineState(
             request=GenerationRequest(grade="8. trinn", topic="Algebra"),
             raw_latex_body="\\title{T}\\maketitle",
+            pdf_base64="cGRm",
+            latex_compilation=LatexCompilationResult(success=True, pdf_base64="cGRm"),
             math_verification=VerificationResult(
                 claims_checked=5,
                 claims_correct=3,
@@ -235,6 +237,8 @@ class TestFinalizeStatus:
             request=GenerationRequest(grade="8. trinn", topic="Algebra"),
             raw_latex_body="\\title{T}\\maketitle",
             used_latex_fallback=True,
+            pdf_base64="cGRm",
+            latex_compilation=LatexCompilationResult(success=True, pdf_base64="cGRm"),
             math_verification=VerificationResult(
                 claims_checked=3, claims_correct=3, all_correct=True
             ),
@@ -247,6 +251,8 @@ class TestFinalizeStatus:
         state = PipelineState(
             request=GenerationRequest(grade="8. trinn", topic="Algebra"),
             raw_latex_body="\\title{T}\\maketitle",
+            pdf_base64="cGRm",
+            latex_compilation=LatexCompilationResult(success=True, pdf_base64="cGRm"),
             math_verification=VerificationResult(
                 claims_checked=3,
                 claims_correct=3,
@@ -256,6 +262,25 @@ class TestFinalizeStatus:
         result = finalize(state)
         assert result.status == PipelineStatus.COMPLETED
         assert result.warning_reason == ""
+
+    def test_failed_when_pdf_was_not_compiled(self):
+        state = PipelineState(
+            request=GenerationRequest(grade="8. trinn", topic="Algebra"),
+            raw_latex_body="\\title{T}\\maketitle",
+            latex_compilation=LatexCompilationResult(
+                success=False,
+                errors=[r"l.12 \\item"],
+            ),
+            math_verification=VerificationResult(
+                claims_checked=3,
+                claims_correct=3,
+                all_correct=True,
+            ),
+        )
+        result = finalize(state)
+        assert result.status == PipelineStatus.FAILED
+        assert result.warning_reason == "latex_compilation"
+        assert "PDF" in result.error_message
 
 
 class TestRuleBasedLatexFix:
@@ -285,6 +310,30 @@ class TestRuleBasedLatexFix:
 
         doc = "\\documentclass{article}\\begin{document}Hei\\end{document}"
         assert _try_rule_based_fix(doc) is None
+
+    def test_repairs_enumitem_counter_without_an_llm(self):
+        from app.pipeline.agents.latex_fixer import _try_rule_based_fix
+
+        doc = (
+            r"\documentclass{article}\begin{document}"
+            r"\begin{enumerate}[label=\alph)]\item Hei\end{enumerate}"
+            r"\end{document}"
+        )
+        fixed = _try_rule_based_fix(doc)
+        assert fixed is not None
+        assert r"label=\alph*)" in fixed
+
+    def test_rewraps_a_body_only_model_response(self):
+        from app.pipeline.agents.latex_fixer import _normalize_fixed_document
+
+        original = r"\documentclass{article}\begin{document}Gammel\end{document}"
+        fixed = _normalize_fixed_document(
+            r"\begin{document}\section*{Ny}\end{document}",
+            original_document=original,
+            pdf_style=None,
+        )
+        assert fixed.startswith(r"\documentclass")
+        assert r"\section*{Ny}" in fixed
 
 
 class TestGraphStructure:

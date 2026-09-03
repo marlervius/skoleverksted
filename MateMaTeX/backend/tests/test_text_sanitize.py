@@ -35,6 +35,10 @@ class TestStripMarkdown:
         assert "\x00" not in out
         assert "MMTX" not in out
 
+    def test_preserves_starred_latex_commands(self):
+        raw = r"\section*{Fasit}\begin{enumerate}[label=\alph*)]\item A\end{enumerate}"
+        assert strip_markdown(raw) == raw
+
 
 class TestSanitizeLatexBody:
     def test_combined(self):
@@ -49,3 +53,8 @@ class TestSanitizeLatexBody:
 
         out = sanitize_latex_body(wrap_with_preamble(r"\section*{Test} Hei $1+1=2$."))
         assert "\x00" not in out
+        assert r"\section*{Test}" in out
+
+    def test_repairs_missing_enumitem_counter_star(self):
+        raw = r"\begin{enumerate}[label=\alph)]\item A\end{enumerate}"
+        assert r"label=\alph*)" in sanitize_latex_body(raw)

@@ -63,8 +63,8 @@ def _reject_if_truncated(response: Any, *, provider: str, model: str) -> None:
     )
     raise TruncatedResponseError(
         f"Modellen ({provider}/{model}) nådde grensen for hvor mye den kan skrive "
-        f"({reason}), så svaret er ufullstendig. Øk MAX_OUTPUT_TOKENS eller be om "
-        "et kortere dokument."
+        f"({reason}), så svaret er ufullstendig. Dokumentet må kortes ned eller "
+        "repareres i et mindre, målrettet modellkall."
     )
 
 
