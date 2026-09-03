@@ -516,7 +516,7 @@ def _call_google_json(
     key_source = "GOOGLE_API_KEY" if google_key else "GEMINI_API_KEY"
     timeout = timeout_seconds or env_float("QUALITY_GATE_MODEL_TIMEOUT_SECONDS", 45.0)
     attempts = max(1, min(2, max_attempts or env_int("QUALITY_GATE_MAX_MODEL_ATTEMPTS", 2, maximum=2)))
-    model = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash").removeprefix("gemini/")
+    model = os.getenv("GOOGLE_MODEL", "gemini-3.8-flash").removeprefix("gemini/")
     config: dict[str, Any] = {
         "temperature": 0.2,
         "responseMimeType": "application/json",
@@ -1175,7 +1175,7 @@ MAX_REPAIR_PASSES = 2
 
 
 def _model_name() -> str:
-    return os.getenv("GOOGLE_MODEL", "gemini-3.5-flash").removeprefix("gemini/")
+    return os.getenv("GOOGLE_MODEL", "gemini-3.8-flash").removeprefix("gemini/")
 
 
 def _hash(value: str) -> str:

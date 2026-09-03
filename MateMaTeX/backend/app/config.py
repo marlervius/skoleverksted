@@ -12,6 +12,10 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
+DEFAULT_PRIMARY_MODEL = "gemini-3.8-flash"
+DEFAULT_MAX_OUTPUT_TOKENS = 65536
+
+
 class Settings(BaseSettings):
     """Unified application settings."""
 
@@ -39,7 +43,7 @@ class Settings(BaseSettings):
     # ---- LLM defaults ----
     primary_provider: str = Field(default="google")
     primary_model: str = Field(
-        default="gemini-3.5-flash",
+        default=DEFAULT_PRIMARY_MODEL,
         description="Gemini model ID used everywhere. See https://ai.google.dev/gemini-api/docs/models",
     )
     fallback_provider: str = Field(default="google")
@@ -50,14 +54,15 @@ class Settings(BaseSettings):
     temperature: float = Field(default=0.15, ge=0.0, le=2.0)
     max_retries: int = Field(default=3, ge=1, le=10)
     max_output_tokens: int = Field(
-        default=32768,
+        default=DEFAULT_MAX_OUTPUT_TOKENS,
         ge=1024,
-        le=131072,
+        le=65536,
         description=(
             "Output cap per LLM call. Must clear the largest document we make: a "
             "kapittel is budgeted at 6000 output tokens and a hefte at 8000, and "
-            "the editor pass re-emits the whole body on top of that. The old 8192 "
-            "sat below that ceiling, so long chapters were cut mid-sentence."
+            "the editor pass re-emits the whole body on top of that. The previous "
+            "lower cap could cut long chapters mid-sentence. "
+            "The Gemini 3.8 Flash limit is 65536 output tokens."
         ),
     )
 

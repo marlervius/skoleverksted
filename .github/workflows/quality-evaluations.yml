@@ -50,7 +50,7 @@ jobs:
     env:
       APP_ENV: test
       GOOGLE_API_KEY: ${{ secrets.SKOLEVERKSTED_TEST_GOOGLE_API_KEY }}
-      GOOGLE_MODEL: ${{ vars.SKOLEVERKSTED_TEST_GOOGLE_MODEL || 'gemini-3.5-flash' }}
+      GOOGLE_MODEL: ${{ vars.SKOLEVERKSTED_TEST_GOOGLE_MODEL || 'gemini-3.8-flash' }}
       PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4

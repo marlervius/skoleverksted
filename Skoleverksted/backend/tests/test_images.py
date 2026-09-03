@@ -22,7 +22,7 @@ def test_normalize_image_mode_supports_legacy_aliases() -> None:
 
 def test_text_model_uses_current_stable_default(monkeypatch) -> None:
     monkeypatch.delenv("GOOGLE_MODEL", raising=False)
-    assert images._text_model() == "gemini-3.5-flash"
+    assert images._text_model() == "gemini-3.8-flash"
 
 
 def test_license_filter_fails_closed() -> None:

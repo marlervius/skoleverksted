@@ -103,7 +103,7 @@ def _api_key() -> str:
 
 
 def _text_model() -> str:
-    return os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
+    return os.getenv("GOOGLE_MODEL", "gemini-3.8-flash")
 
 
 def _image_model() -> str:

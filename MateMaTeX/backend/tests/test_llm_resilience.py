@@ -39,7 +39,7 @@ class LLMResilienceTests(unittest.TestCase):
     def test_production_defaults_use_google_for_primary_and_fallback(self):
         settings = Settings(_env_file=None)
         self.assertEqual(settings.primary_provider, "google")
-        self.assertEqual(settings.primary_model, "gemini-3.5-flash")
+        self.assertEqual(settings.primary_model, "gemini-3.8-flash")
         self.assertEqual(settings.fallback_provider, "google")
         self.assertEqual(settings.fallback_model, "gemini-3.1-flash-lite")
 

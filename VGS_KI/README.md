@@ -90,7 +90,7 @@ pytest tests/
 
 ## Teknologier
 
-**Backend:** FastAPI · CrewAI · Google Gemini (`gemini-3.5-flash`, konfigurerbar via `GOOGLE_MODEL`) · Typst · diskcache/Redis · slowapi
+**Backend:** FastAPI · CrewAI · Google Gemini (`gemini-3.8-flash`, konfigurerbar via `GOOGLE_MODEL`) · Typst · diskcache/Redis · slowapi
 **Frontend:** Next.js 14 · TypeScript · Tailwind CSS · Lucide React
 
 ## Støttede nivåer

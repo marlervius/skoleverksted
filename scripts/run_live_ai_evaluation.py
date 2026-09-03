@@ -31,7 +31,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-calls", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=30)
-    parser.add_argument("--model", default=os.getenv("GOOGLE_MODEL", "gemini-3.5-flash"))
+    parser.add_argument("--model", default=os.getenv("GOOGLE_MODEL", "gemini-3.8-flash"))
     parser.add_argument("--report", type=Path, default=Path("output/test-runs/live-ai-evaluation.json"))
     args = parser.parse_args()
     if args.max_calls < 1 or args.max_calls > 5:

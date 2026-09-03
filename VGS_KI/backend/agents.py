@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Configure Google Generative AI SDK directly
 google_api_key = os.getenv("GOOGLE_API_KEY")
-model_name = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
+model_name = os.getenv("GOOGLE_MODEL", "gemini-3.8-flash")
 PROMPT_VERSION = os.getenv("PROMPT_VERSION", "fag-v3-quality-gates")
 
 # Validate required environment variables at startup

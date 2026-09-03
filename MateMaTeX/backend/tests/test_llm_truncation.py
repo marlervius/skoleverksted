@@ -47,7 +47,7 @@ def _config(**overrides):
         "openai_api_key": "",
         "ollama_base_url": "http://localhost:11434",
         "temperature": 0.1,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 65536,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -132,7 +132,7 @@ class OutputBudgetTests(unittest.TestCase):
         whole body on top of that. The old 8192 cap sat below that ceiling.
         """
         settings = Settings(_env_file=None)
-        self.assertGreaterEqual(settings.max_output_tokens, 16384)
+        self.assertEqual(settings.max_output_tokens, 65536)
 
     def test_the_cap_reaches_the_provider(self):
         seen: list[int] = []
@@ -148,15 +148,21 @@ class OutputBudgetTests(unittest.TestCase):
 
     def test_a_config_without_the_field_still_builds(self):
         """Older config objects must not break the interface."""
+        seen: list[int] = []
         cfg = _config(fallback_model="gemini-primary")
         del cfg.max_output_tokens
         with patch.dict(
             _PROVIDER_FACTORIES,
-            {"google": lambda _m, _c, _t, _n: _Model({"finish_reason": "STOP"})},
+            {
+                "google": lambda _m, _c, _t, n: (
+                    seen.append(n) or _Model({"finish_reason": "STOP"})
+                )
+            },
             clear=True,
         ):
             llm = LLMInterface(cfg)
         self.assertEqual(llm.invoke("sys", "user"), "halv tekst")
+        self.assertEqual(seen, [65536])
 
 
 if __name__ == "__main__":

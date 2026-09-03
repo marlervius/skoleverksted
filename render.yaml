@@ -31,15 +31,17 @@ services:
       - key: AI_TEMPERATURE
         value: "0.35"
       - key: GOOGLE_MODEL
-        value: gemini-3.5-flash
+        value: gemini-3.8-flash
       - key: PRIMARY_PROVIDER
         value: google
       - key: PRIMARY_MODEL
-        value: gemini-3.5-flash
+        value: gemini-3.8-flash
       - key: FALLBACK_PROVIDER
         value: google
       - key: FALLBACK_MODEL
         value: gemini-3.1-flash-lite
+      - key: MAX_OUTPUT_TOKENS
+        value: "65536"
       # The whole-document editor rewrite is optional and is the slowest
       # stage. Keep booklets on the deterministic fast path as well.
       - key: SKIP_EDITOR_MATERIAL_TYPES

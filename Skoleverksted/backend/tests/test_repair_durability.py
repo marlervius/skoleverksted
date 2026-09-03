@@ -602,7 +602,7 @@ def test_the_ledger_stores_no_secrets_and_no_prompt_text(harness):
             "authorization": "Bearer hemmelig",
             "prompt": "x" * 5000,
             "prompt_hash": "a" * 64,
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3.8-flash",
         },
     )
 

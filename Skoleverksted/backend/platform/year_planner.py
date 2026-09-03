@@ -195,7 +195,7 @@ JSON-format:
     client = genai.Client(api_key=key)
     try:
         response = client.models.generate_content(
-            model=os.getenv("GOOGLE_MODEL", "gemini-3.5-flash"),
+            model=os.getenv("GOOGLE_MODEL", "gemini-3.8-flash"),
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",

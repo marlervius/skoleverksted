@@ -13,7 +13,7 @@ import structlog
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.config import LLMProviderConfig, get_config
+from app.config import DEFAULT_MAX_OUTPUT_TOKENS, LLMProviderConfig, get_config
 
 logger = structlog.get_logger()
 
@@ -193,7 +193,9 @@ class LLMInterface:
         cfg = config or get_config().llm
         self._config = cfg
         self._temperature = temperature if temperature is not None else cfg.temperature
-        self._max_output_tokens = int(getattr(cfg, "max_output_tokens", 32768))
+        self._max_output_tokens = int(
+            getattr(cfg, "max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
+        )
 
         # Primary model
         primary_provider = provider or cfg.primary_provider
