@@ -109,6 +109,7 @@ def _verify_content(
     artifact.content_markdown = content
     artifact.content_revision = content_digest(content)
     artifact.truth_passport = final_passport
+    artifact.release_manifest = result.release_manifest
     if final_passport.sources:
         artifact.sources = list(final_passport.sources)
     artifact.quality_rounds = [*artifact.quality_rounds, *result.rounds][-20:]

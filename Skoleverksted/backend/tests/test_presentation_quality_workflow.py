@@ -6,6 +6,7 @@ from Skoleverksted.backend.platform.models import (
     Job,
     QualityPassport,
     QualityQuarantineItem,
+    ReleaseManifest,
     TeachingArtifactFile,
     TruthClaim,
     TruthPassport,
@@ -35,16 +36,25 @@ SOURCE = TruthSource(
 )
 
 
+def manifest(content: str) -> ReleaseManifest:
+    return ReleaseManifest(
+        document_revision_id="fixture-revision",
+        document_hash=content_digest(content),
+        renderer_version="test",
+    )
+
+
 def passport(status: str, *, claim: TruthClaim | None = None, source: TruthSource | None = None) -> TruthPassport:
     claims = [claim] if claim else []
     return TruthPassport(
-        version="2.0",
+        version="3.0",
         status=status,  # type: ignore[arg-type]
         topic="Unionsoppløsningen",
         subject="Historie",
         coverage_percent=100 if status == "verified" else 0,
         verified_claims=1 if status == "verified" else 0,
         total_claims=len(claims),
+        register_complete=True,
         claims=claims,
         sources=[source] if source else [],
         summary="Kontrollresultat",
@@ -170,7 +180,10 @@ def test_no_progress_stops_and_leaves_teacher_reviewable_claim():
     )
     assert result.passport.status == "needs_review"
     assert len(result.rounds) <= 2
-    assert "fremgang" in result.stop_reason.lower()
+    assert result.stop_reason in {
+        "no_progress_after_repair",
+        "anchor_mismatch_or_learning_requirement",
+    }
 
 
 def test_edit_remove_approve_and_download_are_version_bound():
@@ -226,6 +239,7 @@ def test_edit_remove_approve_and_download_are_version_bound():
             source=SOURCE,
         )
         current_artifact.truth_passport.content_revision = current_artifact.content_revision
+        current_artifact.release_manifest = manifest(current_artifact.content_markdown)
         current_artifact.quality_passport = QualityPassport(module="teaching-package", title=current_artifact.title, overall_status="passed", score=100, checks=[])
         current_artifact.status = "needs_review"
         current.package_revision += 1
@@ -253,6 +267,7 @@ def test_quarantined_omission_requires_explicit_teacher_confirmation():
         package, artifact = make_package(store, content="## Tema\n\nKontrollert innhold som er klart for bruk.")
         artifact.truth_passport = passport("verified")
         artifact.truth_passport.content_revision = artifact.content_revision
+        artifact.release_manifest = manifest(artifact.content_markdown)
         artifact.quarantine = [QualityQuarantineItem(
             claim_id="omission-1",
             original_text="Uavklart påstand.",
@@ -303,4 +318,4 @@ def test_truth_source_attempts_never_upgrade_unobserved_model_url(monkeypatch):
 
     result = audit_truth(content=content, topic="Tema", subject="Historie", level="VG2")
     assert result.passport.claims[0].status == "unsupported"
-    assert result.passport.status == "source_unavailable"
+    assert result.passport.status == "not_evaluated"

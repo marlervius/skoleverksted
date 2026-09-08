@@ -357,6 +357,7 @@ def _content_quality_document(content: dict) -> dict:
     return {
         "content": content.get("verification_content", ""),
         "truth_passport": content.get("truth_passport") or {},
+        "release_manifest": content.get("release_manifest"),
         "quarantine": content.get("quarantine") or [],
         "quality_rounds": content.get("quality_rounds") or [],
         "quality_stop_reason": content.get("quality_stop_reason", ""),
@@ -375,6 +376,11 @@ def _quality_result_document(quality: object) -> dict:
         "quality_rounds": [item.model_dump(mode="json") for item in getattr(quality, "rounds", [])],
         "quality_stop_reason": str(getattr(quality, "stop_reason", "") or ""),
         "quality_status": str(getattr(quality, "quality_status", "needs_teacher_review") or "needs_teacher_review"),
+        "release_manifest": (
+            getattr(quality, "release_manifest").model_dump(mode="json")
+            if getattr(quality, "release_manifest", None) is not None
+            else None
+        ),
         "teacher_approved_at": None,
         "approved_digest": "",
     }
@@ -391,6 +397,7 @@ def _quality_document_is_source_approved(document: dict) -> bool:
             str(item.get("original_text") or "")
             for item in document.get("quarantine") or []
         ],
+        release_manifest=document.get("release_manifest"),
     )
     return not reasons
 
@@ -500,6 +507,7 @@ def _require_norsk_documents(
                     teacher_approved=bool(document.get("teacher_approved_at")),
                     approved_revision=str(document.get("approved_digest") or ""),
                     quarantined_texts=quarantined,
+                    release_manifest=document.get("release_manifest"),
                 )
             except PermissionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -510,6 +518,7 @@ def _require_norsk_documents(
                 verified_revision=passport.get("content_revision", ""),
                 verification_version=passport.get("version", ""),
                 quarantined_texts=quarantined,
+                release_manifest=document.get("release_manifest"),
             )
             if reasons:
                 raise HTTPException(status_code=409, detail="Forhåndsvisning blokkert: " + "; ".join(reasons))

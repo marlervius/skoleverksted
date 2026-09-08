@@ -272,7 +272,7 @@ export default function YearPlanPage({ params }: { params: { id: string } }) {
       } else {
         const passportIsCurrent = Boolean(
           plan.truth_passport?.status === "verified"
-          && plan.truth_passport.version === "2.0"
+          && plan.truth_passport.version === "3.0"
           && plan.content_revision
           && plan.truth_passport.content_revision === plan.content_revision,
         );

@@ -15,12 +15,15 @@ from VGS_KI.backend.job_manager import get_job, register_job, run_job_in_thread
 
 def _passport(claims):
     return TruthPassport(
+        version="3.0",
         status="not_evaluated",
         topic="Norsk",
         subject="Norsklæring",
         claims=claims,
         total_claims=len(claims),
         verified_claims=sum(item.status == "verified" for item in claims),
+        coverage_percent=100,
+        register_complete=True,
     )
 
 

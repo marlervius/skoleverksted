@@ -173,7 +173,7 @@ def update_compendium_chapter(
             passport.version if hasattr(passport, "version")
             else passport.get("version", "") if isinstance(passport, dict)
             else ""
-        ) != "2.0"
+        ) != "3.0"
         or passport_revision != chapter.content_revision
     ):
         raise HTTPException(
@@ -299,7 +299,7 @@ def compile_compendium(compendium_id: str):
             or chapter.status != "approved"
             or not chapter.truth_passport
             or chapter.truth_passport.status != "verified"
-            or chapter.truth_passport.version != "2.0"
+            or chapter.truth_passport.version != "3.0"
             or chapter.truth_passport.content_revision != chapter.content_revision
         )
     ]
@@ -430,6 +430,7 @@ def download_compendium(compendium_id: str, artifact_type: str):
                 verification_version=chapter.truth_passport.version if chapter.truth_passport else "",
                 teacher_approved=chapter.status == "approved" and bool(compendium.approved_at),
                 approved_revision=chapter.content_revision,
+                release_manifest=chapter.release_manifest.model_dump(mode="json") if chapter.release_manifest else None,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1006,6 +1007,7 @@ def _require_teaching_file(package_id: str, artifact_id: str, artifact_format: s
             teacher_approved=bool(package.approved_at),
             approved_revision=artifact.approved_revision,
             quarantined_texts=[item.original_text for item in artifact.quarantine if item.status == "withheld"],
+            release_manifest=artifact.release_manifest.model_dump(mode="json") if artifact.release_manifest else None,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1048,6 +1050,7 @@ def download_teaching_package_zip(package_id: str):
                     teacher_approved=bool(package.approved_at),
                     approved_revision=artifact.approved_revision,
                     quarantined_texts=[item.original_text for item in artifact.quarantine if item.status == "withheld"],
+                    release_manifest=artifact.release_manifest.model_dump(mode="json") if artifact.release_manifest else None,
                 )
             except PermissionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1135,7 +1138,7 @@ def approve_year_plan(plan_id: str):
     plan = store.get_year_plan(plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="Årsplanen finnes ikke.")
-    if not plan.truth_passport or plan.truth_passport.status != "verified" or plan.truth_passport.version != "2.0":
+    if not plan.truth_passport or plan.truth_passport.status != "verified" or plan.truth_passport.version != "3.0":
         raise HTTPException(status_code=409, detail="Årsplanen mangler gyldig global kontroll.")
     plan.approved_at = utc_now()
     plan.approved_revision = plan.content_revision
@@ -1159,11 +1162,12 @@ def verify_year_plan(plan_id: str):
         deterministic_audit = lambda **kwargs: TruthAudit(
             content=kwargs["content"],
             passport=TruthPassport(
-                version="2.0",
+                version="3.0",
                 status="verified",
                 topic=plan.title,
                 subject=plan.subject,
                 coverage_percent=100,
+                register_complete=True,
                 summary="Deterministisk reserveplan; rammer og mål er lærerinput.",
             ),
         )
@@ -1310,6 +1314,7 @@ def download_year_plan_material(plan_id: str, material_id: str):
                 teacher_approved=artifact.status == "approved" and bool(package.approved_at),
                 approved_revision=artifact.approved_revision,
                 quarantined_texts=[item.original_text for item in artifact.quarantine],
+                release_manifest=artifact.release_manifest.model_dump(mode="json") if artifact.release_manifest else None,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

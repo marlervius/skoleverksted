@@ -16,10 +16,17 @@ _STATUS_MAP = {
     "running": "generating",
     "generating": "generating",
     "verifying": "verifying",
+    "extracting": "verifying",
+    "repairing": "verifying",
+    "delta_verifying": "verifying",
     "rendering": "rendering",
     "success": "completed",
     "completed": "completed",
     "completed_with_warnings": "needs_review",
+    "source_approved": "completed",
+    "needs_teacher_review": "needs_review",
+    "review_required": "needs_review",
+    "superseded": "cancelled",
     "needs_review": "needs_review",
     "failed": "failed",
     "error": "failed",
@@ -146,13 +153,18 @@ class JobTelemetryMiddleware:
                             events.append(json.loads(line[5:].strip()))
                         except json.JSONDecodeError:
                             continue
-                terminal = next((event for event in reversed(events) if event.get("type") in {"done", "error"}), None)
+                terminal = next((event for event in reversed(events) if event.get("type") in {"done", "needs_teacher_review", "error", "cancelled"}), None)
                 if terminal is None:
                     return
                 payload = {
                     **terminal,
                     "job_id": _job_id_from_path(path),
-                    "status": "completed" if terminal.get("type") == "done" else "failed",
+                    "status": (
+                        "completed" if terminal.get("type") == "done"
+                        else "needs_review" if terminal.get("type") == "needs_teacher_review"
+                        else "cancelled" if terminal.get("type") == "cancelled"
+                        else "failed"
+                    ),
                     "progress": 100,
                 }
             else:
