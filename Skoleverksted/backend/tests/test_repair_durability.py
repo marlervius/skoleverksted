@@ -144,12 +144,14 @@ def _verified_audit(**kwargs):
     return TruthAudit(
         content=kwargs["content"],
         passport=TruthPassport(
+            version="3.0",
             status="verified",
             topic="Testtema",
             subject="Historie",
             coverage_percent=100,
             verified_claims=4,
             total_claims=4,
+            register_complete=True,
             summary="Kontrollen er grønn.",
         ),
     )
@@ -260,12 +262,14 @@ def test_truth_failure_is_a_content_result_not_an_infrastructure_failure(harness
         return TruthAudit(
             content=kwargs["content"],
             passport=TruthPassport(
+                version="3.0",
                 status="source_unavailable",
                 topic="Testtema",
                 subject="Historie",
                 coverage_percent=40,
                 verified_claims=2,
                 total_claims=5,
+                register_complete=True,
                 summary="Kildene svarte ikke.",
             ),
         )

@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from Skoleverksted.backend.platform.models import TruthClaim, TruthPassport, TruthSource
+from Skoleverksted.backend.platform.models import ReleaseManifest, TruthClaim, TruthPassport, TruthSource
 from Skoleverksted.backend.platform.quality_gate import (
     EXPORT_CONTRACTS,
     GENERATOR_CONTRACTS,
@@ -30,7 +30,16 @@ SOURCE = TruthSource(
 )
 
 
-def _audit(content: str, claims: list[TruthClaim], *, status: str = "needs_review") -> TruthAudit:
+def _manifest(content: str) -> dict[str, object]:
+    from Skoleverksted.backend.platform.quality_gate import content_digest
+    return ReleaseManifest(
+        document_revision_id="fixture-revision",
+        document_hash=content_digest(content),
+        renderer_version="test",
+    ).model_dump(mode="json")
+
+
+def _audit(content: str, claims: list[TruthClaim], *, status: str = "needs_review", complete: bool = True) -> TruthAudit:
     verified = sum(claim.status == "verified" for claim in claims)
     return TruthAudit(
         content=content,
@@ -39,6 +48,7 @@ def _audit(content: str, claims: list[TruthClaim], *, status: str = "needs_revie
             verified_claims=verified,
             total_claims=len(claims),
             coverage_percent=round(100 * verified / max(1, len(claims))),
+            register_complete=complete,
             claims=claims,
             sources=[SOURCE],
         ),
@@ -113,13 +123,14 @@ def test_unsupported_claim_is_quarantined_and_never_exported():
         topic="Avtalen",
         subject="Historie",
         level="VG2",
-        max_rounds=1,
+        max_rounds=2,
         audit=lambda **kwargs: responses.popleft(),
     )
     assert result.source_approved
     assert len(result.quarantine) == 1
     assert "Månen" not in result.approved_content
     assert "Månen" in result.quarantine[0].original_text
+    assert "[Utelatt:" not in result.approved_content
 
 
 def test_source_unavailable_without_an_audited_claim_register_stays_blocked():
@@ -134,11 +145,11 @@ def test_source_unavailable_without_an_audited_claim_register_stays_blocked():
         topic="Perspektiver",
         subject="Historie",
         level="VG2",
-        audit=lambda **kwargs: _audit(kwargs["content"], [], status="source_unavailable"),
+        audit=lambda **kwargs: _audit(kwargs["content"], [], status="source_unavailable", complete=False),
     )
 
     assert not result.source_approved
-    assert result.passport.status == "source_unavailable"
+    assert result.passport.status == "needs_review"
     assert result.approved_content == content
 
 
@@ -202,10 +213,11 @@ def test_unsupported_claim_inside_json_is_removed_before_preview():
     )
 
     payload = json.loads(result.approved_content)
-    assert result.source_approved
-    assert len(result.quarantine) == 1
-    assert "Månen" not in payload["text"]
-    assert "Utelatt" in payload["text"]
+    assert not result.source_approved
+    assert result.stop_reason == "anchor_mismatch_or_learning_requirement"
+    assert len(result.quarantine) == 0
+    assert "Månen" in payload["text"]
+    assert "Utelatt" not in payload["text"]
     assert payload["worksheet"] == "Drøft kildenes troverdighet."
 
 
@@ -302,7 +314,7 @@ def test_claim_removed_by_auditor_is_reaudited_instead_of_left_blocking():
 
     assert result.source_approved
     assert result.passport.status == "verified"
-    assert result.approved_content == cleaned
+    assert json.loads(result.approved_content) == json.loads(cleaned)
     assert len(result.quarantine) == 1
 
 
@@ -339,11 +351,11 @@ def test_repeated_unsafe_fragment_withholds_every_affected_json_field():
     )
 
     payload = json.loads(result.approved_content)
-    assert result.source_approved
-    assert len(result.quarantine) == 1
-    assert "må alltid være kritiske" not in result.approved_content
-    assert "Utelatt" in payload["text"]
-    assert "Utelatt" in payload["worksheet"]
+    assert not result.source_approved
+    assert len(result.quarantine) == 0
+    assert "må alltid være kritiske" in result.approved_content
+    assert "Utelatt" not in payload["text"]
+    assert "Utelatt" not in payload["worksheet"]
     assert payload["teacher_key"] == "Trygg veiledning."
 
 
@@ -369,7 +381,8 @@ def test_fabricated_or_irrelevant_source_does_not_resolve_claim():
         max_rounds=1,
         audit=lambda **kwargs: responses.popleft(),
     )
-    assert len(result.quarantine) == 1
+    assert not result.source_approved
+    assert len(result.quarantine) == 0
 
 
 def test_math_is_checked_deterministically():
@@ -398,9 +411,9 @@ def test_quote_and_number_require_observed_sources_but_instructions_do_not():
         topic="Reform", subject="Samfunnsfag", level="VG2", max_rounds=1,
         audit=lambda **_: responses.popleft(),
     )
-    assert result.source_approved
-    assert len(result.quarantine) == 1
-    assert "Reformen er ferdig" not in result.approved_content
+    assert not result.source_approved
+    assert len(result.quarantine) == 0
+    assert "Reformen er ferdig" in result.approved_content
     assert "Sammenlign" in result.approved_content
 
 
@@ -410,6 +423,7 @@ def test_time_sensitive_claim_is_withheld_when_freshness_cannot_be_shown():
         claim="Arbeidsledigheten er 3 prosent akkurat nå.",
         exact_text="Arbeidsledigheten er 3 prosent akkurat nå.",
         status="time_sensitive",
+        action="remove",
         content_type="number",
         source_urls=[SOURCE.url],
         evidence="Kilden er ikke datert for inneværende periode.",
@@ -420,7 +434,7 @@ def test_time_sensitive_claim_is_withheld_when_freshness_cannot_be_shown():
     ])
     result = run_quality_pipeline(
         generator_id="norsk.learning_sheet", content=content,
-        topic="Arbeidsliv", subject="Samfunnsfag", level="B1", max_rounds=1,
+        topic="Arbeidsliv", subject="Samfunnsfag", level="B1", max_rounds=2,
         audit=lambda **_: responses.popleft(),
     )
     assert result.source_approved
@@ -536,10 +550,11 @@ def test_export_gate_binds_verification_and_teacher_approval_to_exact_text():
         content=content,
         verification_status="verified",
         verified_revision=revision,
-        verification_version="2.0",
+        verification_version="3.0",
         teacher_approved=True,
         approved_revision=revision,
         quarantined_texts=["Utelatt tekst."],
+        release_manifest=_manifest(content),
     )
     with pytest.raises(PermissionError, match="annen innholdsversjon"):
         require_export_ready(
@@ -581,7 +596,7 @@ def test_revision_loop_stops_without_progress():
         level="VG2",
         audit=unchanged,
     )
-    assert calls == 2
+    assert calls == 1
     assert result.rounds[-1].status == "no_progress"
     assert not result.source_approved
 

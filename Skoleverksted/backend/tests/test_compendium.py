@@ -22,6 +22,7 @@ from Skoleverksted.backend.platform.compendium import (
     plan_compendium,
     repair_compendium_chapter,
 )
+from Skoleverksted.backend.platform.compendium import content_revision
 from Skoleverksted.backend.platform.compendium_renderer import (
     build_docx,
     build_typst_document,
@@ -59,12 +60,14 @@ def _verified_truth(content: str) -> TruthAudit:
     return TruthAudit(
         content=content,
         passport=TruthPassport(
+            version="3.0",
             status="verified",
             topic="Testtema",
             subject="Historie",
             coverage_percent=100,
             verified_claims=1,
             total_claims=1,
+            register_complete=True,
             summary="Testkontrollen er grønn.",
         ),
     )
@@ -235,7 +238,13 @@ def test_failed_fact_check_keeps_the_new_research(monkeypatch):
                         "url": "https://example.org/source",
                         "publisher": "Eksempel",
                     }],
-                }, [])
+                }, [CompendiumSource(
+                    title="Konkret artikkel",
+                    url="https://example.org/specific",
+                    publisher="Faglig utgiver",
+                    origin="grounding",
+                    fetch_status="grounded",
+                )])
             raise RuntimeError("midlertidig kontrollfeil")
 
         monkeypatch.setattr(
@@ -317,10 +326,28 @@ def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch)
             calls += 1
             if calls == 1:
                 return ({
-                    "content_markdown": after,
-                    "changes": [
-                        "Påstanden om middelklassen ble avgrenset og nyansert."
-                    ],
+                    "repair_plan": {
+                        "chapter_id": chapter.id,
+                        "source_revision": content_revision(before),
+                        "issues": [{
+                            "issue_id": "middle-class",
+                            "category": "factual",
+                            "severity": "high",
+                            "original_text": "Store deler av middelklassen støttet fascismen uten forbehold i eksempel 0.",
+                            "evidence": "Påstanden avgrenses til konkrete partier og variasjon mellom kontekster.",
+                            "source_refs": ["https://example.org/specific"],
+                            "recommended_action": "replace",
+                        }],
+                        "proposed_actions": [{
+                            "issue_id": "middle-class",
+                            "action": "replace",
+                            "target_text": "Store deler av middelklassen støttet fascismen uten forbehold i eksempel 0.",
+                            "replacement_text": "Deler av middelklassen støttet fascistiske partier, men mønsteret varierte mellom land og grupper (Kilde: Konkret artikkel) i eksempel 0.",
+                            "justification": "Påstanden om middelklassen ble avgrenset og nyansert.",
+                            "source_refs": ["https://example.org/specific"],
+                        }],
+                        "expected_result": "En avgrenset og kildebelagt formulering.",
+                    },
                     "key_facts": ["Støtten varierte mellom land og grupper."],
                     "glossary": [],
                     "sources": [{
@@ -328,7 +355,13 @@ def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch)
                         "url": "https://example.org/specific",
                         "publisher": "Faglig utgiver",
                     }],
-                }, [])
+                }, [CompendiumSource(
+                    title="Konkret artikkel",
+                    url="https://example.org/specific",
+                    publisher="Faglig utgiver",
+                    origin="grounding",
+                    fetch_status="grounded",
+                )])
             return ({
                 "approved": True,
                 "notes": [],
@@ -347,9 +380,7 @@ def test_automatic_repair_revises_checks_and_keeps_previous_version(monkeypatch)
         repaired = repair_compendium_chapter(compendium, chapter.id)
         assert repaired.status == "generated"
         assert repaired.content_markdown == after.strip()
-        assert repaired.revision_summary == [
-            "Påstanden om middelklassen ble avgrenset og nyansert."
-        ]
+        assert "Påstanden om middelklassen ble avgrenset og nyansert." in repaired.revision_summary[0]
         assert "klart til lærerkontroll" in repaired.verification_notes[0]
 
         stored = store.replace_compendium_chapter(compendium.id, repaired)
@@ -381,8 +412,28 @@ def test_automatic_repair_can_upgrade_weak_sources_without_existing_notes(monkey
             calls += 1
             if calls == 1:
                 return ({
-                    "content_markdown": chapter.content_markdown,
-                    "changes": ["Wikipedia ble erstattet med en konkret fagartikkel."],
+                    "repair_plan": {
+                        "chapter_id": chapter.id,
+                        "source_revision": content_revision(chapter.content_markdown),
+                        "issues": [{
+                            "issue_id": "weak-source",
+                            "category": "source",
+                            "severity": "medium",
+                            "original_text": "",
+                            "evidence": "Kildelisten oppgraderes til en konkret fagartikkel.",
+                            "source_refs": ["https://snl.no/ideologi"],
+                            "recommended_action": "keep",
+                        }],
+                        "proposed_actions": [{
+                            "issue_id": "weak-source",
+                            "action": "keep",
+                            "target_text": "",
+                            "replacement_text": "",
+                            "justification": "Wikipedia ble erstattet med en konkret fagartikkel.",
+                            "source_refs": ["https://snl.no/ideologi"],
+                        }],
+                        "expected_result": "Oppdatert kildegrunnlag uten tekstendring.",
+                    },
                     "key_facts": ["Ideologier gir ulike svar på politiske spørsmål."],
                     "glossary": ["Ideologi – et sammenhengende sett av politiske ideer"],
                     "sources": [{
@@ -390,7 +441,13 @@ def test_automatic_repair_can_upgrade_weak_sources_without_existing_notes(monkey
                         "url": "https://snl.no/ideologi",
                         "publisher": "Store norske leksikon",
                     }],
-                }, [])
+                }, [CompendiumSource(
+                    title="Ideologi",
+                    url="https://snl.no/ideologi",
+                    publisher="Store norske leksikon",
+                    origin="grounding",
+                    fetch_status="grounded",
+                )])
             return ({
                 "approved": True,
                 "notes": [],

@@ -63,12 +63,14 @@ class FakeGate:
 def _green_audit(content: str, **kwargs) -> TruthAudit:
     source = next(iter(kwargs["provided_sources"]))
     passport = TruthPassport(
+        version="3.0",
         status="verified",
         topic=kwargs["topic"],
         subject=kwargs["subject"],
         coverage_percent=100,
         verified_claims=1,
         total_claims=1,
+        register_complete=True,
         claims=[TruthClaim(
             claim="Temaet er kildebasert.",
             status="verified",

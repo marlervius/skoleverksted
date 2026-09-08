@@ -12,11 +12,19 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any, Iterable
 from urllib.parse import urlsplit
 
+from .document_revision import bind_claims, build_document_revision, canonical_document_content
+from .evidence import (
+    canonical_source_url,
+    fetch_source_snapshot,
+    observed_sources,
+    source_has_usable_snapshot,
+)
 from .models import TruthClaim, TruthPassport, TruthSource, TruthSourceAttempt
 from .quality_runtime import QualityLayerCancelled, QualityLayerTimeout
 
@@ -81,6 +89,14 @@ TRUTH_AUDIT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
+        "coverage": {
+            "type": "object",
+            "properties": {
+                "complete": {"type": "boolean"},
+                "covered_node_paths": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["complete", "covered_node_paths"],
+        },
         "claims": {
             "type": "array",
             "items": {
@@ -142,7 +158,7 @@ TRUTH_AUDIT_SCHEMA: dict[str, Any] = {
             },
         },
     },
-    "required": ["summary", "claims"],
+    "required": ["summary", "coverage", "claims"],
 }
 
 
@@ -153,22 +169,8 @@ class TruthAudit:
 
 
 def _canonical_url(value: object) -> str:
-    text = str(value or "").strip()
-    if not text.startswith("https://"):
-        return ""
-    try:
-        parsed = urlsplit(text)
-    except ValueError:
-        return ""
-    host = (parsed.hostname or "").casefold().removeprefix("www.")
-    if not host or host in {
-        "google.com",
-        "google.no",
-        "vertexaisearch.cloud.google.com",
-    }:
-        return ""
-    path = (parsed.path or "/").rstrip("/") or "/"
-    return f"https://{host}{path}"
+    """Compatibility wrapper for the shared non-lossy URL policy."""
+    return canonical_source_url(value)
 
 
 def _publisher(url: str) -> str:
@@ -207,42 +209,7 @@ def _truth_sources(
     grounded_sources: Iterable[object],
     provided_sources: Iterable[object],
 ) -> list[TruthSource]:
-    sources: list[TruthSource] = []
-    for raw in [*grounded_sources, *provided_sources]:
-        if isinstance(raw, str):
-            title, raw_url, publisher = raw, raw, ""
-        elif isinstance(raw, dict):
-            title = str(raw.get("title") or raw.get("url") or "")
-            raw_url = raw.get("url")
-            publisher = str(raw.get("publisher") or "")
-        else:
-            title = str(getattr(raw, "title", "") or getattr(raw, "url", ""))
-            raw_url = getattr(raw, "url", "")
-            publisher = str(getattr(raw, "publisher", "") or "")
-        origin = str(getattr(raw, "origin", "model") or "model")
-        fetch_status = str(getattr(raw, "fetch_status", "model_reported") or "model_reported")
-        if isinstance(raw, dict):
-            origin = str(raw.get("origin") or origin)
-            fetch_status = str(raw.get("fetch_status") or fetch_status)
-        if origin not in {"teacher", "grounding", "model"}:
-            origin = "model"
-        if fetch_status not in {"provided", "grounded", "model_reported", "fetched", "source_unavailable"}:
-            fetch_status = "model_reported"
-        url = _canonical_url(raw_url)
-        if not url or any(item.url == url for item in sources):
-            continue
-        sources.append(
-            TruthSource(
-                title=(title or url)[:300],
-                url=url,
-                publisher=(publisher or _publisher(url))[:180],
-                source_tier=_source_tier(url),  # type: ignore[arg-type]
-                published_at=(str(raw.get("published_at") or "") if isinstance(raw, dict) else str(getattr(raw, "published_at", "") or ""))[:80],
-                origin=origin,  # type: ignore[arg-type]
-                fetch_status=fetch_status,  # type: ignore[arg-type]
-            )
-        )
-    return sources[:50]
+    return observed_sources([*grounded_sources, *provided_sources])
 
 
 def _claim_location(content: str, exact_text: str) -> str:
@@ -426,6 +393,10 @@ def audit_truth(
     request_id: str = "",
 ) -> TruthAudit:
     """Research, classify and safely revise factual claims in ``content``."""
+    # Legacy VGS payloads duplicated canonical material in variants.standard.
+    # Normalising it before extraction makes one text one audit target.
+    content = canonical_document_content(content)
+    document = build_document_revision(content)
     logger.info(
         "fact_check_started",
         extra={
@@ -454,6 +425,10 @@ def audit_truth(
 
     provided = _truth_sources((), provided_sources)
     provided_source_payload = [source.model_dump() for source in provided]
+    node_registry = [
+        {"node_id": node.node_id, "field_path": node.path, "role": node.role, "variant": node.variant}
+        for node in document.nodes if node.content.strip()
+    ]
 
     prompt = f"""
 Du er den uavhengige sannhetsrevisoren i et norsk skoleverksted. Bruk Google-søk
@@ -466,6 +441,10 @@ Fag og nivå: {subject}, {level}
 <LÆRERENS_KILDER>
 {json.dumps(provided_source_payload, ensure_ascii=False)}
 </LÆRERENS_KILDER>
+
+<DOKUMENTNODER>
+{json.dumps(node_registry, ensure_ascii=False)}
+</DOKUMENTNODER>
 
 <TEKST>
 {content[:80_000]}
@@ -490,6 +469,12 @@ Krav:
 - Et språkeksempel kan inneholde en faktisk del. Registrer bare den faktiske
   delen separat som external_factual_claim med sitt eget exact_text.
 - exact_text skal være en ORDRETT, sammenhengende del av teksten.
+- field_path skal være en faktisk sti fra DOKUMENTNODER. Samme formulering i
+  to noder er to separate claims, ikke én global forekomst.
+- Returner coverage.complete=true bare når alle ikke-tomme DOKUMENTNODER er
+  klassifisert. Oppgi hver dekket node i coverage.covered_node_paths. Tomt
+  claim-register er bare gyldig når coverage uttrykkelig viser at dokumentet
+  ikke har eksterne fakta.
 - «verified» krever at minst én konkret, autoritativ nettside faktisk støtter
   påstanden. Oppgi den nøyaktige URL-en i source_urls.
 - En kilde som bare handler om samme tema, men ikke støtter setningen, teller ikke.
@@ -505,6 +490,7 @@ Krav:
 JSON:
 {{
   "summary": "kort revisorsammendrag",
+  "coverage": {{"complete": true, "covered_node_paths": ["$.canonical.text"]}},
   "claims": [{{
     "claim": "atomisk påstand",
     "exact_text": "ordrett tekstutdrag",
@@ -550,7 +536,34 @@ JSON:
         return TruthAudit(content=content, passport=passport)
 
     sources = _truth_sources(grounded, provided_sources)
-    allowed_urls = {source.url for source in sources}
+    # Grounding and teacher metadata are source candidates, never snapshots.
+    # In production collect small bounded page snapshots; test jobs deliberately
+    # never make network calls and must supply an explicit fetched fixture.
+    if os.getenv("APP_ENV", "").casefold() != "test":
+        observed: list[TruthSource] = []
+        fetch_budget = max(0.1, min(float(call_timeout_seconds or 12.0), 12.0))
+        for source in sources[:3]:
+            if source_has_usable_snapshot(source):
+                observed.append(source)
+                continue
+            try:
+                observation = fetch_source_snapshot(
+                    source.url,
+                    title=source.title,
+                    publisher=source.publisher,
+                    origin=source.origin,
+                    timeout_seconds=min(4.0, fetch_budget),
+                )
+                observed.append(observation.source)
+            except Exception:
+                observed.append(source)
+        sources = observed + sources[3:]
+    source_by_url = {
+        alias: source
+        for source in sources
+        if source_has_usable_snapshot(source)
+        for alias in (source.url, source.observed_uri, *source.redirect_aliases)
+    }
     claims: list[TruthClaim] = []
     for raw in payload.get("claims") or []:
         if not isinstance(raw, dict):
@@ -567,11 +580,12 @@ JSON:
             "not_evaluated",
         }:
             status = "unsupported"
-        cited = [
-            canonical
+        cited_sources = [
+            source_by_url[canonical]
             for canonical in (_canonical_url(item) for item in raw.get("source_urls") or [])
-            if canonical in allowed_urls
+            if canonical in source_by_url
         ][:8]
+        cited = list(dict.fromkeys(source.url for source in cited_sources))
         # A model-written citation is never enough. It only counts when the URL
         # was independently observed in grounding metadata or teacher input.
         # A URL alone is not evidence. Require a concrete page, an explanation
@@ -582,13 +596,15 @@ JSON:
             confidence = max(0.0, min(float(raw.get("confidence") or 0), 1.0))
         except (TypeError, ValueError):
             confidence = 0
-        if status == "verified" and (
-            not cited
-            or not any(_is_concrete_source_url(url) for url in cited)
-            or not evidence
-            or confidence < 0.55
-        ):
-            status = "unsupported"
+        content_type = normalize_content_type(raw.get("content_type"))
+        if content_type_requires_external_source(content_type) and status == "verified":
+            if (
+                not cited_sources
+                or not any(_is_concrete_source_url(source.url) for source in cited_sources)
+                or not evidence
+                or not all(source_has_usable_snapshot(source) for source in cited_sources)
+            ):
+                status = "unsupported"
         action = str(raw.get("action") or "keep")
         if status != "verified" and action == "keep":
             action = "remove" if status == "unsupported" else "qualify"
@@ -597,7 +613,6 @@ JSON:
         claim_text = _clean_text(raw.get("claim"), 1200)
         if not claim_text:
             continue
-        content_type = normalize_content_type(raw.get("content_type"))
         # A model must not be able to turn harmless exercise prose into a
         # source failure by returning an unsupported verdict for it.  Keep the
         # classification visible, but route it to the correct non-web gate.
@@ -636,7 +651,14 @@ JSON:
         if len(claims) >= 120:
             break
 
-    revised, removed, unresolved_edits = _apply_decisions(content, claims)
+    # The reviewer is a classifier/evidence assessor.  It never mutates text:
+    # node-bound patches are built and applied atomically by quality_gate.
+    claims = bind_claims(claims, document)
+    revised, removed = content, []
+    unresolved_edits = [
+        claim.claim for claim in claims
+        if content_type_requires_external_source(claim.content_type) and not claim.node_id
+    ]
     claims = [
         claim.model_copy(update={"source_attempts": _source_attempts(claim=claim, sources=sources)})
         for claim in claims
@@ -646,14 +668,23 @@ JSON:
     total = len(evidence_claims)
     coverage = round(verified_count * 100 / total) if total else 100
     limitations: list[str] = []
-    if not claims:
-        limitations.append("Revisoren returnerte ikke et etterprøvbart påstandsregister.")
+    coverage_raw = payload.get("coverage") if isinstance(payload.get("coverage"), dict) else {}
+    covered_paths = [str(path) for path in coverage_raw.get("covered_node_paths") or [] if isinstance(path, str)]
+    expected_paths = [node.path for node in document.nodes if node.content.strip()]
+    coverage_complete = bool(coverage_raw.get("complete")) and all(
+        any(path == expected or expected.startswith(path + ".") or expected.startswith(path + "[") for path in covered_paths)
+        for expected in expected_paths
+    )
+    if not coverage_complete:
+        limitations.append("Påstandsregisteret mangler eksplisitt, fullstendig dekning av dokumentnodene.")
     if unresolved_edits:
         limitations.append(
             f"{len(unresolved_edits)} usikre påstand(er) kunne ikke endres automatisk."
         )
-    concrete_sources = [source for source in sources if _is_concrete_source_url(source.url)]
-    if not evidence_claims and claims:
+    concrete_sources = [source for source in sources if _is_concrete_source_url(source.url) and source_has_usable_snapshot(source)]
+    if not coverage_complete:
+        passport_status = "not_evaluated"
+    elif not evidence_claims:
         # A source-free language worksheet is valid when it contains no
         # external factual claims.  This is the production bug fix: absence of
         # a web source is not itself a factual failure.
@@ -662,20 +693,23 @@ JSON:
     elif not concrete_sources:
         limitations.append("Ingen konkrete, validerte kildesider ble registrert.")
         passport_status = "source_unavailable"
-    elif not claims:
-        passport_status = "not_evaluated"
-    elif evidence_claims and concrete_sources and (verified_count / total) >= 0.8 and not unresolved_edits:
+    elif evidence_claims and concrete_sources and verified_count == total and not unresolved_edits:
         passport_status = "verified"
     else:
         passport_status = "needs_review"
     passport = TruthPassport(
-        version="2.0",
+        version="3.0",
         status=passport_status,  # type: ignore[arg-type]
         topic=topic,
         subject=subject,
         coverage_percent=coverage,
         verified_claims=verified_count,
         total_claims=total,
+        register_complete=coverage_complete,
+        covered_node_ids=[node.node_id for node in document.nodes if node.content.strip() and any(
+            path == node.path or node.path.startswith(path + ".") or node.path.startswith(path + "[")
+            for path in covered_paths
+        )],
         claims=claims,
         sources=sources,
         removed_claims=removed,

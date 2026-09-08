@@ -70,6 +70,7 @@ class Job:
     progress: dict[str, Any] = field(default_factory=dict)
     verification_content: str = ""
     truth_passport: dict[str, Any] = field(default_factory=dict)
+    release_manifest: dict[str, Any] = field(default_factory=dict)
     quarantine: list[dict[str, Any]] = field(default_factory=list)
     quality_rounds: list[dict[str, Any]] = field(default_factory=list)
     quality_stop_reason: str = ""
@@ -342,7 +343,7 @@ def run_job_in_thread(
                     if value.get("filename"):
                         filename = value["filename"]
                     for key in (
-                        "verification_content", "truth_passport", "quarantine",
+                        "verification_content", "truth_passport", "release_manifest", "quarantine",
                         "quality_rounds", "quality_stop_reason", "quality_status",
                         "review_payload", "variant_issues",
                     ):
@@ -359,6 +360,7 @@ def run_job_in_thread(
                     "rapport_filename": job_meta.get("rapport_filename"),
                     "verification_content": job_meta.get("verification_content", ""),
                     "truth_passport": job_meta.get("truth_passport", {}),
+                    "release_manifest": job_meta.get("release_manifest", {}),
                     "quarantine": job_meta.get("quarantine", []),
                     "quality_rounds": job_meta.get("quality_rounds", []),
                     "quality_stop_reason": job_meta.get("quality_stop_reason", ""),
@@ -435,6 +437,7 @@ def run_job_in_thread(
                     job.rapport_filename = job_meta.get("rapport_filename")
                     job.verification_content = str(job_meta.get("verification_content") or "")
                     job.truth_passport = dict(job_meta.get("truth_passport") or {})
+                    job.release_manifest = dict(job_meta.get("release_manifest") or {})
                     job.quarantine = list(job_meta.get("quarantine") or [])
                     job.quality_rounds = list(job_meta.get("quality_rounds") or [])
                     job.quality_stop_reason = str(job_meta.get("quality_stop_reason") or "")
@@ -462,6 +465,7 @@ def run_job_in_thread(
             for field in ("basis_text", "image_url", "image_metadata", "worksheet_text",
                           "faktarapport_text", "language_exercises", "warnings",
                           "truth_passport",
+                          "release_manifest",
                           "quarantine", "quality_rounds", "quality_stop_reason",
                           "source_name", "prompt_version", "lint_issues",
                           "review_payload", "variant_issues"):

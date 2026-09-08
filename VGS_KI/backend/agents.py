@@ -902,7 +902,10 @@ def _build_typed_truth_payload(
     """
     canonical = structured if structured else {"text": text}
     variants = {
-        "standard": canonical,
+        # Standard is a reference, not a second serialized copy.  The quality
+        # layer expands legacy copies on read, but new revisions have exactly
+        # one authoritative standard text node.
+        "standard": {"$ref": "$.canonical"},
         "støtte": (differensiering or {}).get("stoette", ""),
         "fordypning": (differensiering or {}).get("fordypning", ""),
     }
@@ -2733,6 +2736,7 @@ Hold fasiten praktisk og under 450 ord."""
         "quality_rounds": [item.model_dump(mode="json") for item in quality_result.rounds],
         "quality_stop_reason": quality_result.stop_reason,
         "quality_status": quality_result.quality_status,
+        "release_manifest": quality_result.release_manifest.model_dump(mode="json") if quality_result.release_manifest else None,
         "prompt_version": PROMPT_VERSION,
     }
     logger.info(

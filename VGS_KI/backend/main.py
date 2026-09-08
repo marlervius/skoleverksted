@@ -8,6 +8,7 @@ The actual generation work happens in `agents.py`; PDF compilation in
 `pdf_service.py`; per-endpoint orchestration delegates to `job_manager.py`.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -27,7 +28,13 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from Skoleverksted.backend.platform.images import ImageResult, normalize_image_mode, resolve_image
-from Skoleverksted.backend.platform.models import utc_now
+from Skoleverksted.backend.platform.models import TruthClaim, utc_now
+from Skoleverksted.backend.platform.document_revision import (
+    apply_repair_patch,
+    bind_claim,
+    build_document_revision,
+    build_repair_patch,
+)
 from Skoleverksted.backend.platform.quality_gate import (
     content_digest as quality_content_digest,
     require_export_ready,
@@ -472,6 +479,7 @@ async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
                 verified_revision=str(passport.get("content_revision") or ""),
                 verification_version=str(passport.get("version") or ""),
                 quarantined_texts=quarantine,
+                release_manifest=job.release_manifest or None,
             )
             if reasons:
                 if passport:
@@ -497,6 +505,7 @@ async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
                     teacher_approved=bool(job.teacher_approved_at),
                     approved_revision=job.approved_digest,
                     quarantined_texts=quarantine,
+                    release_manifest=job.release_manifest or None,
                 )
             except PermissionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -579,19 +588,6 @@ def _review_payload(job: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _replace_claim_once(value: Any, exact_text: str, state: dict[str, bool]) -> Any:
-    if state["removed"]:
-        return value
-    if isinstance(value, str) and exact_text and exact_text in value:
-        state["removed"] = True
-        return value.replace(exact_text, "", 1)
-    if isinstance(value, list):
-        return [_replace_claim_once(item, exact_text, state) for item in value]
-    if isinstance(value, dict):
-        return {key: _replace_claim_once(item, exact_text, state) for key, item in value.items()}
-    return value
-
-
 async def _rerun_review(job_id: str, job: Any, payload: dict[str, Any]) -> dict[str, Any]:
     source_payload = (job.truth_passport or {}).get("sources", [])
     result = await asyncio.to_thread(
@@ -618,6 +614,7 @@ async def _rerun_review(job_id: str, job: Any, payload: dict[str, Any]) -> dict[
         job.review_payload = payload
         job.verification_content = result.approved_content
         job.truth_passport = result.passport.model_dump(mode="json")
+        job.release_manifest = result.release_manifest.model_dump(mode="json") if result.release_manifest else {}
         job.quarantine = [item.model_dump(mode="json") for item in result.quarantine]
         job.quality_rounds = [item.model_dump(mode="json") for item in result.rounds]
         job.quality_stop_reason = "review_payload_invalid_after_quality_gate"
@@ -641,6 +638,7 @@ async def _rerun_review(job_id: str, job: Any, payload: dict[str, Any]) -> dict[
     job.review_payload = payload
     job.verification_content = result.approved_content
     job.truth_passport = result.passport.model_dump(mode="json")
+    job.release_manifest = result.release_manifest.model_dump(mode="json") if result.release_manifest else {}
     job.quarantine = [item.model_dump(mode="json") for item in result.quarantine]
     job.quality_rounds = [item.model_dump(mode="json") for item in result.rounds]
     job.quality_stop_reason = result.stop_reason
@@ -729,13 +727,19 @@ async def remove_generation_claim(job_id: str, request: GenerationReviewRemove):
     claim = next((item for item in claims if item.get("id") == request.claim_id), None)
     if not claim:
         raise HTTPException(status_code=404, detail="Påstanden finnes ikke i kontrollbildet.")
-    exact_text = str(claim.get("exact_text") or claim.get("claim") or "")
     payload = _review_payload(job)
-    state = {"removed": False}
-    payload = _replace_claim_once(payload, exact_text, state)
-    if not state["removed"]:
+    try:
+        candidate = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        selected = TruthClaim.model_validate(claim).model_copy(update={"action": "remove"})
+        selected = bind_claim(selected, build_document_revision(candidate))
+        repair_patch, _ = build_repair_patch(selected)
+        patch_result = apply_repair_patch(candidate, repair_patch) if repair_patch else None
+        revised = json.loads(patch_result.content) if patch_result and patch_result.applied else None
+    except (TypeError, ValueError, json.JSONDecodeError):
+        revised = None
+    if not isinstance(revised, dict):
         raise HTTPException(status_code=409, detail="Påstanden kunne ikke fjernes sikkert. Rediger feltet i stedet.")
-    result = await _rerun_review(job_id, job, payload)
+    result = await _rerun_review(job_id, job, revised)
     result["job_id"] = job_id
     return result
 
@@ -756,6 +760,7 @@ def approve_generation(job_id: str):
             str(item.get("original_text") or "") for item in job.quarantine
             if item.get("status", "withheld") == "withheld"
         ],
+        release_manifest=job.release_manifest or None,
     )
     if reasons:
         raise HTTPException(status_code=409, detail="Dokumentet kan ikke lærer-godkjennes: " + "; ".join(reasons))
@@ -776,7 +781,16 @@ def _resolve_source(req, ctx: "JobContext") -> tuple[Optional[str], Optional[str
     is not silently discarded before claim verification.
     """
     if req.source_text:
-        return req.source_text, "lærerens kildemateriale", None
+        # Teacher text remains a private authoring artefact.  Its hash records
+        # provenance without pretending that authorship proves external facts.
+        source_hash = hashlib.sha256(req.source_text.encode("utf-8")).hexdigest()
+        return req.source_text, "lærerens kildemateriale", {
+            "title": "Lærerens private kildemateriale",
+            "origin": "teacher",
+            "fetch_status": "provided",
+            "source_id": f"teacher-{source_hash[:24]}",
+            "snapshot_hash": source_hash,
+        }
     if getattr(req, "use_ndla", False):
         ctx.push("Søker etter kildegrunnlag på NDLA...")
         language = "en" if req.subject.lower() == "engelsk" else "nb"
@@ -789,6 +803,10 @@ def _resolve_source(req, ctx: "JobContext") -> tuple[Optional[str], Optional[str
                 "publisher": "NDLA",
                 "origin": "grounding",
                 "fetch_status": "fetched",
+                "snapshot_id": hashlib.sha256(ndla["text"].encode("utf-8")).hexdigest()[:24],
+                "snapshot_hash": hashlib.sha256(ndla["text"].encode("utf-8")).hexdigest(),
+                "excerpt": ndla["text"][:4000],
+                "fetched_at": utc_now(),
             }
         ctx.push("Fant ingen passende NDLA-kilde — fortsetter uten kildeforankring.")
     return None, None, None
@@ -832,6 +850,7 @@ def _verify_structured_output(
     if ctx.set_meta:
         ctx.set_meta("verification_content", result.approved_content)
         ctx.set_meta("truth_passport", result.passport.model_dump(mode="json"))
+        ctx.set_meta("release_manifest", result.release_manifest.model_dump(mode="json") if result.release_manifest else None)
         ctx.set_meta("quarantine", [item.model_dump(mode="json") for item in result.quarantine])
         ctx.set_meta("quality_rounds", [item.model_dump(mode="json") for item in result.rounds])
         ctx.set_meta("quality_stop_reason", result.stop_reason)
@@ -847,11 +866,10 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
     # available to the independent verifier (for example when only the image
     # or exercises are regenerated).
     if req.basis_text and not (getattr(req, "use_ndla", False) and not req.source_text):
-        source_text, source_name, source_metadata = (
-            req.source_text,
-            "lærerens kildemateriale" if req.source_text else None,
-            None,
-        )
+        if req.source_text:
+            source_text, source_name, source_metadata = _resolve_source(req, ctx)
+        else:
+            source_text, source_name, source_metadata = None, None, None
     else:
         source_text, source_name, source_metadata = _resolve_source(req, ctx)
     provided_sources = (
@@ -886,6 +904,7 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("source_name", source_name)
         ctx.set_meta("source_url", (source_metadata or {}).get("url"))
         ctx.set_meta("truth_passport", content.get("truth_passport"))
+        ctx.set_meta("release_manifest", content.get("release_manifest"))
         ctx.set_meta("verification_content", content.get("verification_content"))
         ctx.set_meta("quarantine", content.get("quarantine"))
         ctx.set_meta("quality_rounds", content.get("quality_rounds"))
@@ -1090,6 +1109,7 @@ def _differentiated_worker(ctx: JobContext) -> tuple[bytes, str]:
         ctx.set_meta("source_url", (source_metadata or {}).get("url"))
         ctx.set_meta("prompt_version", content.get("prompt_version"))
         ctx.set_meta("truth_passport", content.get("truth_passport"))
+        ctx.set_meta("release_manifest", content.get("release_manifest"))
         ctx.set_meta("verification_content", content.get("verification_content"))
         ctx.set_meta("quarantine", content.get("quarantine"))
         ctx.set_meta("quality_rounds", content.get("quality_rounds"))

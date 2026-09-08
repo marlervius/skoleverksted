@@ -199,14 +199,27 @@ TruthContentType = Literal[
 
 
 class TruthSource(BaseModel):
+    # ``source_id`` is stable for one observed resource.  URLs are only one
+    # identifier: redirects and URLs with functional query parameters must not
+    # silently collapse into the same source.
+    source_id: str = Field(default_factory=lambda: uuid4().hex)
     title: str = Field(min_length=1, max_length=300)
     url: str = Field(min_length=8, max_length=1000)
+    observed_uri: str = Field(default="", max_length=1000)
+    redirect_aliases: list[str] = Field(default_factory=list, max_length=12)
     publisher: str = Field(default="", max_length=180)
     source_tier: Literal["primary", "authoritative", "editorial", "other"] = "other"
     published_at: str = Field(default="", max_length=80)
     retrieved_at: str = Field(default_factory=utc_now)
     origin: Literal["teacher", "grounding", "model"] = "model"
-    fetch_status: Literal["provided", "grounded", "model_reported", "fetched", "source_unavailable"] = "model_reported"
+    fetch_status: Literal[
+        "provided", "grounded", "model_reported", "fetched", "source_unavailable",
+        "forbidden", "not_found", "timeout", "unsupported_mime", "irrelevant",
+    ] = "model_reported"
+    snapshot_id: str = Field(default="", max_length=80)
+    snapshot_hash: str = Field(default="", max_length=128)
+    excerpt: str = Field(default="", max_length=4000)
+    fetched_at: str = Field(default="", max_length=80)
 
 
 class TruthSourceAttempt(BaseModel):
@@ -238,11 +251,19 @@ class TruthClaim(BaseModel):
     # are deliberately optional so old passports remain valid.
     field_path: str = Field(default="", max_length=300)
     variant: str = Field(default="", max_length=80)
+    # Node bindings make repairs safe for structured payloads.  Old passports
+    # do not have them and remain readable, but cannot approve a new export.
+    node_id: str = Field(default="", max_length=80)
+    node_path: str = Field(default="", max_length=300)
+    node_revision: str = Field(default="", max_length=128)
+    claim_revision: int = Field(default=1, ge=1)
+    context_hash: str = Field(default="", max_length=128)
+    proposition: str = Field(default="", max_length=1600)
     source_attempts: list[TruthSourceAttempt] = Field(default_factory=list, max_length=20)
 
 
 class TruthPassport(BaseModel):
-    version: str = "1.0"
+    version: str = "3.0"
     generated_at: str = Field(default_factory=utc_now)
     # A passport is only valid for the exact text revision it audited.  The
     # empty default keeps old persisted compendia readable; new audits always
@@ -261,11 +282,131 @@ class TruthPassport(BaseModel):
     coverage_percent: int = Field(default=0, ge=0, le=100)
     verified_claims: int = Field(default=0, ge=0)
     total_claims: int = Field(default=0, ge=0)
+    register_complete: bool = False
+    covered_node_ids: list[str] = Field(default_factory=list, max_length=2000)
     claims: list[TruthClaim] = Field(default_factory=list, max_length=120)
     sources: list[TruthSource] = Field(default_factory=list, max_length=50)
     removed_claims: list[str] = Field(default_factory=list, max_length=50)
     limitations: list[str] = Field(default_factory=list, max_length=30)
     summary: str = Field(default="", max_length=1200)
+
+
+# Versioned provenance contracts.  They are deliberately additive: legacy
+# passports and job records remain readable while all newly rendered material
+# is bound to a document revision and a release manifest.
+class ContentNode(BaseModel):
+    node_id: str = Field(min_length=8, max_length=80)
+    path: str = Field(min_length=1, max_length=400)
+    role: str = Field(default="content", max_length=80)
+    variant: str = Field(default="felles", max_length=80)
+    content: str = Field(default="", max_length=300_000)
+    content_hash: str = Field(default="", max_length=128)
+    dependencies: list[str] = Field(default_factory=list, max_length=100)
+
+
+class DocumentRevision(BaseModel):
+    revision_id: str = Field(default_factory=lambda: uuid4().hex)
+    contract_version: str = "3.0"
+    parent_revision_id: str = Field(default="", max_length=80)
+    document_hash: str = Field(default="", max_length=128)
+    nodes: list[ContentNode] = Field(default_factory=list, max_length=2000)
+    created_at: str = Field(default_factory=utc_now)
+
+
+class ClaimRecord(BaseModel):
+    claim_id: str = Field(default_factory=lambda: uuid4().hex)
+    claim_revision: int = Field(default=1, ge=1)
+    node_id: str = Field(min_length=8, max_length=80)
+    exact_text: str = Field(min_length=1, max_length=2400)
+    proposition: str = Field(default="", max_length=2400)
+    context_hash: str = Field(default="", max_length=128)
+    status: str = Field(default="pending", max_length=80)
+    risk: str = Field(default="medium", max_length=40)
+    scope: str = Field(default="", max_length=600)
+    evidence_requirement: str = Field(default="external", max_length=80)
+
+
+class SourceRecord(BaseModel):
+    source_id: str = Field(default_factory=lambda: uuid4().hex)
+    observed_uri: str = Field(min_length=1, max_length=1000)
+    final_uri: str = Field(default="", max_length=1000)
+    aliases: list[str] = Field(default_factory=list, max_length=12)
+    origin: str = Field(default="model", max_length=40)
+
+
+class SourceSnapshot(BaseModel):
+    snapshot_id: str = Field(default_factory=lambda: uuid4().hex)
+    source_id: str = Field(min_length=1, max_length=80)
+    content_hash: str = Field(default="", max_length=128)
+    excerpt: str = Field(default="", max_length=4000)
+    fetched_at: str = Field(default_factory=utc_now)
+    fetch_status: str = Field(default="not_checked", max_length=80)
+    published_at: str = Field(default="", max_length=80)
+
+
+class EvidenceRecord(BaseModel):
+    evidence_id: str = Field(default_factory=lambda: uuid4().hex)
+    claim_id: str = Field(min_length=1, max_length=80)
+    source_id: str = Field(min_length=1, max_length=80)
+    snapshot_id: str = Field(default="", max_length=80)
+    locator: str = Field(default="", max_length=400)
+    excerpt: str = Field(default="", max_length=4000)
+    verdict: Literal["supported", "contradicted", "insufficient_evidence", "not_checked"] = "not_checked"
+
+
+class RepairPatch(BaseModel):
+    patch_id: str = Field(default_factory=lambda: uuid4().hex)
+    node_id: str = Field(min_length=8, max_length=80)
+    expected_revision: str = Field(min_length=1, max_length=128)
+    claim_ids: list[str] = Field(default_factory=list, max_length=100)
+    before: str = Field(default="", max_length=4000)
+    after: str = Field(default="", max_length=4000)
+    reason: str = Field(default="", max_length=2400)
+    source_ids: list[str] = Field(default_factory=list, max_length=20)
+    dependencies: list[str] = Field(default_factory=list, max_length=100)
+
+
+class VerificationEvent(BaseModel):
+    event_id: str = Field(default_factory=lambda: uuid4().hex)
+    sequence: int = Field(default=0, ge=0)
+    phase: str = Field(default="", max_length=80)
+    operation: str = Field(default="", max_length=120)
+    node_id: str = Field(default="", max_length=80)
+    claim_id: str = Field(default="", max_length=80)
+    code: str = Field(default="", max_length=120)
+    created_at: str = Field(default_factory=utc_now)
+
+
+class VerificationRun(BaseModel):
+    run_id: str = Field(default_factory=lambda: uuid4().hex)
+    document_revision_id: str = Field(default="", max_length=80)
+    status: Literal["queued", "preparing", "researching", "extracting", "verifying", "repairing", "delta_verifying", "final_quality", "rendering", "storing", "completed", "needs_review", "failed", "cancelled"] = "queued"
+    events: list[VerificationEvent] = Field(default_factory=list, max_length=2000)
+    policy_version: str = "3.0"
+
+
+class UsageBudget(BaseModel):
+    deadline_seconds: float = Field(default=120.0, ge=0)
+    model_calls: int = Field(default=0, ge=0)
+    searches: int = Field(default=0, ge=0)
+    fetches: int = Field(default=0, ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    estimated_cost: float | None = Field(default=None, ge=0)
+
+
+class ReleaseManifest(BaseModel):
+    manifest_id: str = Field(default_factory=lambda: uuid4().hex)
+    contract_version: str = "3.0"
+    document_revision_id: str = Field(min_length=1, max_length=80)
+    document_hash: str = Field(min_length=1, max_length=128)
+    node_hashes: dict[str, str] = Field(default_factory=dict)
+    claim_revisions: dict[str, int] = Field(default_factory=dict)
+    evidence_snapshot_ids: list[str] = Field(default_factory=list, max_length=2000)
+    renderer_version: str = Field(default="", max_length=120)
+    policy_version: str = "3.0"
+    file_hash: str = Field(default="", max_length=128)
+    created_at: str = Field(default_factory=utc_now)
 
 
 RepairActionKind = Literal[
@@ -607,6 +748,7 @@ class TeachingArtifact(BaseModel):
     package_revision: int = Field(default=1, ge=1)
     sources: list[TruthSource] = Field(default_factory=list, max_length=50)
     truth_passport: TruthPassport | None = None
+    release_manifest: ReleaseManifest | None = None
     quality_passport: QualityPassport | None = None
     verification_notes: list[str] = Field(default_factory=list, max_length=40)
     source_quality_notes: list[str] = Field(default_factory=list, max_length=30)
@@ -740,11 +882,18 @@ CompendiumImageMode = Literal["none", "commons", "ai"]
 
 
 class CompendiumSource(BaseModel):
+    source_id: str = Field(default_factory=lambda: uuid4().hex)
     title: str = Field(min_length=1, max_length=300)
     url: str = Field(default="", max_length=1000)
+    observed_uri: str = Field(default="", max_length=1000)
+    redirect_aliases: list[str] = Field(default_factory=list, max_length=12)
     publisher: str = Field(default="", max_length=180)
     origin: Literal["teacher", "grounding", "model"] = "model"
-    fetch_status: Literal["provided", "grounded", "model_reported", "fetched", "source_unavailable"] = "model_reported"
+    fetch_status: Literal["provided", "grounded", "model_reported", "fetched", "source_unavailable", "forbidden", "not_found", "timeout", "unsupported_mime", "irrelevant"] = "model_reported"
+    snapshot_id: str = Field(default="", max_length=80)
+    snapshot_hash: str = Field(default="", max_length=128)
+    excerpt: str = Field(default="", max_length=4000)
+    fetched_at: str = Field(default="", max_length=80)
 
 
 class ScopeContract(BaseModel):
@@ -768,6 +917,7 @@ class CompendiumChapter(BaseModel):
     sources: list[CompendiumSource] = Field(default_factory=list, max_length=50)
     verification_notes: list[str] = Field(default_factory=list, max_length=30)
     truth_passport: TruthPassport | None = None
+    release_manifest: ReleaseManifest | None = None
     content_revision: str = Field(default="", max_length=128)
     revision_summary: list[str] = Field(default_factory=list, max_length=30)
     repair_summary: RepairSummary | None = None

@@ -7,10 +7,19 @@ from pypdf import PdfReader
 from ScriptoriumFOV.backend import main
 from ScriptoriumFOV.backend.progress_store import clear_progress, initialize_progress
 from Skoleverksted.backend.platform.quality_gate import content_digest
+from Skoleverksted.backend.platform.models import ReleaseManifest
 from ScriptoriumFOV.backend.tests.pdf_fixture import build_valid_pdf_bytes
 
 
 PDF_FIXTURE = build_valid_pdf_bytes()
+
+
+def _manifest(content: str) -> dict[str, object]:
+    return ReleaseManifest(
+        document_revision_id="fixture-revision",
+        document_hash=content_digest(content),
+        renderer_version="test",
+    ).model_dump(mode="json")
 
 
 def test_norsk_generation_publishes_and_serves_a_valid_pdf(monkeypatch):
@@ -26,9 +35,10 @@ def test_norsk_generation_publishes_and_serves_a_valid_pdf(monkeypatch):
             "verification_content": "Kontrollert innhold",
             "truth_passport": {
                 "status": "verified",
-                "version": "2.0",
+                "version": "3.0",
                 "content_revision": content_digest("Kontrollert innhold"),
             },
+            "release_manifest": _manifest("Kontrollert innhold"),
             "quality_status": "source_approved",
         },
     )
@@ -112,9 +122,10 @@ def test_source_approved_preview_requires_teacher_approval_then_downloads():
         "content": content,
         "truth_passport": {
             "status": "verified",
-            "version": "2.0",
+            "version": "3.0",
             "content_revision": content_digest(content),
         },
+        "release_manifest": _manifest(content),
         "quarantine": [],
         "quality_rounds": [],
         "quality_stop_reason": "source_approved",

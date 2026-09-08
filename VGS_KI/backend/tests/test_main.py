@@ -140,13 +140,21 @@ def test_resolve_source_preserves_ndla_provenance(monkeypatch):
 
     assert text == "Et langt nok kildeutdrag fra NDLA."
     assert name == "NDLA: Kildekritikk"
-    assert metadata == {
+    assert metadata is not None
+    assert {
+        key: metadata[key]
+        for key in ("title", "url", "publisher", "origin", "fetch_status")
+    } == {
         "title": "Kildekritikk",
         "url": "https://ndla.no/article/12345",
         "publisher": "NDLA",
         "origin": "grounding",
         "fetch_status": "fetched",
     }
+    assert metadata["excerpt"] == text
+    assert len(metadata["snapshot_id"]) >= 16
+    assert len(metadata["snapshot_hash"]) == 64
+    assert metadata["fetched_at"]
     assert any("Kildeforankrer" in message for message in messages)
 
 

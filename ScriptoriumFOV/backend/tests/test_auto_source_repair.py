@@ -6,7 +6,7 @@ from ScriptoriumFOV.backend import agents, main
 from ScriptoriumFOV.backend.progress_store import clear_progress, initialize_progress
 from ScriptoriumFOV.backend.tests.pdf_fixture import build_valid_pdf_bytes
 from Skoleverksted.backend.platform import compendium
-from Skoleverksted.backend.platform.models import TruthClaim, TruthPassport, TruthSource
+from Skoleverksted.backend.platform.models import ReleaseManifest, TruthClaim, TruthPassport, TruthSource
 from Skoleverksted.backend.platform.quality_gate import (
     QualityGateResult,
     content_digest,
@@ -25,17 +25,26 @@ SOURCE = TruthSource(
 )
 
 
+def _manifest(content: str) -> ReleaseManifest:
+    return ReleaseManifest(
+        document_revision_id="fixture-revision",
+        document_hash=content_digest(content),
+        renderer_version="test",
+    )
+
+
 def _audit(content: str, claims: list[TruthClaim], status: str) -> TruthAudit:
     verified = sum(claim.status == "verified" for claim in claims)
     return TruthAudit(
         content=content,
         passport=TruthPassport(
-            version="2.0",
+            version="3.0",
             status=status,
             content_revision=content_digest(content),
             verified_claims=verified,
             total_claims=len(claims),
             coverage_percent=round(100 * verified / max(1, len(claims))),
+            register_complete=True,
             claims=claims,
             sources=[SOURCE],
         ),
@@ -161,11 +170,12 @@ def test_pdf_recheck_reuses_sources_and_structured_content(monkeypatch):
         ensure_ascii=False,
     )
     passport = TruthPassport(
-        version="2.0",
+        version="3.0",
         status="verified",
         content_revision=content_digest(document),
         claims=[],
         sources=[SOURCE],
+        register_complete=True,
     )
     quality = QualityGateResult(
         approved_content=document,
@@ -174,6 +184,7 @@ def test_pdf_recheck_reuses_sources_and_structured_content(monkeypatch):
         quarantine=[],
         stop_reason="source_approved",
         deterministic_failures=[],
+        release_manifest=_manifest(document),
     )
 
     def run_quality(**kwargs):

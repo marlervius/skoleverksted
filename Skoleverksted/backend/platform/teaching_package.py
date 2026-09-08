@@ -299,7 +299,7 @@ def can_approve_artifact(artifact: TeachingArtifact) -> list[str]:
         reasons.append("Artefaktet har ikke innhold.")
     if not artifact.truth_passport:
         reasons.append("Faktapasset mangler. Kjør faktapasset på nytt.")
-    elif artifact.truth_passport.version != "2.0":
+    elif artifact.truth_passport.version != "3.0":
         reasons.append("Faktapasset er fra en eldre kvalitetsmodell. Kjør faktapasset på nytt.")
     elif artifact.truth_passport.status != "verified":
         reasons.append(
@@ -308,6 +308,10 @@ def can_approve_artifact(artifact: TeachingArtifact) -> list[str]:
         )
     elif artifact.truth_passport.content_revision != artifact.content_revision:
         reasons.append("Faktapasset gjelder en eldre innholdsrevisjon. Kjør på nytt.")
+    if artifact.release_manifest is None:
+        reasons.append("Release-manifest mangler. Kjør kvalitetskontrollen på nytt.")
+    elif artifact.release_manifest.document_hash != artifact.content_revision:
+        reasons.append("Release-manifestet gjelder en eldre innholdsrevisjon. Kjør på nytt.")
     if not artifact.quality_passport:
         reasons.append("Kvalitetspasset mangler.")
     elif artifact.quality_passport.overall_status == "failed":

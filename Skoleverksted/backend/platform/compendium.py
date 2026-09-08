@@ -10,8 +10,7 @@ from dataclasses import dataclass
 import difflib
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 
 from .models import (
     Compendium,
@@ -26,11 +25,14 @@ from .models import (
     RepairMetrics,
     RepairPlan,
     RepairSummary,
+    ReleaseManifest,
     ScopeContract,
     TruthPassport,
     utc_now,
 )
 from .truth import TruthAudit, audit_truth
+from .evidence import canonical_source_url, fetch_source_snapshot
+from .document_revision import build_document_revision
 from .quality_gate import run_quality_pipeline
 from .quality_runtime import (
     QualityLayerCancelled,
@@ -263,6 +265,19 @@ _TRUTH_FACTS_MARKER = "<<<SKOLEVERKSTED_KORT_OPPSUMMERT>>>"
 _TRUTH_GLOSSARY_MARKER = "<<<SKOLEVERKSTED_BEGREPER>>>"
 
 
+def _chapter_release_manifest(content: str, passport: TruthPassport) -> ReleaseManifest:
+    """Bind a chapter's export gate to the exact renderer-visible Markdown."""
+    revision = build_document_revision(content)
+    return ReleaseManifest(
+        document_revision_id=revision.revision_id,
+        document_hash=content_revision(content),
+        node_hashes={node.node_id: node.content_hash for node in revision.nodes},
+        claim_revisions={claim.id: claim.claim_revision for claim in passport.claims},
+        evidence_snapshot_ids=[source.snapshot_id for source in passport.sources if source.snapshot_id],
+        renderer_version="compendium-3.0",
+    )
+
+
 def _audit_chapter_material(
     *,
     content: str,
@@ -273,7 +288,7 @@ def _audit_chapter_material(
     level: str,
     provided_sources: list[CompendiumSource] | None = None,
     mutate_content: bool = True,
-) -> tuple[str, list[str], list[str], TruthPassport, list[object], list[object], str]:
+) -> tuple[str, list[str], list[str], TruthPassport, list[object], list[object], str, ReleaseManifest | None]:
     audit_input = (
         f"{content.rstrip()}\n\n{_TRUTH_FACTS_MARKER}\n"
         + "\n".join(f"- {item}" for item in key_facts)
@@ -304,7 +319,7 @@ def _audit_chapter_material(
                 "uten en eksplisitt reparasjonshandling."
             )
         truth_audit.passport.content_revision = content_revision(content)
-        return content, key_facts, glossary, truth_audit.passport, quality_result.rounds, [], quality_result.stop_reason
+        return content, key_facts, glossary, truth_audit.passport, quality_result.rounds, [], quality_result.stop_reason, _chapter_release_manifest(content, truth_audit.passport)
 
     revised = truth_audit.content
     if (
@@ -316,7 +331,7 @@ def _audit_chapter_material(
             "Kontrollert kapittel kunne ikke deles trygt tilbake i dokumentfeltene."
         )
         truth_audit.passport.content_revision = content_revision(content)
-        return content, key_facts, glossary, truth_audit.passport, quality_result.rounds, [], quality_result.stop_reason
+        return content, key_facts, glossary, truth_audit.passport, quality_result.rounds, [], quality_result.stop_reason, _chapter_release_manifest(content, truth_audit.passport)
 
     revised_content, remainder = revised.split(_TRUTH_FACTS_MARKER, 1)
     revised_facts, revised_glossary = remainder.split(_TRUTH_GLOSSARY_MARKER, 1)
@@ -341,31 +356,16 @@ def _audit_chapter_material(
         quality_result.rounds,
         quality_result.quarantine,
         quality_result.stop_reason,
+        _chapter_release_manifest(revised_content, truth_audit.passport),
     )
 
 
 def _canonical_source_url(value: Any) -> str:
-    """Keep stable source pages and discard temporary search redirect URLs."""
-    url = _text(value, 1000)
-    if not url.startswith(("https://", "http://")):
+    """Compatibility wrapper around the one non-lossy URL policy."""
+    url = canonical_source_url(_text(value, 1000))
+    if not url or _is_transient_source_url(url):
         return ""
-    try:
-        parsed = urlsplit(url)
-    except ValueError:
-        return ""
-    host = (parsed.hostname or "").lower().removeprefix("www.")
-    if not host or host in _TRANSIENT_SOURCE_HOSTS:
-        return ""
-    query = urlencode([
-        (key, item)
-        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
-        if key.lower() not in _TRACKING_QUERY_KEYS
-        and not key.lower().startswith(_TRACKING_QUERY_PREFIXES)
-    ])
-    path = parsed.path or "/"
-    if path != "/":
-        path = path.rstrip("/")
-    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, query, ""))
+    return url
 
 
 def _source_quality_notes(sources: list[CompendiumSource]) -> list[str]:
@@ -450,6 +450,8 @@ def _grounding_sources(response: object) -> list[CompendiumSource]:
                         CompendiumSource(
                             title=title or url,
                             url=url,
+                            observed_uri=raw_url,
+                            redirect_aliases=[raw_url] if raw_url != url else [],
                             origin="grounding",
                             fetch_status="grounded",
                         )
@@ -467,22 +469,12 @@ def _is_transient_source_url(value: str) -> bool:
 
 
 def _resolve_grounding_redirect(value: str) -> str:
-    """Resolve Google's temporary citation URL without downloading the page."""
-    user_agent = "Skoleverksted/1.0 (+https://skoleverksted.vercel.app)"
-    # Some publishers reject byte-range requests even though the redirect is
-    # valid. Retry without Range; opening the response does not read its body.
-    for headers in (
-        {"User-Agent": user_agent, "Range": "bytes=0-0"},
-        {"User-Agent": user_agent},
-    ):
-        try:
-            request = Request(value, headers=headers)
-            with urlopen(request, timeout=8) as response:
-                resolved = _canonical_source_url(response.geturl())
-                if resolved:
-                    return resolved
-        except Exception:
-            continue
+    """Resolve a redirect with the same SSRF/timeout policy as evidence fetch."""
+    try:
+        observation = fetch_source_snapshot(value, origin="grounding", timeout_seconds=8)
+        return _canonical_source_url(observation.source.url)
+    except Exception:
+        pass
     logger.info("Kunne ikke løse midlertidig grounding-adresse")
     return ""
 
@@ -1100,7 +1092,7 @@ eller svake kilder for sentrale påstander.
         )
         key_facts = _strings(payload.get("key_facts"), 30)
         glossary = _strings(payload.get("glossary"), 30)
-        content, key_facts, glossary, truth_passport, quality_rounds, quarantine, quality_stop_reason = _audit_chapter_material(
+        content, key_facts, glossary, truth_passport, quality_rounds, quarantine, quality_stop_reason, release_manifest = _audit_chapter_material(
             content=content,
             key_facts=key_facts,
             glossary=glossary,
@@ -1140,6 +1132,7 @@ eller svake kilder for sentrale påstander.
             sources=sources[:50],
             verification_notes=notes[:30],
             truth_passport=truth_passport,
+            release_manifest=release_manifest,
             revision_summary=[],
             repair_summary=None,
             quality_rounds=quality_rounds,
@@ -1362,7 +1355,7 @@ def apply_repair_plan(
                 action=action.action,
                 result="skipped",
                 before=action.target_text or issue.original_text,
-                reason="Påstanden er beholdt; ingen tekstendring er nødvendig.",
+                reason=action.justification or "Påstanden er beholdt; ingen tekstendring er nødvendig.",
                 source_refs=source_refs,
             ))
             continue
@@ -1627,6 +1620,11 @@ def repair_compendium_chapter(
     chapter, repair_notes = repair_preconditions(compendium, chapter_id)
     content_before = chapter.content_markdown.strip()
     source_revision = content_revision(content_before)
+    previous_source_urls = {
+        _canonical_source_url(source.url)
+        for source in chapter.sources
+        if _canonical_source_url(source.url)
+    }
 
     scope = compendium.scope_contract.model_dump()
     repair_prompt = f"""
@@ -1963,7 +1961,7 @@ JSON:
 
     key_facts = _strings(payload.get("key_facts"), 30)
     glossary = _strings(payload.get("glossary"), 30)
-    repaired_content, key_facts, glossary, truth_passport, quality_rounds, quarantine, quality_stop_reason = _audit_chapter_material(
+    repaired_content, key_facts, glossary, truth_passport, quality_rounds, quarantine, quality_stop_reason, release_manifest = _audit_chapter_material(
         content=repaired_content,
         key_facts=key_facts,
         glossary=glossary,
@@ -2010,14 +2008,32 @@ JSON:
     applied_changes = [change for change in repair_changes if change.result == "applied"]
     unresolved_changes = [change for change in repair_changes if change.result == "unresolved"]
     manual_changes = [change for change in repair_changes if change.result == "manual_review"]
-    if not applied_changes and (unresolved_changes or manual_changes):
+    final_source_urls = {
+        _canonical_source_url(source.url)
+        for source in sources
+        if _canonical_source_url(source.url)
+    }
+    source_only_progress = bool(
+        final_source_urls - previous_source_urls
+        and any(
+            change.action == "keep" and set(change.source_refs) & final_source_urls
+            for change in repair_changes
+        )
+    )
+    if source_only_progress and not applied_changes:
+        changes = [
+            change.reason
+            for change in repair_changes
+            if change.action == "keep" and set(change.source_refs) & final_source_urls and change.reason
+        ][:30] or ["Kildegrunnlaget ble oppgradert og kontrollert på nytt."]
+    if not applied_changes and not source_only_progress and (unresolved_changes or manual_changes):
         # A green audit cannot turn an ambiguous repair target into a safe
         # automatic repair. Keep the existing domain status and surface the
         # required teacher decision instead.
         verified = False
         if failure_status is None:
             failure_status = "source_grounding_failed"
-    if not applied_changes:
+    if not applied_changes and not source_only_progress:
         notes.append(
             "Automatisk kontroll fullført, men ingen sikre rettelser kunne gjennomføres."
         )
@@ -2043,7 +2059,7 @@ JSON:
         pass_count=1,
         stop_reason=(
             "no-safe-repair"
-            if not applied_changes
+            if not applied_changes and not source_only_progress
             else "quality-gate-passed"
             if verified
             else "max-passes"
@@ -2060,6 +2076,7 @@ JSON:
         sources=sources[:50],
         verification_notes=notes[:30],
         truth_passport=truth_passport,
+        release_manifest=release_manifest,
         revision_summary=changes[:30],
         repair_summary=repair_summary,
         quality_rounds=[*chapter.quality_rounds, *quality_rounds][-20:],

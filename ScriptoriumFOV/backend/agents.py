@@ -1640,6 +1640,10 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
         "source_grounded": bool(source_text and source_text.strip()),
         "source_name": source_name if source_text else None,
         "truth_passport": truth_audit.passport.model_dump(mode="json"),
+        "release_manifest": (
+            quality_result.release_manifest.model_dump(mode="json")
+            if quality_result.release_manifest else None
+        ),
         "verification_content": truth_audit.content,
         "quarantine": [item.model_dump(mode="json") for item in quality_result.quarantine],
         "quality_rounds": [item.model_dump(mode="json") for item in quality_result.rounds],

@@ -17,6 +17,7 @@ from .models import (
     CompendiumChapter,
     CompendiumCreate,
     CompendiumUpdate,
+    DocumentRevision,
     Feedback,
     FeedbackCreate,
     Job,
@@ -25,6 +26,8 @@ from .models import (
     ProjectUpdate,
     RepairJob,
     RepairLedgerEntry,
+    ReleaseManifest,
+    VerificationRun,
     YearPlan,
     YearPlanCreate,
     YearPlanMaterial,
@@ -303,6 +306,32 @@ class PlatformStore:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_repair_events_job ON repair_events(job_id,created_at);
+                CREATE TABLE IF NOT EXISTS verification_runs (
+                    id TEXT PRIMARY KEY,
+                    document_revision_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_verification_runs_revision
+                    ON verification_runs(document_revision_id,updated_at DESC);
+                CREATE TABLE IF NOT EXISTS release_manifests (
+                    id TEXT PRIMARY KEY,
+                    document_revision_id TEXT NOT NULL,
+                    document_hash TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_release_manifests_document
+                    ON release_manifests(document_hash,created_at DESC);
+                CREATE TABLE IF NOT EXISTS document_revisions (
+                    id TEXT PRIMARY KEY,
+                    document_hash TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_document_revisions_hash
+                    ON document_revisions(document_hash,created_at DESC);
                 """
             )
 
@@ -318,6 +347,54 @@ class PlatformStore:
             "backend": "postgres" if self.uses_postgres else "sqlite",
             "path": "DATABASE_URL" if self.uses_postgres else str(self.path),
         }
+
+    def save_document_revision(self, revision: DocumentRevision) -> DocumentRevision:
+        """Store an immutable, content-addressed document revision."""
+        payload = revision.model_dump(mode="json")
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """INSERT INTO document_revisions(id,document_hash,payload,created_at)
+                   VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING""",
+                (revision.revision_id, revision.document_hash, self._json(payload), revision.created_at),
+            )
+        return revision
+
+    def get_document_revision(self, revision_id: str) -> DocumentRevision | None:
+        with self._connection() as conn:
+            row = conn.execute("SELECT payload FROM document_revisions WHERE id=?", (revision_id,)).fetchone()
+        return DocumentRevision.model_validate_json(row["payload"]) if row else None
+
+    def save_verification_run(self, run: VerificationRun) -> VerificationRun:
+        payload = run.model_dump(mode="json")
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """INSERT INTO verification_runs(id,document_revision_id,status,payload,updated_at)
+                   VALUES(?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET status=excluded.status,payload=excluded.payload,updated_at=excluded.updated_at""",
+                (run.run_id, run.document_revision_id, run.status, self._json(payload), utc_now()),
+            )
+        return run
+
+    def get_verification_run(self, run_id: str) -> VerificationRun | None:
+        with self._connection() as conn:
+            row = conn.execute("SELECT payload FROM verification_runs WHERE id=?", (run_id,)).fetchone()
+        return VerificationRun.model_validate_json(row["payload"]) if row else None
+
+    def save_release_manifest(self, manifest: ReleaseManifest) -> ReleaseManifest:
+        payload = manifest.model_dump(mode="json")
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """INSERT INTO release_manifests(id,document_revision_id,document_hash,payload,created_at)
+                   VALUES(?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET payload=excluded.payload""",
+                (manifest.manifest_id, manifest.document_revision_id, manifest.document_hash, self._json(payload), manifest.created_at),
+            )
+        return manifest
+
+    def get_release_manifest(self, manifest_id: str) -> ReleaseManifest | None:
+        with self._connection() as conn:
+            row = conn.execute("SELECT payload FROM release_manifests WHERE id=?", (manifest_id,)).fetchone()
+        return ReleaseManifest.model_validate_json(row["payload"]) if row else None
 
     def create_project(self, request: ProjectCreate, *, status: str = "draft") -> Project:
         project = Project(**request.model_dump(), status=status)

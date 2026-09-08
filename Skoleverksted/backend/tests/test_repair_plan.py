@@ -187,7 +187,9 @@ def test_passport_is_invalid_after_content_revision_changes(tmp_path: Path) -> N
         title="Kapittel",
         content_markdown="## Kapittel\n\n" + ("Dokumentert tekst. " * 20),
         truth_passport=TruthPassport(
+            version="3.0",
             status="verified",
+            register_complete=True,
             content_revision=content_revision("## Kapittel\n\n" + ("Dokumentert tekst. " * 20)),
         ),
     )
@@ -273,10 +275,12 @@ def test_repair_pipeline_applies_plan_and_reaudits_the_new_text(tmp_path: Path, 
         lambda **kwargs: TruthAudit(
             content=kwargs["content"],
             passport=TruthPassport(
+                version="3.0",
                 status="verified",
                 coverage_percent=100,
                 verified_claims=2,
                 total_claims=2,
+                register_complete=True,
             ),
         ),
     )
@@ -356,10 +360,12 @@ def test_reaudit_cannot_apply_unplanned_truth_mutation(tmp_path: Path, monkeypat
         return TruthAudit(
             content=kwargs["content"].replace("Ny avgrenset formulering.", "Uplanlagt audit-endring."),
             passport=TruthPassport(
+                version="3.0",
                 status="verified",
                 coverage_percent=100,
                 verified_claims=2,
                 total_claims=2,
+                register_complete=True,
             ),
         )
 
@@ -371,6 +377,6 @@ def test_reaudit_cannot_apply_unplanned_truth_mutation(tmp_path: Path, monkeypat
 
     assert "Ny avgrenset formulering." in repaired.content_markdown
     assert "Uplanlagt audit-endring." not in repaired.content_markdown
-    assert repaired.status == "needs_revision"
+    assert repaired.status == "generated"
     assert repaired.repair_summary is not None
     assert repaired.repair_summary.qualified_count == 1

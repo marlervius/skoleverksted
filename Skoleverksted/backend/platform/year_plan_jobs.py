@@ -79,11 +79,12 @@ def _verify_year_plan(
         deterministic_audit = lambda **kwargs: TruthAudit(
             content=kwargs["content"],
             passport=TruthPassport(
-                version="2.0",
+                version="3.0",
                 status="verified",
                 topic=proposal.title,
                 subject=proposal.subject,
                 coverage_percent=100,
+                register_complete=True,
                 summary="Deterministisk reserveplan; rammer og mål er lærerinput.",
             ),
         )
