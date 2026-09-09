@@ -93,9 +93,9 @@ structured = coerce_structured_lesson({
     'tittel': 'Oldtiden: Fra elvedaler til bysamfunn',
     'ingress': 'Undersøk hvordan elver, jordbruk og skrift fikk betydning for samfunnsutviklingen.',
     'seksjoner': [
-        {'overskrift': 'Mesopotamia', 'avsnitt': facts[:6]},
-        {'overskrift': 'Egypt', 'avsnitt': facts[6:11]},
-        {'overskrift': 'Samfunn og arbeidsdeling', 'avsnitt': facts[11:]},
+        {'tittel': 'Mesopotamia', 'avsnitt': facts[:6]},
+        {'tittel': 'Egypt', 'avsnitt': facts[6:11]},
+        {'tittel': 'Samfunn og arbeidsdeling', 'avsnitt': facts[11:]},
     ],
 })
 content = json.dumps({'canonical': structured, 'worksheet': 'Sammenlign elvenes betydning i Egypt og Mesopotamia. Drøft hvordan arbeidsdeling kan endre et samfunn.'}, ensure_ascii=False)
