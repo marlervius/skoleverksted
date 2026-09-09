@@ -348,6 +348,19 @@ def test_acceptance_laeringsark_ungrounded_badge():
 
 
 @requires_typst
+def test_verified_pdf_uses_final_audit_status_without_teacher_supplied_source():
+    data = strip_ungrounded_k_markers(coerce_structured_lesson(STRUCTURED_FIXTURE))
+    doc = build_laeringsark_doc(
+        data, fag="Historie", tema="Test", niva="VG3", modus="Standard",
+        kilde=None, quality_verified=True,
+    )
+    text = _pdf_text(_compile(doc))
+    assert "Automatisk kontrollert av AI-crewet" in text
+    assert "Ikke kildeforankret" not in text
+    assert "modellens kunnskap" not in text
+
+
+@requires_typst
 def test_acceptance_faktarapport_separate_pdf():
     rapport = coerce_structured_rapport(RAPPORT_FIXTURE)
     doc = build_faktarapport_doc(

@@ -429,7 +429,7 @@ def _response_text(response: object) -> str:
         return ""
 
 
-def _grounding_sources(response: object) -> list[CompendiumSource]:
+def _grounding_sources(response: object, *, resolve_redirects: bool = True) -> list[CompendiumSource]:
     sources: list[CompendiumSource] = []
     try:
         # Search-enabled responses can contain more than one candidate. Source
@@ -443,7 +443,10 @@ def _grounding_sources(response: object) -> list[CompendiumSource]:
                 raw_url = _text(getattr(web, "uri", ""), 1000)
                 url = _canonical_source_url(raw_url)
                 if not url and _is_transient_source_url(raw_url):
-                    url = _resolve_grounding_redirect(raw_url)
+                    # The truth auditor fetches the page and retains its
+                    # snapshot. Resolving here would download it twice and
+                    # spend an unbounded 8 seconds per grounding chunk.
+                    url = _resolve_grounding_redirect(raw_url) if resolve_redirects else canonical_source_url(raw_url)
                 title = _text(getattr(web, "title", ""), 300)
                 if url and not any(item.url == url for item in sources):
                     sources.append(
@@ -496,6 +499,7 @@ def _call_google_json(
     max_attempts: int | None = None,
     cancel_check: Callable[[], bool] | None = None,
     request_id: str = "",
+    resolve_grounding_redirects: bool = True,
 ) -> tuple[dict[str, Any], list[CompendiumSource]]:
     from google import genai
     from google.genai import types
@@ -621,7 +625,7 @@ def _call_google_json(
             }
             response = generate("truth_model_call_without_schema", prompt, fallback_config)
 
-        sources = _grounding_sources(response)
+        sources = _grounding_sources(response, resolve_redirects=resolve_grounding_redirects)
         raw = _response_text(response)
         try:
             return _extract_json(raw), sources

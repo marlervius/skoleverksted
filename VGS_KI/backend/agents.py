@@ -2700,8 +2700,8 @@ Hold fasiten praktisk og under 450 ord."""
             )
     if truth_audit.passport.status != "verified":
         warning = (
-            "Faktapasset er ikke grønt. Materialet inneholder opplysninger som "
-            "må kontrolleres av lærer før bruk."
+            "AI-crewet kunne ikke fullføre den automatiske faktakontrollen. "
+            "PDF-en er ikke frigitt. Prøv automatisk generering på nytt."
         )
         warnings.append(warning)
         text_output = f"FAKTASTATUS: {warning}\n\n{text_output}"

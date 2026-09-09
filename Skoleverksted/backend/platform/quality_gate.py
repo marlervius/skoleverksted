@@ -13,6 +13,7 @@ import json
 import logging
 import operator
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Iterable
@@ -52,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_CALL_TIMEOUT_SECONDS = 45.0
 DEFAULT_MAX_MODEL_ATTEMPTS = 2
-DEFAULT_TRUTH_LAYER_TIMEOUT_SECONDS = 120.0
+DEFAULT_TRUTH_LAYER_TIMEOUT_SECONDS = 360.0
 DEFAULT_MAX_REVISION_ROUNDS = 5
 
 
@@ -855,31 +856,64 @@ def run_quality_pipeline(
             })
 
     def invoke(round_number: int) -> TruthAudit:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise QualityLayerTimeout("truth layer budget exhausted")
-        if cancel_check and cancel_check():
-            raise QualityLayerCancelled("truth layer cancelled")
         if generator_id in MATHEMATICS_GENERATORS and audit is audit_truth:
+            if cancel_check and cancel_check():
+                raise QualityLayerCancelled("truth layer cancelled")
             return _mathematics_truth_audit(content=current, topic=topic, subject=subject)
-        kwargs: dict[str, object] = {
-            "content": current, "topic": topic, "subject": subject, "level": level,
-            "provided_sources": tuple(active_sources),
-        }
-        if audit is audit_truth:
-            kwargs.update(
-                cancel_check=cancel_check,
-                call_timeout_seconds=min(quality_model_timeout_seconds(), remaining),
-                max_attempts=quality_max_model_attempts(),
-                request_id=request_id,
+        # Retry a technical/incomplete audit of the SAME revision before
+        # attempting content repairs. Each attempt owns its cancellation
+        # signal, so a timed-out daemon cannot start further provider calls.
+        for attempt in range(2):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise QualityLayerTimeout("truth layer budget exhausted")
+            if cancel_check and cancel_check():
+                raise QualityLayerCancelled("truth layer cancelled")
+            stopped = threading.Event()
+            cancelled = lambda stopped=stopped: stopped.is_set() or bool(cancel_check and cancel_check())
+            kwargs: dict[str, object] = {
+                "content": current, "topic": topic, "subject": subject, "level": level,
+                "provided_sources": tuple(active_sources),
+            }
+            if audit is audit_truth:
+                kwargs.update(
+                    cancel_check=cancelled,
+                    call_timeout_seconds=min(quality_model_timeout_seconds(), remaining),
+                    max_attempts=quality_max_model_attempts(),
+                    request_id=request_id,
+                )
+            # A round includes provider retries, optional JSON repair and
+            # evidence retrieval. It must not share one model call's limit.
+            attempt_budget = min(remaining, quality_model_timeout_seconds() * quality_max_model_attempts() * 2 + 24.0)
+            emit(
+                "AI-crewet prøver faktakontrollen på nytt og søker etter tilgjengelige kilder"
+                if attempt else f"AI-crewet kontrollerer fakta og kilder – runde {round_number} av {rounds_limit}",
+                round_number,
             )
-        emit(f"Kontrollerer dokumentrevisjon – runde {round_number} av {rounds_limit}", round_number)
-        return run_bounded_sync(
-            lambda: audit(**kwargs),
-            timeout_seconds=min(quality_model_timeout_seconds(), remaining),
-            cancel_check=cancel_check,
-            operation_name=f"truth audit round {round_number}",
-        )
+            try:
+                outcome = run_bounded_sync(
+                    lambda kwargs=kwargs: audit(**kwargs),
+                    timeout_seconds=attempt_budget,
+                    cancel_check=cancel_check,
+                    operation_name=f"truth audit round {round_number}",
+                )
+            except QualityLayerTimeout:
+                if attempt == 1 or time.monotonic() >= deadline:
+                    raise
+                continue
+            finally:
+                stopped.set()
+            passport = outcome.passport
+            retryable = (
+                not passport.register_complete
+                or passport.status == "verification_failed"
+                or any(claim.status == "source_unavailable" for claim in passport.claims)
+            )
+            if attempt == 0 and retryable:
+                active_sources.extend(passport.sources)
+                continue
+            return outcome
+        raise QualityLayerTimeout("truth layer attempts exhausted")
 
     for round_number in range(1, rounds_limit + 1):
         before = content_digest(current)
@@ -925,6 +959,17 @@ def run_quality_pipeline(
             ))
             break
         seen_operations.add(signature)
+        if any(claim.status == "source_unavailable" for claim in unresolved):
+            # A fetch outage is not permission to remove useful subject
+            # matter, nor to ask the teacher to certify an unchecked PDF.
+            final.status = "source_unavailable"
+            stop_reason = "automatic_source_recovery_exhausted"
+            rounds.append(QualityRevisionRound(
+                round_number=round_number, before_revision=before, after_revision=before,
+                claims_found=len(final.claims), claims_verified=verified,
+                unresolved_count=len(unresolved), status="failed", summary=final.summary,
+            ))
+            break
         if not explicit_coverage:
             final.status = "needs_review"
             stop_reason = "incomplete_claim_register"
