@@ -118,10 +118,9 @@ export const StatusMessages = React.memo(function StatusMessages({
 
   if (status === "review") {
     return (
-      <div className="mt-6 rounded-lg border border-amber-300 bg-amber-50 p-4" role="status" aria-live="polite">
-        <p className="font-medium text-amber-950">Kildekontrollen krever lærergjennomgang</p>
-        <p className="mt-1 text-sm text-amber-900">Materialet er tilgjengelig i kontrollbildet. PDF blir ikke frigitt før en ny kontroll er grønn.</p>
-      </div>
+      <p className="sr-only" role="status" aria-live="polite">
+        PDF-en er ikke klar. Bruk Prøv automatisk på nytt for å la appen forsøke igjen.
+      </p>
     );
   }
 

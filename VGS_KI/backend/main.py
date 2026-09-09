@@ -16,6 +16,7 @@ import re
 import threading
 import uuid
 from typing import Any, Literal, Optional
+from urllib.parse import quote
 
 import diskcache as dc
 from fastapi import FastAPI, HTTPException, Request
@@ -448,7 +449,7 @@ async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
             detail={
                 "code": "needs_teacher_review",
                 "stop_reason": reason,
-                "message": "PDF er blokkert til en lærer har kontrollert innholdet.",
+                "message": "Appen kunne ikke fullføre den automatiske kontrollen. Prøv genereringen på nytt.",
                 "truth_passport": passport,
                 "quarantine": job.quarantine,
             },
@@ -513,11 +514,15 @@ async def _download_job(job_id: str, default_filename: str = "dokument.pdf",
     # The job is intentionally NOT popped here: a lesson job may have both a
     # student PDF and a teacher fact-report PDF that are downloaded separately.
     # TTL cleanup removes the job afterwards.
+    # HTTP headers must stay ASCII; Norwegian/other Unicode titles belong in
+    # filename*. Keep a safe fallback for clients reading filename only.
+    ascii_filename = re.sub(r'[^A-Za-z0-9._ -]', '_', filename)
+    disposition = "inline" if preview or kind == "rapport" else "attachment"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'{"inline" if preview or kind == "rapport" else "attachment"}; filename="{filename}"',
+            "Content-Disposition": f'{disposition}; filename="{ascii_filename}"; filename*=UTF-8\'\'{quote(filename, safe="")}',
             "Content-Length": str(len(pdf_bytes)),
             "X-Quality-Status": "review_only" if kind == "rapport" else ("source_approved" if preview else "export_ready"),
         },
@@ -914,7 +919,7 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
 
     if content.get("quality_status") != "source_approved":
         ctx.push(
-            "Kildekontrollen er ferdig – rediger innholdet før PDF kan frigis.",
+            "Appen kunne ikke ferdigstille PDF-en etter automatisk kontroll.",
             revision_round=len(content.get("quality_rounds") or []),
             claims_checked=sum(int(round_item.get("claims_found", 0)) for round_item in content.get("quality_rounds") or []),
             claims_verified=sum(int(round_item.get("claims_verified", 0)) for round_item in content.get("quality_rounds") or []),
@@ -994,6 +999,7 @@ def _lesson_worker(ctx: JobContext) -> tuple[bytes, str]:
                 tema=req.topic,
                 niva=req.level,
                 modus=modus,
+                quality_verified=True,
                 kilde=source_name,
                 har_k_markorer=bool(
                     source_name and "[K]" in collect_text_fields(structured)

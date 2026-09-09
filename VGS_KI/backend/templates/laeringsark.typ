@@ -63,14 +63,17 @@
   fill: fill, radius: 8pt, inset: (x: 8pt, y: 3pt),
   text(size: 8.5pt, fill: ink, weight: 500)[#txt])
 
-#let tittelblokk(tittel, niva, modus, fag: "", kilde: none) = {
+#let tittelblokk(tittel, niva, modus, fag: "", kilde: none, quality-verified: false) = {
   grid(columns: (1fr, auto),
     text(size: 9pt, fill: blue-600, weight: 500, tracking: 0.3pt)[Scriptorium · #fag],
     chip[#niva · #modus])
   v(4pt)
   text(size: 19pt, weight: 500)[#tittel]
   v(6pt)
-  if kilde != none {
+  if quality-verified {
+    box(fill: green-50, radius: 4pt, inset: (x: 8pt, y: 4pt))[
+      #text(size: 8.5pt, fill: green-800)[✓ Automatisk kontrollert av AI-crewet]]
+  } else if kilde != none {
     box(fill: green-50, radius: 4pt, inset: (x: 8pt, y: 4pt))[
       #text(size: 8.5pt, fill: green-800)[✓ Kildeforankret: #kilde]]
   } else {

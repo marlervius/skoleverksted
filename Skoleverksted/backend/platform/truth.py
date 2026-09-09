@@ -13,6 +13,7 @@ import json
 import hashlib
 import logging
 import os
+import time
 from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any, Iterable
@@ -26,7 +27,7 @@ from .evidence import (
     source_has_usable_snapshot,
 )
 from .models import TruthClaim, TruthPassport, TruthSource, TruthSourceAttempt
-from .quality_runtime import QualityLayerCancelled, QualityLayerTimeout
+from .quality_runtime import QualityLayerCancelled, QualityLayerTimeout, run_bounded_sync
 
 logger = logging.getLogger(__name__)
 
@@ -374,8 +375,8 @@ def _blocked_passport(
         subject=subject,
         limitations=[reason],
         summary=(
-            "Faktakontrollen kunne ikke fullføres. Materialet er ikke merket som "
-            "faktaverifisert og krever lærerkontroll."
+            "Den automatiske faktakontrollen kunne ikke fullføres. "
+            "Appen har ikke frigitt materialet til bruk."
         ),
     )
 
@@ -469,6 +470,12 @@ Krav:
 - Et språkeksempel kan inneholde en faktisk del. Registrer bare den faktiske
   delen separat som external_factual_claim med sitt eget exact_text.
 - exact_text skal være en ORDRETT, sammenhengende del av teksten.
+- Ved retting: bruk en hel setning som exact_text og gi en kildebelagt
+  replacement som bevarer læringsinnholdet. Bevar sammenhengen mellom fagtekst,
+  oppgaver og fasit. Ikke fjern sentralt lærestoff bare fordi én kilde er nede.
+- Hvis tidligere registrerte kilder har fetch_status timeout, forbidden,
+  not_found eller source_unavailable: søk etter andre autoritative sider som
+  dokumenterer samme påstand. En teknisk kildefeil er ikke en faktafeil.
 - field_path skal være en faktisk sti fra DOKUMENTNODER. Samme formulering i
   to noder er to separate claims, ikke én global forekomst.
 - Returner coverage.complete=true bare når alle ikke-tomme DOKUMENTNODER er
@@ -520,6 +527,7 @@ JSON:
             max_attempts=max_attempts,
             cancel_check=cancel_check,
             request_id=request_id,
+            resolve_grounding_redirects=False,
         )
     except (QualityLayerCancelled, QualityLayerTimeout):
         # The outer quality pipeline owns the deterministic review fallback.
@@ -540,24 +548,48 @@ JSON:
     # In production collect small bounded page snapshots; test jobs deliberately
     # never make network calls and must supply an explicit fetched fixture.
     if os.getenv("APP_ENV", "").casefold() != "test":
-        observed: list[TruthSource] = []
-        fetch_budget = max(0.1, min(float(call_timeout_seconds or 12.0), 12.0))
-        for source in sources[:3]:
-            if source_has_usable_snapshot(source):
-                observed.append(source)
-                continue
+        # Prioritise pages cited by the auditor, regardless of their position
+        # in Google's result list. Resolve redirects and fetch the snapshot
+        # once, sharing one wall-clock budget across all sources.
+        cited_urls = {
+            _canonical_url(url)
+            for claim in payload.get("claims") or [] if isinstance(claim, dict)
+            for url in claim.get("source_urls") or []
+        }
+        pending = sorted(
+            (source for source in sources if not source_has_usable_snapshot(source)),
+            key=lambda source: not bool(cited_urls.intersection({source.url, source.observed_uri, *source.redirect_aliases})),
+        )
+        fetch_deadline = time.monotonic() + 24.0
+        for source in pending:
+            if cancel_check and cancel_check():
+                raise QualityLayerCancelled("source retrieval cancelled")
+            remaining = fetch_deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                observation = fetch_source_snapshot(
-                    source.url,
-                    title=source.title,
-                    publisher=source.publisher,
-                    origin=source.origin,
-                    timeout_seconds=min(4.0, fetch_budget),
+                timeout = min(4.0, remaining)
+                observation = run_bounded_sync(
+                    lambda source=source, timeout=timeout: fetch_source_snapshot(
+                        source.url, title=source.title, publisher=source.publisher,
+                        origin=source.origin, timeout_seconds=timeout,
+                    ),
+                    timeout_seconds=timeout,
+                    cancel_check=cancel_check,
+                    operation_name="source snapshot",
                 )
-                observed.append(observation.source)
+                fetched = observation.source.model_copy(update={
+                    "observed_uri": source.observed_uri or source.url,
+                    "redirect_aliases": list(dict.fromkeys([
+                        *source.redirect_aliases, *observation.source.redirect_aliases,
+                        source.url,
+                    ])),
+                })
+            except QualityLayerCancelled:
+                raise
             except Exception:
-                observed.append(source)
-        sources = observed + sources[3:]
+                fetched = source.model_copy(update={"fetch_status": "source_unavailable"})
+            sources[sources.index(source)] = fetched
     source_by_url = {
         alias: source
         for source in sources
@@ -580,9 +612,10 @@ JSON:
             "not_evaluated",
         }:
             status = "unsupported"
+        raw_citations = [_canonical_url(item) for item in raw.get("source_urls") or []]
         cited_sources = [
             source_by_url[canonical]
-            for canonical in (_canonical_url(item) for item in raw.get("source_urls") or [])
+            for canonical in raw_citations
             if canonical in source_by_url
         ][:8]
         cited = list(dict.fromkeys(source.url for source in cited_sources))
@@ -605,6 +638,19 @@ JSON:
                 or not all(source_has_usable_snapshot(source) for source in cited_sources)
             ):
                 status = "unsupported"
+                # Distinguish an observed page we could not fetch from an
+                # invented citation. Retry retrieval/research before repair.
+                if not cited_sources and any(
+                    (source.origin in {"teacher", "grounding"} or source.fetch_status in {
+                        "source_unavailable", "forbidden", "not_found", "timeout", "unsupported_mime",
+                    })
+                    and (_is_concrete_source_url(source.url) or source.url != source.observed_uri or source.fetch_status in {
+                        "source_unavailable", "forbidden", "not_found", "timeout", "unsupported_mime",
+                    })
+                    and set(raw_citations).intersection({source.url, source.observed_uri, *source.redirect_aliases})
+                    for source in sources
+                ):
+                    status = "source_unavailable"
         action = str(raw.get("action") or "keep")
         if status != "verified" and action == "keep":
             action = "remove" if status == "unsupported" else "qualify"

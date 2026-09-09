@@ -311,6 +311,7 @@ def build_laeringsark_doc(
     niva: str,
     modus: str,
     kilde: Optional[str] = None,
+    quality_verified: bool = False,
     har_k_markorer: bool = False,
     laeringsmaal: str = "",
     oppgaver: Optional[list[dict]] = None,
@@ -329,6 +330,7 @@ def build_laeringsark_doc(
         f"#set document(title: {_typst_str('Læringsark: ' + (data.get('tittel') or tema))}, author: \"Scriptorium for VGS\")",
         "",
         f"#tittelblokk([{tittel}], [{_esc(niva)}], [{_esc(modus)}], fag: {fag_s}, "
+        + f"quality-verified: {'true' if quality_verified else 'false'}, "
         + (f"kilde: [{_esc(kilde)}])" if kilde else "kilde: none)"),
         "",
     ]

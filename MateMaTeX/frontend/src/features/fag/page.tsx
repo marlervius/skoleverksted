@@ -1594,13 +1594,19 @@ export default function Home() {
               ) : status === "review" ? (
                 <div className="flex flex-col gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
                   <div>
-                    <p className="font-semibold text-amber-950">Lærerkontroll kreves før PDF kan frigis</p>
+                    <p className="font-semibold text-amber-950">Appen kunne ikke ferdigstille PDF-en</p>
                     <p className="mt-1 text-sm text-amber-900">
-                      Kildekontrollen er avsluttet kontrollert og lukket. Rediger teksten eller oppgavene,
-                      og kjør kildekontrollen på nytt. Ingen PDF er opprettet eller gjort tilgjengelig.
+                      AI-crewet har forsøkt å kontrollere og reparere innholdet automatisk,
+                      men kom ikke frem til et ferdig kontrollert resultat. Du trenger ikke
+                      faktasjekke teksten. Prøv igjen, så tar appen hele kontrollen på nytt.
                     </p>
-                    <p className="mt-2 text-xs font-mono text-amber-800">Stoppårsak: {qualityStopReason || "truth_layer_unresolved_claims"}</p>
                   </div>
+                  <button type="submit" disabled={!isFormValid} className="btn-primary w-full py-3 px-4 text-sm">
+                    Prøv automatisk på nytt
+                  </button>
+                  <details className="text-sm">
+                    <summary className="cursor-pointer text-amber-950">Vis kontrollrapport og utkast</summary>
+                    <p className="my-2 text-xs font-mono text-amber-800">Stoppårsak: {qualityStopReason || "truth_layer_unresolved_claims"}</p>
                   {truthPassport && <TruthPassport passport={truthPassport} />}
                   {qualityQuarantine.length > 0 && (
                     <div className="rounded-lg border border-amber-200 bg-white p-3 text-sm text-amber-950">
@@ -1627,6 +1633,7 @@ export default function Home() {
                       </button>
                     </div>
                   )}
+                  </details>
                 </div>
               ) : status === "success" && previewBlob ? (
                 <div className="flex flex-col gap-2.5">
@@ -1638,7 +1645,7 @@ export default function Home() {
                       </span>
                     </div>
                   )}
-                  {sourceGrounded === false && (
+                  {sourceGrounded === false && truthPassport?.status !== "verified" && (
                     <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
                       <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
                       <span>
@@ -1666,7 +1673,7 @@ export default function Home() {
                             AI-crewet utelot {qualityQuarantine.length} ukontrollert {qualityQuarantine.length === 1 ? "påstand" : "påstander"}
                           </p>
                           <p className="mt-1 text-xs text-amber-900">
-                            Punktene under er ikke med i elevens læringsark. Kontroller dem før du eventuelt skriver inn en korrigert versjon.
+                            AI-crewet har rettet eller fjernet punktene under og kontrollert den ferdige teksten på nytt.
                           </p>
                         </div>
                       </div>
