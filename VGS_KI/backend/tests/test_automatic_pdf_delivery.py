@@ -20,7 +20,8 @@ from Skoleverksted.backend.platform.quality_runtime import QualityLayerTimeout
 
 @pytest.mark.skipif(shutil.which("typst") is None, reason="typst CLI not installed")
 @pytest.mark.parametrize("available_on_retry", [True, False])
-def test_automatic_recovery_reaches_pdf_or_safe_terminal_failure(monkeypatch, available_on_retry):
+@pytest.mark.parametrize("failure_mode", ["timeout", "missing_grounding_metadata"])
+def test_automatic_recovery_reaches_pdf_or_safe_terminal_failure(monkeypatch, available_on_retry, failure_mode):
     text = "Unionen mellom Norge og Sverige ble oppløst i 1905."
     structured = coerce_structured_lesson({"tittel": "Historie", "ingress": "Undersøk historiske kilder.", "seksjoner": [
         {"overskrift": "Unionsoppløsningen", "avsnitt": [text], "begreper": [], "kjeder": []},
@@ -55,7 +56,14 @@ def test_automatic_recovery_reaches_pdf_or_safe_terminal_failure(monkeypatch, av
             "quality_stop_reason": result.stop_reason, "quality_rounds": [], "quarantine": [],
         }
 
-    monkeypatch.setattr(compendium, "_call_google_json", provider)
+    if failure_mode == "timeout":
+        monkeypatch.setattr(compendium, "_call_google_json", provider)
+    else:
+        from Skoleverksted.backend.tests.test_source_research import install_research_provider
+        calls, _ = install_research_provider(
+            monkeypatch, fact=text, content=content, field_path="$.canonical.seksjoner[0].avsnitt[0]",
+            available_on_retry=available_on_retry,
+        )
     monkeypatch.setattr(main, "generate_lesson_content", writer)
     monkeypatch.setattr(main, "_resolve_source", lambda *args: (None, None, None))
     client = TestClient(main.app)
@@ -70,7 +78,7 @@ def test_automatic_recovery_reaches_pdf_or_safe_terminal_failure(monkeypatch, av
                 await asyncio.sleep(0.02)
             job = get_job(job_id)
             assert job.done
-            assert len(calls) == 2
+            assert len(calls) == (2 if failure_mode == "timeout" else 4)
             if not available_on_retry:
                 assert job.status == "needs_teacher_review"
                 assert job.pdf is None

@@ -101,7 +101,7 @@ def test_structured_claim_is_automatically_rewritten_and_reaudited():
         content_type="number",
     )
     calls = deque([
-        _audit(original, [unsafe], "source_unavailable"),
+        _audit(original, [unsafe], "needs_review"),
         None,
     ])
 

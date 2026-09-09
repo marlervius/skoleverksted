@@ -11,25 +11,30 @@ from __future__ import annotations
 import hashlib
 import html
 import ipaddress
-import os
+import logging
 import re
 import socket
 import time
 from dataclasses import dataclass
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from html.parser import HTMLParser
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from uuid import uuid4
 
 from .models import SourceSnapshot, TruthSource
+from .quality_runtime import QualityLayerCancelled
+
+logger = logging.getLogger(__name__)
 
 
 _TRACKING_PARAMETERS = frozenset({"gclid", "dclid", "fbclid", "mc_cid", "mc_eid", "_ga"})
 _BLOCKED_HOSTS = frozenset({"localhost", "metadata.google.internal", "metadata", "host.docker.internal"})
 _ALLOWED_MIME_PREFIXES = ("text/", "application/json", "application/xml", "application/xhtml+xml")
 _MAX_REDIRECTS = 4
-_MAX_BYTES = 250_000
+_MAX_BYTES = 1_000_000
 
 
 class UnsafeSourceUrl(ValueError):
@@ -66,7 +71,7 @@ def canonical_source_url(value: object) -> str:
     except ValueError:
         return ""
     netloc = host if port is None else f"{host}:{port}"
-    path = parsed.path or "/"
+    path = quote(parsed.path or "/", safe="/:@!$&'()*+,;=-._~%")
     return urlunsplit((scheme, netloc, path, _clean_query(parsed.query), ""))
 
 
@@ -99,10 +104,41 @@ def safe_source_url(value: object, *, resolve_dns: bool = False) -> str:
     return url
 
 
-def _plain_excerpt(raw: bytes, *, limit: int = 3500) -> str:
-    text = raw.decode("utf-8", errors="replace")
-    text = re.sub(r"<script\b[^>]*>.*?</script>|<style\b[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<[^>]+>", " ", text)
+class _PageText(HTMLParser):
+    """Prefer article text; never turn a truncated script into evidence."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: list[str] = []
+        self.body: list[str] = []
+        self.article: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+            self.stack.append(tag)
+
+    def handle_endtag(self, tag):
+        if tag in self.stack:
+            self.stack = self.stack[:len(self.stack) - 1 - self.stack[::-1].index(tag)]
+
+    def handle_data(self, data):
+        if any(tag in {"script", "style", "noscript", "nav", "header", "footer", "form", "svg", "head"} for tag in self.stack):
+            return
+        self.body.append(data)
+        if "main" in self.stack or "article" in self.stack:
+            self.article.append(data)
+
+
+def _plain_excerpt(raw: bytes, *, limit: int = 4000, charset: str = "utf-8", is_html: bool = True) -> str:
+    try:
+        text = raw.decode(charset, errors="replace")
+    except LookupError:
+        text = raw.decode("utf-8", errors="replace")
+    if is_html:
+        parser = _PageText()
+        parser.feed(text)
+        parser.close()
+        text = " ".join(parser.article or parser.body)
     return " ".join(html.unescape(text).split())[:limit]
 
 
@@ -138,34 +174,49 @@ def fetch_source_snapshot(
         try:
             request = Request(current, headers={"User-Agent": "Skoleverksted evidence fetch/3.0", "Accept": "text/html,text/plain,application/json,application/xml;q=0.8"})
             response = opener.open(request, timeout=max(0.1, remaining))
+            final_url = current
             code = getattr(response, "status", response.getcode())
             if 300 <= code < 400:
                 location = response.headers.get("Location", "")
+                response.close()
                 if not location:
                     status = "source_unavailable"
                     break
                 aliases.append(current)
                 current = safe_source_url(urljoin(current, location), resolve_dns=True)
+                final_url = current
                 continue
-            mime = str(response.headers.get("Content-Type", "")).split(";", 1)[0].casefold()
-            if not any(mime.startswith(prefix) for prefix in _ALLOWED_MIME_PREFIXES):
-                status = "unsupported_mime"
-                break
-            raw = response.read(max(1, min(max_bytes, _MAX_BYTES)) + 1)
-            if len(raw) > min(max_bytes, _MAX_BYTES):
-                status = "source_unavailable"
-                break
-            final_url = safe_source_url(response.geturl(), resolve_dns=True)
-            excerpt = _plain_excerpt(raw)
-            status = "fetched" if excerpt else "irrelevant"
+            try:
+                final_url = safe_source_url(response.geturl(), resolve_dns=True)
+                content_type = str(response.headers.get("Content-Type", ""))
+                mime = content_type.split(";", 1)[0].casefold()
+                if not any(mime.startswith(prefix) for prefix in _ALLOWED_MIME_PREFIXES):
+                    status = "unsupported_mime"
+                    break
+                # A snapshot is a bounded excerpt, not a complete page copy.
+                # Large HTML shells must not discard valid article text.
+                raw = response.read(max(1, min(max_bytes, _MAX_BYTES)))
+                charset_match = re.search(r"charset=[\"']?([^;\s\"']+)", content_type, re.I)
+                excerpt = _plain_excerpt(
+                    raw, charset=charset_match.group(1) if charset_match else "utf-8",
+                    is_html=mime in {"text/html", "application/xhtml+xml"},
+                )
+                status = "fetched" if excerpt else "irrelevant"
+            finally:
+                response.close()
             break
         except HTTPError as exc:
-            if 300 <= exc.code < 400 and exc.headers.get("Location"):
-                aliases.append(current)
-                current = safe_source_url(urljoin(current, exc.headers["Location"]), resolve_dns=True)
-                continue
-            status = "not_found" if exc.code == 404 else "forbidden" if exc.code in {401, 403} else "source_unavailable"
-            break
+            try:
+                if 300 <= exc.code < 400 and exc.headers.get("Location"):
+                    aliases.append(current)
+                    current = safe_source_url(urljoin(current, exc.headers["Location"]), resolve_dns=True)
+                    final_url = current
+                    continue
+                status = "not_found" if exc.code == 404 else "forbidden" if exc.code in {401, 403} else "source_unavailable"
+                final_url = current
+                break
+            finally:
+                exc.close()
         except (TimeoutError, socket.timeout):
             status = "timeout"
             break
@@ -185,6 +236,57 @@ def fetch_source_snapshot(
         excerpt=excerpt, fetched_at=snapshot.fetched_at,
     )
     return FetchObservation(source=source, snapshot=snapshot)
+
+
+def collect_source_snapshots(
+    values: Iterable[object], *, cancel_check: Callable[[], bool] | None = None,
+    timeout_seconds: float = 24.0, request_id: str = "",
+) -> list[TruthSource]:
+    """Fetch observed candidates concurrently within one cancellation budget."""
+    sources = observed_sources(values)
+    pending = [source for source in sources if not source_has_usable_snapshot(source)]
+    if not pending:
+        return sources
+    deadline = time.monotonic() + timeout_seconds
+
+    def fetch(source: TruthSource) -> TruthSource:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or (cancel_check and cancel_check()):
+            return source.model_copy(update={"fetch_status": "timeout"})
+        try:
+            observation = fetch_source_snapshot(
+                source.url, title=source.title, publisher=source.publisher,
+                origin=source.origin, timeout_seconds=min(8.0, remaining),
+            )
+            return observation.source.model_copy(update={
+                "observed_uri": source.observed_uri or source.url,
+                "redirect_aliases": list(dict.fromkeys([
+                    *source.redirect_aliases, source.url, *observation.source.redirect_aliases,
+                ]))[:12],
+            })
+        except Exception:
+            return source.model_copy(update={"fetch_status": "source_unavailable"})
+
+    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="source-snapshot")
+    futures = {executor.submit(fetch, source): source for source in pending}
+    try:
+        while futures and time.monotonic() < deadline:
+            if cancel_check and cancel_check():
+                raise QualityLayerCancelled("source retrieval cancelled")
+            done, _ = wait(futures, timeout=min(0.1, max(0, deadline - time.monotonic())), return_when=FIRST_COMPLETED)
+            for future in done:
+                original = futures.pop(future)
+                sources[sources.index(original)] = future.result()
+        for original in futures.values():
+            sources[sources.index(original)] = original.model_copy(update={"fetch_status": "timeout"})
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    logger.info("source_snapshots_collected", extra={
+        "request_id": request_id, "source_count": len(sources),
+        "fetched_count": sum(source_has_usable_snapshot(source) for source in sources),
+        "fetch_statuses": [source.fetch_status for source in sources],
+    })
+    return sources
 
 
 def source_has_usable_snapshot(source: TruthSource) -> bool:
