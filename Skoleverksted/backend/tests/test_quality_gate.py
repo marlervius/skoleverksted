@@ -198,7 +198,7 @@ def test_unsupported_claim_inside_json_is_removed_before_preview():
         location="Hovedtekst",
     )
     responses = deque([
-        _audit(original, [unsafe], status="source_unavailable"),
+        _audit(original, [unsafe], status="needs_review"),
         _audit("", [], status="source_unavailable"),
     ])
 
@@ -252,9 +252,9 @@ def test_structured_cleanup_is_reaudited_until_new_claims_are_gone():
         calls += 1
         candidate = kwargs["content"]
         if "Første udokumenterte" in candidate:
-            return _audit(candidate, [first_claim], status="source_unavailable")
+            return _audit(candidate, [first_claim], status="needs_review")
         if "Andre udokumenterte" in candidate:
-            return _audit(candidate, [second_claim], status="source_unavailable")
+            return _audit(candidate, [second_claim], status="needs_review")
         return _audit(candidate, [], status="source_unavailable")
 
     result = run_quality_pipeline(
@@ -299,7 +299,7 @@ def test_claim_removed_by_auditor_is_reaudited_instead_of_left_blocking():
         location="Fagtekst",
     )
     responses = deque([
-        _audit(cleaned, [removed_claim], status="source_unavailable"),
+        _audit(cleaned, [removed_claim], status="needs_review"),
         _audit(cleaned, [], status="source_unavailable"),
     ])
 
@@ -336,7 +336,7 @@ def test_repeated_unsafe_fragment_withholds_every_affected_json_field():
         location="Fagtekst og oppgaver",
     )
     responses = deque([
-        _audit(original, [repeated], status="source_unavailable"),
+        _audit(original, [repeated], status="needs_review"),
         _audit("", [], status="source_unavailable"),
     ])
 

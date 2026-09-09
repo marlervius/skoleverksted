@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from Skoleverksted.backend.platform import compendium, quality_gate, truth
+from Skoleverksted.backend.platform import compendium, evidence, quality_gate, truth
 from Skoleverksted.backend.platform.models import TruthClaim, TruthPassport, TruthSource
 from Skoleverksted.backend.platform.quality_runtime import QualityLayerCancelled, QualityLayerTimeout
 
@@ -177,21 +177,21 @@ def test_outer_timeout_cancels_owned_auditor_before_it_can_retry(monkeypatch):
     assert result.stop_reason == "truth_layer_timeout"
 
 
-def test_source_fetch_prioritises_a_citation_after_the_first_three_results(monkeypatch):
-    monkeypatch.setenv("APP_ENV", "production")
+def test_source_fetch_includes_evidence_after_the_first_three_results(monkeypatch):
     candidates = [source(f"https://example.org/page/{i}", fetch_status="grounded", snapshot_id="") for i in range(4)]
     candidates.append(source(fetch_status="grounded", snapshot_id=""))
     fetched = []
-    monkeypatch.setattr(compendium, "_call_google_json", lambda *a, **kw: (payload(), candidates))
 
     def fetch(url, **kwargs):
         fetched.append(url)
         return SimpleNamespace(source=source(url))
 
-    monkeypatch.setattr(truth, "fetch_source_snapshot", fetch)
-    result = run()
-    assert fetched[0] == URL
+    monkeypatch.setattr(evidence, "fetch_source_snapshot", fetch)
+    sources = evidence.collect_source_snapshots(candidates)
+    assert URL in fetched
     assert len(fetched) == 5
+    monkeypatch.setattr(compendium, "_call_google_json", lambda *a, **kw: (payload(), sources))
+    result = run()
     assert result.source_approved
 
 

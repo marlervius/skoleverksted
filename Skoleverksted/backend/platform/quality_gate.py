@@ -841,6 +841,7 @@ def run_quality_pipeline(
     budget_exhausted = False
     seen_operations: set[tuple[str, tuple[str, ...], tuple[str, ...]]] = set()
     last_audited_revision = ""
+    repair_feedback: list[dict[str, object]] = []
 
     def emit(message: str, round_number: int, *, claims_found: int = 0, claims_verified: int = 0) -> None:
         if progress_callback:
@@ -881,10 +882,11 @@ def run_quality_pipeline(
                     call_timeout_seconds=min(quality_model_timeout_seconds(), remaining),
                     max_attempts=quality_max_model_attempts(),
                     request_id=request_id,
+                    repair_feedback=tuple(repair_feedback),
                 )
             # A round includes provider retries, optional JSON repair and
             # evidence retrieval. It must not share one model call's limit.
-            attempt_budget = min(remaining, quality_model_timeout_seconds() * quality_max_model_attempts() * 2 + 24.0)
+            attempt_budget = min(remaining, quality_model_timeout_seconds() * quality_max_model_attempts() * 3 + 24.0)
             emit(
                 "AI-crewet prøver faktakontrollen på nytt og søker etter tilgjengelige kilder"
                 if attempt else f"AI-crewet kontrollerer fakta og kilder – runde {round_number} av {rounds_limit}",
@@ -907,6 +909,7 @@ def run_quality_pipeline(
             retryable = (
                 not passport.register_complete
                 or passport.status == "verification_failed"
+                or (passport.status == "source_unavailable" and passport.total_claims > 0)
                 or any(claim.status == "source_unavailable" for claim in passport.claims)
             )
             if attempt == 0 and retryable:
@@ -948,7 +951,10 @@ def run_quality_pipeline(
         unresolved = [claim for claim in final.claims if not claim_is_resolved(claim)]
         verified = len(final.claims) - len(unresolved)
         evidence_ids = tuple(sorted(source.snapshot_id or source.url for source in final.sources))
-        signature = (before, tuple(sorted(f"{claim.id}:{claim.status}" for claim in unresolved)), evidence_ids)
+        signature = (before, tuple(sorted(
+            f"{claim.id}:{claim.status}:{claim.action}:{claim.replacement}:{claim.field_path}"
+            for claim in unresolved
+        )), evidence_ids)
         if signature in seen_operations:
             final.status = "needs_review"
             stop_reason = "no_progress_same_revision_and_evidence"
@@ -959,7 +965,10 @@ def run_quality_pipeline(
             ))
             break
         seen_operations.add(signature)
-        if any(claim.status == "source_unavailable" for claim in unresolved):
+        if (
+            any(claim.status == "source_unavailable" for claim in unresolved)
+            or (final.status == "source_unavailable" and final.total_claims > 0 and unresolved)
+        ):
             # A fetch outage is not permission to remove useful subject
             # matter, nor to ask the teacher to certify an unchecked PDF.
             final.status = "source_unavailable"
@@ -1056,7 +1065,17 @@ def run_quality_pipeline(
         if not changed:
             final.status = "needs_review"
             stop_reason = "anchor_mismatch_or_learning_requirement"
+            if audit is audit_truth and round_number < rounds_limit:
+                repair_feedback = [
+                    {"field_path": claim.field_path, "exact_text": claim.exact_text,
+                     "claim": claim.claim, "failure": change.reason}
+                    for claim, change in zip(unresolved_after_patch, changes)
+                ]
+                emit("AI-crewet reparerer kildehenvisninger og bevarer lærestoffet før ny kontroll", round_number)
+                continue
             break
+        repair_feedback = []
+        stop_reason = ""
         current = candidate
         if round_number == rounds_limit:
             final.status = "needs_review"
