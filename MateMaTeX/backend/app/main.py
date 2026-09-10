@@ -16,6 +16,7 @@ Exposes:
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import re
@@ -510,6 +511,7 @@ async def get_job_pdf(job_id: str, preview: bool = False, user_id: str = Depends
 
     reasons = source_approval_reasons(
         content=state.verification_content,
+        release_manifest=state.release_manifest or None,
         verification_status=str(state.truth_passport.get("status") or "missing"),
         verified_revision=str(state.truth_passport.get("content_revision") or ""),
         verification_version=str(state.truth_passport.get("version") or ""),
@@ -518,14 +520,19 @@ async def get_job_pdf(job_id: str, preview: bool = False, user_id: str = Depends
             if item.get("status", "withheld") == "withheld"
         ],
     )
+    if state.compiled_document_digest != quality_content_digest(state.full_document):
+        reasons.append("PDF-en er ikke bundet til den kontrollerte dokumentversjonen.")
     if preview:
         if reasons:
             raise HTTPException(status_code=409, detail="Forhåndsvisningen er blokkert: " + "; ".join(reasons))
     else:
+        if reasons:
+            raise HTTPException(status_code=409, detail="PDF-en kan ikke frigis: " + "; ".join(reasons))
         try:
             require_export_ready(
                 export_id="matematikk.pdf",
                 content=state.verification_content,
+                release_manifest=state.release_manifest or None,
                 verification_status=str(state.truth_passport.get("status") or "missing"),
                 verified_revision=str(state.truth_passport.get("content_revision") or ""),
                 verification_version=str(state.truth_passport.get("version") or ""),
@@ -542,13 +549,11 @@ async def get_job_pdf(job_id: str, preview: bool = False, user_id: str = Depends
     if state.pdf_base64:
         try:
             pdf_bytes = base64.b64decode(state.pdf_base64)
-            return Response(
-                content=pdf_bytes,
-                media_type="application/pdf",
-                headers={"Cache-Control": "private, max-age=0, must-revalidate"},
-            )
         except Exception:
             raise HTTPException(status_code=500, detail="Invalid PDF data")
+        if hashlib.sha256(pdf_bytes).hexdigest() != state.release_manifest.get("file_hash"):
+            raise HTTPException(status_code=409, detail="PDF-filens kontrollbevis stemmer ikke.")
+        return Response(content=pdf_bytes, media_type="application/pdf", headers={"Cache-Control": "private, max-age=0, must-revalidate"})
 
     if not state.pdf_path or not os.path.isfile(state.pdf_path):
         # Fall back to compiling the stored full_document on demand.
@@ -566,6 +571,7 @@ async def get_job_pdf(job_id: str, preview: bool = False, user_id: str = Depends
             )
             if pdf_path and os.path.isfile(pdf_path):
                 state.pdf_path = pdf_path
+                state.release_manifest["file_hash"] = hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest()
                 persist_terminal_job(state)
             else:
                 raise HTTPException(
@@ -578,12 +584,10 @@ async def get_job_pdf(job_id: str, preview: bool = False, user_id: str = Depends
                 detail="No PDF or LaTeX available for this job",
             )
 
-    return FileResponse(
-        state.pdf_path,
-        media_type="application/pdf",
-        filename=f"matematex_{job_id[:8]}.pdf",
-        headers={"Cache-Control": "private, max-age=0, must-revalidate"},
-    )
+    pdf_bytes = Path(state.pdf_path).read_bytes()
+    if hashlib.sha256(pdf_bytes).hexdigest() != state.release_manifest.get("file_hash"):
+        raise HTTPException(status_code=409, detail="PDF-filens kontrollbevis stemmer ikke.")
+    return Response(content=pdf_bytes, media_type="application/pdf", headers={"Cache-Control": "private, max-age=0, must-revalidate"})
 
 
 @app.post("/generate/{job_id}/approve")
@@ -596,11 +600,14 @@ async def approve_job(job_id: str, user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=409, detail="Dokumentet er ikke klart for lærergodkjenning.")
     reasons = source_approval_reasons(
         content=state.verification_content,
+        release_manifest=state.release_manifest or None,
         verification_status=str(state.truth_passport.get("status") or "missing"),
         verified_revision=str(state.truth_passport.get("content_revision") or ""),
         verification_version=str(state.truth_passport.get("version") or ""),
         quarantined_texts=[str(item.get("original_text") or "") for item in state.quarantine if item.get("status", "withheld") == "withheld"],
     )
+    if state.compiled_document_digest != quality_content_digest(state.full_document):
+        reasons.append("PDF-en er ikke bundet til den kontrollerte dokumentversjonen.")
     if reasons:
         raise HTTPException(status_code=409, detail="Dokumentet kan ikke lærer-godkjennes: " + "; ".join(reasons))
     state.teacher_approved_at = utc_now()

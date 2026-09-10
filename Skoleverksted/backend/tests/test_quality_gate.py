@@ -30,6 +30,29 @@ SOURCE = TruthSource(
 )
 
 
+@pytest.mark.parametrize("content", [
+    r"f(1) &= 2 \cdot 1 - 1 = 1",
+    r"f(2) &= 2 \cdot 2 - 1 = 3",
+    r"f(3) &= 2 \cdot 3 - 1 = 5",
+    r"3\,690 + 650 = 4\,340\text{ kr}",
+    r"f(3) = 3^2 - 6 \cdot 3 + 8 = -1",
+    r"1 - 0{,}85 = 0{,}15",
+    r"2\times 3 + 4 = 10",
+])
+def test_math_gate_reads_complete_latex_arithmetic(content):
+    assert deterministic_math_failures(content) == []
+
+
+@pytest.mark.parametrize("content", [
+    r"2 \cdot 3 - 1 = 4",
+    r"3\,690 + 650 = 4\,341",
+    r"1 - 0{,}85 = 0{,}25",
+    "2 + 3 = 9",
+])
+def test_math_gate_still_blocks_incorrect_arithmetic(content):
+    assert deterministic_math_failures(content)
+
+
 def _manifest(content: str) -> dict[str, object]:
     from Skoleverksted.backend.platform.quality_gate import content_digest
     return ReleaseManifest(

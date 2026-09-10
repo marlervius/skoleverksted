@@ -1,24 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronLeft, ChevronRight, Sparkles, LayoutTemplate } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import type { PdfTheme } from "@/lib/store";
-import {
-  startGeneration,
-  streamProgress,
-  getResult,
-  estimateCost,
-  closeActiveStream,
-  isTerminalGenerateStatus,
-  isJobAborted,
-  watchGenerationJob,
-  type CostEstimateResponse,
-  type JobStatusResponse,
-} from "@/lib/api";
-import { mapApiResultToGenerationResult, isSuccessfulStatus } from "@/lib/map-api-result";
-import { appendHistory } from "@/lib/generation-history";
+import { estimateCost, type CostEstimateResponse } from "@/lib/api";
 import { searchGoals, type CompetencyGoal } from "@/data/lk20-goals";
 import {
   loadPreferences,
@@ -164,22 +151,13 @@ function toggleGoal(list: string[], code: string): string[] {
 /* -----------------------------------------------------------------------
    Component
    ----------------------------------------------------------------------- */
-export function GenerationWizard() {
+export function GenerationWizard({ onGenerate }: { onGenerate: () => Promise<void> }) {
   const request = useAppStore((s) => s.request);
   const setRequest = useAppStore((s) => s.setRequest);
-  const startGen = useAppStore((s) => s.startGeneration);
-  const setJobId = useAppStore((s) => s.setJobId);
-  const addStep = useAppStore((s) => s.addStep);
-  const setCurrentAgent = useAppStore((s) => s.setCurrentAgent);
-  const setResult = useAppStore((s) => s.setResult);
-  const setError = useAppStore((s) => s.setError);
-
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [goalSearch, setGoalSearch] = useState("");
-  const activeJobRef = useRef<string | null>(null);
-  const streamCloseRef = useRef<(() => void) | null>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimateResponse | null>(
     null
   );
@@ -259,13 +237,6 @@ export function GenerationWizard() {
     try { saveLocal("skoleverksted_matte_draft_v1", request); } catch { /* storage may be unavailable */ }
   }, [request]);
 
-  useEffect(() => {
-    return () => {
-      streamCloseRef.current?.();
-      closeActiveStream();
-    };
-  }, []);
-
   const filteredGoals: CompetencyGoal[] = useMemo(
     () => searchGoals(request.grade, goalSearch),
     [request.grade, goalSearch]
@@ -334,179 +305,6 @@ export function GenerationWizard() {
     };
   }, [step, canGenerate, request]);
 
-  const handleGenerate = async () => {
-    if (!canGenerate) return;
-
-    streamCloseRef.current?.();
-    closeActiveStream();
-    startGen();
-    const snapshot = { ...useAppStore.getState().request };
-
-    try {
-      const resp = await startGeneration({
-        grade: request.grade,
-        topic: request.topic,
-        material_type: request.materialType,
-        language_level: request.languageLevel,
-        num_exercises: request.numExercises,
-        difficulty: request.difficulty,
-        include_theory: request.includeTheory,
-        include_examples: request.includeExamples,
-        include_exercises: request.includeExercises,
-        include_solutions: request.includeSolutions,
-        include_graphs: request.includeGraphs,
-        competency_goals: request.competencyGoals,
-        extra_instructions: request.extraInstructions,
-        pdf_style: {
-          theme: request.pdfStyle.theme,
-          student_mode: request.pdfStyle.studentMode,
-          accessible: request.pdfStyle.accessible,
-          dyslexia: request.pdfStyle.dyslexia,
-          high_contrast: request.pdfStyle.highContrast,
-        },
-      });
-
-      const job_id = resp.job_id;
-      activeJobRef.current = job_id;
-      setJobId(job_id);
-
-      const finishWithResult = async () => {
-        const raw = await getResult(job_id);
-        if (activeJobRef.current !== job_id) return;
-        const mapped = mapApiResultToGenerationResult(raw, snapshot);
-        setResult(mapped);
-        if (isSuccessfulStatus(mapped.status)) {
-          appendHistory({
-            jobId: job_id,
-            createdAt: new Date().toISOString(),
-            topic: snapshot.topic,
-            grade: snapshot.grade,
-            materialType: snapshot.materialType,
-            favorite: false,
-            status:
-              mapped.status === "completed" ||
-              mapped.status === "completed_with_warnings" ||
-              mapped.status === "failed"
-                ? mapped.status
-                : undefined,
-            warningReason: mapped.warningReason,
-            request: { ...snapshot },
-          });
-        }
-      };
-
-      // Cache hit / instant completion: backend returns terminal status in POST
-      // response — fetch result directly instead of waiting on SSE.
-      if (isTerminalGenerateStatus(resp.status)) {
-        if (resp.status === "failed") {
-          setError(resp.message || "Generering feilet", snapshot);
-          return;
-        }
-        try {
-          await finishWithResult();
-          return;
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : "Kunne ikke hente resultat";
-          setError(msg, snapshot);
-          return;
-        }
-      }
-
-      let resultLoaded = false;
-      let loadingResult = false;
-
-      const loadResultOnce = async (statusHint?: string) => {
-        if (resultLoaded || loadingResult || activeJobRef.current !== job_id) return;
-        if (isJobAborted(job_id)) return;
-        loadingResult = true;
-        if (statusHint && statusHint !== "failed") {
-          setCurrentAgent("Henter ferdig materiale");
-        }
-        try {
-          await finishWithResult();
-          resultLoaded = true;
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : "Kunne ikke hente resultat";
-          setError(msg, snapshot);
-        } finally {
-          loadingResult = false;
-          streamCloseRef.current?.();
-          closeActiveStream();
-        }
-      };
-
-      const pollSignal = { cancelled: false };
-
-      streamCloseRef.current = () => {
-        pollSignal.cancelled = true;
-        closeActiveStream();
-      };
-
-      streamProgress(job_id, {
-        onStep: (s) =>
-          addStep({
-            agent: s.agent,
-            startedAt: s.started_at,
-            completedAt: s.completed_at,
-            durationSeconds: s.duration_seconds,
-            outputSummary: s.output_summary,
-            error: s.error,
-            retries: s.retries,
-          }),
-        onCurrentAgent: (a) => setCurrentAgent(a),
-        onComplete: async (data) => {
-          if (activeJobRef.current !== job_id) return;
-          if (data.status === "failed") {
-            setError(data.error || "Generering feilet", snapshot);
-            return;
-          }
-          await loadResultOnce(data.status);
-        },
-        onError: (err) => {
-          if (activeJobRef.current !== job_id || resultLoaded) return;
-          // Same recovery as poll give-up — job may exist on /result only.
-          void (async () => {
-            try {
-              await finishWithResult();
-              resultLoaded = true;
-            } catch {
-              setError(err, snapshot);
-            }
-          })();
-        },
-      });
-
-      const handlePollGiveUp = (msg: string) => {
-        if (activeJobRef.current !== job_id || resultLoaded) return;
-        // Last resort: /status may 404 after a Render restart while /result still works.
-        void (async () => {
-          try {
-            await finishWithResult();
-            resultLoaded = true;
-          } catch {
-            setError(msg, snapshot);
-          }
-        })();
-      };
-
-      // Independent poll on tiny /status — never rely on SSE or heavy /result.
-      void watchGenerationJob(
-        job_id,
-        async (st: JobStatusResponse) => {
-          if (st.status === "failed") {
-            setError(st.error || "Generering feilet", snapshot);
-            return;
-          }
-          await loadResultOnce(st.status);
-        },
-        pollSignal,
-        handlePollGiveUp
-      );
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Noe gikk galt";
-      setError(msg, snapshot);
-    }
-  };
 
   return (
     <div
@@ -1030,7 +828,7 @@ export function GenerationWizard() {
             )}
             <button
               type="button"
-              onClick={handleGenerate}
+              onClick={onGenerate}
               disabled={!canGenerate}
               className="btn-primary !px-8 shadow-lg shadow-accent-blue/20 disabled:opacity-40 disabled:shadow-none"
             >

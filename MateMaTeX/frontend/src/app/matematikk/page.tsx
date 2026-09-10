@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { createGenerationController } from "@/lib/generation-controller";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAppStore } from "@/lib/store";
 import { GenerationWizard } from "@/components/generation-wizard";
@@ -16,6 +18,8 @@ import {
 } from "@/lib/api";
 
 export default function HomePage() {
+  const [generation] = useState(createGenerationController);
+  useEffect(() => () => generation.dispose(), [generation]);
   const isGenerating = useAppStore((s) => s.isGenerating);
   const result = useAppStore((s) => s.result);
   const showLatexEditor = useAppStore((s) => s.showLatexEditor);
@@ -106,7 +110,7 @@ export default function HomePage() {
             </div>
             <TrustSignals />
             <M1CoverageCard compact />
-            <GenerationWizard />
+            <GenerationWizard onGenerate={generation.generate} />
           </motion.div>
         )}
 

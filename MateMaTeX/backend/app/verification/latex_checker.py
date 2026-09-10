@@ -46,6 +46,8 @@ class LatexChecker:
         errors: list[str] = []
         patterns = [
             re.compile(r"^!\s*(.+)$", re.MULTILINE),
+            # -file-line-error emits path:line: message instead of ! message.
+            re.compile(r"^.*?\.(?:tex|sty|cls):\d+:\s*.+$", re.MULTILINE),
             re.compile(r"^l\.(\d+)\s*(.+)$", re.MULTILINE),
         ]
         for pattern in patterns:
