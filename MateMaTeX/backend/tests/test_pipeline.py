@@ -197,6 +197,11 @@ class TestLatexRetryRouting:
 
 
 class TestFinalizeStatus:
+    @pytest.fixture(autouse=True)
+    def final_compile(self, monkeypatch):
+        from app.verification.latex_checker import LatexChecker
+        monkeypatch.setattr(LatexChecker, "check", lambda self, doc: LatexCompilationResult(success=True, pdf_base64="cGRm"))
+
     """Test final status reflects math verification quality."""
 
     def test_failed_when_incorrect_fasit(self):
@@ -285,6 +290,42 @@ class TestFinalizeStatus:
 
 class TestRuleBasedLatexFix:
     """The fixer should repair trivial errors without calling an LLM."""
+
+    def test_agent_completes_rule_repair_and_updates_body_without_llm(self, monkeypatch):
+        from app.pipeline.agents import latex_fixer
+
+        def no_llm(**kwargs):
+            pytest.fail("A deterministic brace repair must not call an AI provider")
+
+        monkeypatch.setattr(latex_fixer, "LLMInterface", no_llm)
+        state = PipelineState(
+            full_document=r"\documentclass{article}\begin{document}\textbf{Hei\end{document}",
+            request=GenerationRequest(grade="VG1 1T", topic="Funksjoner"),
+            latex_compilation=LatexCompilationResult(errors=["Missing } inserted"]),
+        )
+        result = latex_fixer.run_latex_fixer(state)
+        assert result.edited_latex_body == r"\textbf{Hei}"
+        assert result.steps[-1].error == ""
+        assert result.steps[-1].completed_at is not None
+
+    def test_agent_uses_model_repair_when_no_rule_applies(self, monkeypatch):
+        from app.pipeline.agents import latex_fixer
+        fixed = r"\documentclass{article}\begin{document}Rettet\end{document}"
+        class FakeLLM:
+            def __init__(self, **kwargs):
+                pass
+            def invoke(self, system, prompt):
+                assert "Undefined control sequence" in prompt
+                return fixed
+        monkeypatch.setattr(latex_fixer, "LLMInterface", FakeLLM)
+        result = latex_fixer.run_latex_fixer(PipelineState(
+            request=GenerationRequest(grade="VG1 1T", topic="Funksjoner"),
+            full_document=r"\documentclass{article}\begin{document}\unknown{Hei}\end{document}",
+            latex_compilation=LatexCompilationResult(errors=["Undefined control sequence"]),
+        ))
+        assert result.full_document == fixed
+        assert result.edited_latex_body == "Rettet"
+        assert result.steps[-1].error == ""
 
     def test_closes_unbalanced_braces(self):
         from app.pipeline.agents.latex_fixer import _try_rule_based_fix

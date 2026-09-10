@@ -9,7 +9,6 @@ from datetime import datetime
 
 import structlog
 
-from app.config import get_config
 from app.latex.preamble import wrap_with_style
 from app.latex.text_sanitize import sanitize_latex_body
 from app.models.llm import LLMInterface
@@ -68,7 +67,9 @@ def _try_rule_based_fix(full_document: str) -> str | None:
     open_braces = counting.count("{")
     close_braces = counting.count("}")
     if open_braces > close_braces:
-        body = body + ("}" * (open_braces - close_braces))
+        # Close before trailing blank lines: a paragraph break inside a short
+        # command such as \textbf still fails even when the braces balance.
+        body = body.rstrip() + ("}" * (open_braces - close_braces)) + "\n"
         changed = True
 
     if not changed:
@@ -152,7 +153,6 @@ def run_latex_fixer(state: PipelineState) -> PipelineState:
             logger.info("latex_fixer_rule_based", job_id=state.job_id)
             return state
 
-        config = get_config()
         llm = LLMInterface(temperature=0.1)  # Very low temp for precise fixes
 
         error_report = format_latex_errors_for_agent(state.latex_compilation)
@@ -175,7 +175,6 @@ def run_latex_fixer(state: PipelineState) -> PipelineState:
         state.full_document = fixed_doc
 
         # Also extract body for consistency
-        import re
         body_match = re.search(
             r'\\begin\{document\}(.*?)\\end\{document\}',
             fixed_doc,

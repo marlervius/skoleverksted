@@ -164,12 +164,14 @@ def _wrap_tabular_in_center(body: str) -> tuple[str, int]:
     be wrapped. Exception: tabular inside tcolorbox environments (taskbox,
     definisjon, eksempel, merk, losning) — tcolorbox centres content itself.
 
-    We detect "inside tcolorbox" by checking the 400 chars before the tabular
-    for an unclosed tcolorbox begin tag.
+    TikZ nodes use restricted horizontal mode, where a center list is invalid.
+    Inspect the whole preceding environment context: a long figure or box may
+    start much farther back than a fixed character window.
     """
     count = 0
     tcolorbox_envs = ('taskbox', 'definisjon', 'eksempel', 'definitionbox',
-                      'examplebox', 'tipbox', 'merk', 'losning', 'tcolorbox')
+                      'examplebox', 'tipbox', 'merk', 'losning', 'tcolorbox',
+                      'tikzpicture', 'pgfpicture')
 
     tabular_re = re.compile(
         r'\\begin\{tabular\}.*?\\end\{tabular\}',
@@ -185,8 +187,7 @@ def _wrap_tabular_in_center(body: str) -> tuple[str, int]:
 
         output_parts.append(body[pos:tab_start])
 
-        # Check preceding 600 chars for unclosed center / tcolorbox
-        preceding = body[max(0, tab_start - 600):tab_start]
+        preceding = re.sub(r'(?<!\\)%[^\n]*', '', body[:tab_start])
 
         # Already inside \begin{center}?
         center_opens = len(re.findall(r'\\begin\{center\}', preceding))

@@ -280,6 +280,8 @@ class PipelineState(BaseModel):
     quarantine: list[dict[str, Any]] = Field(default_factory=list)
     quality_stop_reason: str = ""
     verification_content: str = ""
+    release_manifest: dict[str, Any] = Field(default_factory=dict)
+    compiled_document_digest: str = ""
     source_approved: bool = False
     teacher_approved_at: str = ""
     approved_digest: str = ""

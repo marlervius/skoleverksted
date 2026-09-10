@@ -23,6 +23,7 @@ Implements the multi-agent pipeline with verification loops:
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -408,6 +409,7 @@ def finalize(state: PipelineState) -> PipelineState:
     """
     config = get_config()
     mv = state.math_verification
+    compiled_document = state.full_document
 
     # Safety net: never mark completed when SymPy confirmed wrong answers.
     if mv.claims_incorrect > 0 and not config.verification_fail_open:
@@ -454,6 +456,7 @@ def finalize(state: PipelineState) -> PipelineState:
         state.quarantine = [item.model_dump(mode="json") for item in quality.quarantine]
         state.quality_stop_reason = quality.stop_reason
         state.verification_content = quality.approved_content
+        state.release_manifest = quality.release_manifest.model_dump(mode="json") if quality.release_manifest else {}
         state.source_approved = quality.source_approved
         quality_changed = quality.approved_content != body
         body = quality.approved_content
@@ -504,24 +507,35 @@ def finalize(state: PipelineState) -> PipelineState:
             )
     elif not state.full_document:
         state.full_document = wrap_with_style(body, state.request.pdf_style)
-    elif state.final_latex_body and state.full_document:
-        state.full_document = wrap_with_style(state.final_latex_body, state.request.pdf_style)
+    elif state.full_document:
+        # Preserve any preamble repair made by the LaTeX fixer, while binding
+        # the final PDF to the actual body returned by the quality gate.
+        start = state.full_document.find(r"\begin{document}")
+        end = state.full_document.rfind(r"\end{document}")
+        if start >= 0 and end > start:
+            start += len(r"\begin{document}")
+            state.full_document = state.full_document[:start] + "\n" + body + "\n" + state.full_document[end:]
 
-    if quality_changed:
+    if state.latex_compilation.success and (quality_changed or state.full_document != compiled_document):
         try:
             from app.verification.latex_checker import LatexChecker
 
             compile_result = LatexChecker(pdflatex_path=config.pdflatex_path).check(state.full_document)
             state.latex_compilation = compile_result
             state.pdf_base64 = compile_result.pdf_base64 or ""
+            state.pdf_path = ""
             if not compile_result.success:
                 state.status = PipelineStatus.FAILED
                 state.error_message = "Den verifiserte teksten kunne ikke kompileres. Materialet leveres ikke."
                 return state
+            if compile_result.pdf_bytes:
+                from app.pipeline.agents.latex_validator import _persist_pdf
+                state.pdf_path = _persist_pdf(state.job_id, compile_result.pdf_bytes)
         except Exception as exc:
             state.status = PipelineStatus.FAILED
             state.error_message = "Ny kompilering etter kvalitetskontroll feilet. Materialet leveres ikke."
             state.pdf_base64 = ""
+            state.pdf_path = ""
             logger.warning("quality_recompile_failed", job_id=state.job_id, error=str(exc))
             return state
 
@@ -584,6 +598,14 @@ def finalize(state: PipelineState) -> PipelineState:
     if not state.source_approved:
         state.warning_reason = ",".join(filter(None, [state.warning_reason, "needs_user_review"]))
         state.status = PipelineStatus.COMPLETED_WITH_WARNINGS
+
+    # Persist proof for the exact rendered document and PDF bytes. A restored
+    # job must not release a stale file after the final body was changed.
+    from Skoleverksted.backend.platform.quality_gate import content_digest
+    import base64
+    pdf_bytes = base64.b64decode(state.pdf_base64) if state.pdf_base64 else Path(state.pdf_path).read_bytes()
+    state.compiled_document_digest = content_digest(state.full_document)
+    state.release_manifest["file_hash"] = hashlib.sha256(pdf_bytes).hexdigest()
 
     # Only cache a full result that actually carries a usable PDF. Caching a
     # PDF-less "completed" state would make later cache hits return a document

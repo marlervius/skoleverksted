@@ -8,6 +8,14 @@ so the resolver must verify the engine can actually typeset before using it.
 from app.latex import compiler
 
 
+def test_file_line_errors_include_the_cause_not_just_the_source_line():
+    from app.verification.latex_checker import LatexChecker
+    log = "/tmp/matematex/document.tex:572: LaTeX Error: Something's wrong--perhaps a missing \\item.\nl.572 \\begin{center}\n"
+    errors = LatexChecker._extract_errors(log)
+    assert "missing \\item" in errors[0]
+    assert r"l.572 \begin{center}" in errors
+
+
 def _reset_cache():
     compiler.engine_is_usable.cache_clear()
 

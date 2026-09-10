@@ -127,8 +127,18 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m pytest -q tests
+      - name: Install the mathematics PDF compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lmodern texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-lang-european texlive-science texlive-luatex
       - name: Test Matematikk
         working-directory: MateMaTeX/backend
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m pytest -q tests
+      - name: Save verified mathematics PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-mathematics-pdf
+          path: tmp/skoleverksted-test/math-repair-verified.pdf
+          if-no-files-found: error

@@ -230,8 +230,16 @@ def _numeric_expression(value: str) -> float:
 
 def deterministic_math_failures(content: str) -> list[str]:
     """Check plain numeric equalities without executing arbitrary input."""
+    # Normalize notation before matching complete arithmetic. Otherwise a
+    # suffix of `2 \\cdot 3 - 1 = 5` becomes the false claim `3 - 1 = 5`, and
+    # a grouped number such as `4\\,340` is truncated to `4`.
+    content = re.sub(r"(?<=\d)\{,\}(?=\d)", ".", content)
+    content = re.sub(r"(?<=\d)\\(?:,|;|!|thinspace\b)\s*(?=\d)", "", content)
+    content = re.sub(r"\\(?:cdot|times)\b", "*", content)
+    content = re.sub(r"\\div\b", "/", content)
+    content = re.sub(r"\^\{(-?\d+)\}", r"^\1", content)
     failures: list[str] = []
-    pattern = re.compile(r"(?<![\w\\])(-?\d+(?:[.,]\d+)?(?:\s*[-+*/^]\s*-?\d+(?:[.,]\d+)?)+)\s*=\s*(-?\d+(?:[.,]\d+)?)")
+    pattern = re.compile(r"(?<![\w\\.])(-?\d+(?:[.,]\d+)?(?:\s*[-+*/^]\s*-?\d+(?:[.,]\d+)?)+)\s*=\s*(-?\d+(?:[.,]\d+)?)(?!\d|[.,]\d)")
     for match in pattern.finditer(content):
         left, right = (part.replace(",", ".") for part in match.groups())
         try:
