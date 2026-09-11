@@ -108,6 +108,56 @@ class TestEquationVerification:
 class TestMultipleEquations:
     """Test documents with multiple equations."""
 
+    @pytest.mark.parametrize("chain", [
+        r"(-4)^2 - 9 = 7 > 0",
+        r"(-4)^2 - 9 = 7 \geq 0",
+        r"2+3 = 5 < 6",
+        r"2+3 = 5 <= 5",
+    ])
+    def test_mixed_relation_chain(self, checker, chain):
+        result = checker.verify(f"${chain}$")
+        assert result.claims_correct == 1
+        assert result.claims_unparseable == result.claims_incorrect == 0
+
+    @pytest.mark.parametrize("chain", [
+        r"(-4)^2 - 9 = 8 > 0",
+        r"(-4)^2 - 9 = 7 < 0",
+        r"2+3 = 5 > 6",
+    ])
+    def test_false_part_of_mixed_chain_blocks_delivery(self, checker, chain):
+        assert checker.verify(f"${chain}$").claims_incorrect == 1
+
+    def test_function_value_from_screenshot(self, checker):
+        result = checker.verify(
+            r"La $f(x) = \frac{2x+4}{x-1}$. "
+            r"$f(0) = \frac{2 \cdot 0 + 4}{0 - 1} = \frac{4}{-1} = -4$"
+        )
+        assert result.claims_correct == 1
+        assert result.claims_incorrect == result.claims_unparseable == 0
+
+    def test_wrong_function_substitution_is_caught(self, checker):
+        result = checker.verify(r"$f(x) = 2x+4$. $f(0) = 2+4 = 6$")
+        assert result.claims_incorrect == 1
+
+    def test_function_answer_without_intermediate_steps_is_checked(self, checker):
+        assert checker.verify(r"$f(x)=2x+4$. $f(0)=5$").claims_incorrect == 1
+
+    def test_scientific_notation_is_not_implicit_multiplication(self, checker):
+        assert checker.verify(r"$1e-3 + 1e-3 = 0.002$").claims_correct == 1
+
+    def test_missing_function_is_unresolved_not_incorrect(self, checker):
+        result = checker.verify(r"$f(0) = 2+4 = 6$")
+        assert result.claims_unparseable == 1
+        assert result.claims_incorrect == 0
+
+    def test_conflicting_functions_are_not_borrowed_from_another_exercise(self, checker):
+        result = checker.verify(r"$f(x)=2x+4$. $f(x)=3x+1$. $f(0)=2+4=6$")
+        assert result.claims_unparseable == 1
+
+    def test_function_definitions_do_not_leak_between_documents(self, checker):
+        checker.verify(r"$f(x)=2x+4$")
+        assert checker.verify(r"$f(0)=2+2=4$").claims_unparseable == 1
+
     @pytest.mark.parametrize("latex", [
         r"$2 \cdot 3 + 1 = 6 + 1 = 7$",
         r"\[\frac{6}{3} = 2\]",

@@ -83,7 +83,7 @@ class Settings(BaseSettings):
         ),
     )
     output_dir: str = Field(default="output")
-    max_verification_retries: int = Field(default=2, ge=1, le=10)
+    max_verification_retries: int = Field(default=3, ge=1, le=10)
     max_content_quality_retries: int = Field(
         default=2,
         ge=0,

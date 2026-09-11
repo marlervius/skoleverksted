@@ -17,7 +17,9 @@ from app.verification.math_checker import MathChecker
 
 BODY = r"""
 \section*{Funksjoner}
-\textbf{Regn ut funksjonsverdien. $f(x)=2x-1$ og $2 \cdot 3 - 1 = 5$.
+\textbf{Regn ut funksjonsverdien. $f(x)=\frac{2x+4}{x-1}$ og
+$f(0)=\frac{2 \cdot 0 + 4}{0-1}=\frac{4}{-1}=-4$.
+Fortegn: $(-4)^2-9=7>0$.
 Regnekjede: $2 \cdot (3 + 1) = 6 + 2 = 8$.
 Desimaltall: $1 - 0{,}85 = 0{,}15$.
 """
@@ -48,6 +50,8 @@ def prepare_job(monkeypatch, *, real_compiler=False):
         raw_latex_body=BODY, edited_latex_body=BODY,
         math_verification=MathChecker().verify(BODY),
     )
+    assert state.math_verification.claims_incorrect == 0
+    assert state.math_verification.claims_unparseable == 0
     run_latex_validator(state)
     assert not state.latex_compilation.success
     run_latex_fixer(state)

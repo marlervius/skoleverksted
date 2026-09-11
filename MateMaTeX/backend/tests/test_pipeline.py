@@ -121,8 +121,37 @@ class TestMathRetryRouting:
                 claims_incorrect=1,
                 all_correct=False,
             ),
+            math_verification_attempts=3,
         )
         assert route_final_math(state) == "math_blocked"
+
+    def test_editor_regression_is_repaired_before_delivery(self, monkeypatch):
+        from app.pipeline.agents.math_verifier import run_final_math_verifier, run_math_verifier
+        from app.pipeline.agents.author import run_author
+        from app.models.llm import LLMInterface
+
+        state = PipelineState(
+            request=GenerationRequest(grade="VG1 1T", topic="Algebra", material_type="kapittel"),
+            raw_latex_body=r"$2+3=5$",
+            verified_latex_body=r"$2+3=5$",
+            edited_latex_body=r"$2+3=6$",
+            math_verification_attempts=1,
+        )
+        run_final_math_verifier(state)
+        assert route_final_math(state) == "author"
+        assert state.author_retry_reason == "math"
+        assert state.raw_latex_body == r"$2+3=6$"
+        assert not state.verified_latex_body
+        def repair(self, system, prompt):
+            assert "2+3=6" in prompt
+            return r"$2+3=5$"
+        monkeypatch.setattr(LLMInterface, "__init__", lambda self, **kwargs: None)
+        monkeypatch.setattr(LLMInterface, "invoke", repair)
+        run_author(state)
+        run_math_verifier(state)
+        assert should_retry_math(state) == "content_quality"
+        assert state.edited_latex_body == r"$2+3=5$"
+        assert state.math_verification.claims_correct == 1
 
     def test_skip_editor_for_arbeidsark(self):
         """Worksheets skip the slow LLM editor and go straight to validators."""

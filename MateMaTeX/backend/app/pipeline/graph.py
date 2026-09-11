@@ -260,11 +260,13 @@ def should_retry_math(
 
 def route_final_math(
     state: PipelineState,
-) -> Literal["content_quality", "math_blocked"]:
+) -> Literal["author", "content_quality", "math_blocked"]:
     """Fail closed if the editor introduced an incorrect or unverifiable fasit."""
     config = get_config()
     if state.error_message.startswith("Endelig fasitkontroll feilet"):
         return "math_blocked"
+    if can_retry_math(state):
+        return "author"
     if (
         state.math_verification.claims_incorrect > 0
         and not config.verification_fail_open
@@ -704,6 +706,7 @@ def create_pipeline() -> StateGraph:
         "final_math_verifier",
         route_final_math,
         {
+            "author": "author",
             "content_quality": "content_quality",
             "math_blocked": "math_blocked",
         },
