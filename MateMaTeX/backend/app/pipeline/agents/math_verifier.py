@@ -41,6 +41,11 @@ def run_math_verifier(state: PipelineState) -> PipelineState:
         state.math_verification = result
         state.math_verification_attempts += 1
 
+        from app.pipeline.routing_helpers import can_retry_math
+
+        if can_retry_math(state):
+            state.author_retry_reason = "math"
+
         if result.all_correct:
             state.verified_latex_body = state.raw_latex_body
             logger.info(
@@ -56,10 +61,6 @@ def run_math_verifier(state: PipelineState) -> PipelineState:
                 total=result.claims_checked,
                 attempt=state.math_verification_attempts,
             )
-            from app.pipeline.routing_helpers import can_retry_math
-
-            if can_retry_math(state):
-                state.author_retry_reason = "math"
 
         step.output_summary = result.summary
 

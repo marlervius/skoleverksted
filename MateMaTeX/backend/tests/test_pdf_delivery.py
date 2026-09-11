@@ -18,6 +18,8 @@ from app.verification.math_checker import MathChecker
 BODY = r"""
 \section*{Funksjoner}
 \textbf{Regn ut funksjonsverdien. $f(x)=2x-1$ og $2 \cdot 3 - 1 = 5$.
+Regnekjede: $2 \cdot (3 + 1) = 6 + 2 = 8$.
+Desimaltall: $1 - 0{,}85 = 0{,}15$.
 """
 
 

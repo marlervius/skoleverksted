@@ -55,6 +55,18 @@ def test_math_blocked_keeps_pdf_fields_as_strings():
 class TestMathRetryRouting:
     """Test the math verification retry routing logic."""
 
+    def test_unresolved_notation_gets_automatic_correction(self):
+        from app.pipeline.agents.math_verifier import run_math_verifier
+        state = PipelineState(
+            request=GenerationRequest(grade="VG1 1T", topic="Funksjoner"),
+            raw_latex_body=r"$f(0) = a \cdot 0 + b = b$",
+        )
+        state = run_math_verifier(state)
+        assert state.author_retry_reason == "math"
+        assert should_retry_math(state) == "author"
+        state.math_verification_attempts = 3
+        assert should_retry_math(state) != "author"
+
     def test_retry_on_errors(self):
         """Should retry author when math errors exist and attempts remain."""
         state = PipelineState(

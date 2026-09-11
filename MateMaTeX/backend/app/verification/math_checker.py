@@ -49,7 +49,7 @@ class MathChecker:
         # Standalone equation: $expr = expr$
         re.compile(r'\$([^$]+?)\s*=\s*([^$]+?)\$'),
         # Display equation: \[ expr = expr \]
-        re.compile(r'\\\[([^\\]+?)\s*=\s*([^\\]+?)\\\]'),
+        re.compile(r'\\\[(.+?)\s*=\s*(.+?)\\\]', re.DOTALL),
     ]
 
     # Pattern for "Oppgave N ... fasit: answer" or solution blocks
@@ -90,7 +90,10 @@ class MathChecker:
             # Check total timeout
             if time.monotonic() - start_time > _TOTAL_TIMEOUT:
                 logger.warning("math_verification_total_timeout", checked_so_far=result.claims_correct + result.claims_incorrect + result.claims_unparseable)
-                break
+                claim.error_message = "Verification time budget exhausted"
+                result.claims_unparseable += 1
+                result.unparseable_claims.append(claim)
+                continue
 
             claim_start = time.monotonic()
             try:
@@ -255,6 +258,28 @@ class MathChecker:
         if '=' not in expr_str:
             claim.is_correct = None
             claim.error_message = "No equality found"
+            return
+
+        # Check every adjacent equality in a calculation chain. Feeding the
+        # entire RHS to the expression parser made ordinary worked solutions
+        # such as 2*3+1=6+1=7 unparseable.
+        chain = expr_str.split('=')
+        if len(chain) > 2:
+            unresolved = None
+            for left, right in zip(chain, chain[1:]):
+                pair = MathClaim(
+                    latex_expression=f"{left.strip()} = {right.strip()}",
+                    claim_type="equation", context=claim.context,
+                )
+                self._verify_equation(pair)
+                if pair.is_correct is False:
+                    claim.is_correct = False
+                    claim.error_message = pair.error_message
+                    return
+                if pair.is_correct is None:
+                    unresolved = pair.error_message
+            claim.is_correct = None if unresolved else True
+            claim.error_message = unresolved or ""
             return
 
         parts = expr_str.split('=', 1)
@@ -582,7 +607,7 @@ class MathChecker:
 
     def _manual_parse(self, expr: str):
         """Manual fallback parser for common LaTeX math patterns."""
-        s = expr
+        s = re.sub(r"(?<=\d)\{,\}(?=\d)", ".", expr)
 
         # Convert caret superscript to ** early to simplify other replacements
         s = s.replace('^', '**')
@@ -747,7 +772,7 @@ class MathChecker:
 
 def format_errors_for_agent(result: VerificationResult) -> str:
     """Format verification errors into instructions for the author agent to fix."""
-    if result.all_correct:
+    if result.all_correct and not result.claims_unparseable:
         return ""
 
     lines = [

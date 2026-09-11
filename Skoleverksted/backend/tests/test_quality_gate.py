@@ -38,6 +38,11 @@ SOURCE = TruthSource(
     r"f(3) = 3^2 - 6 \cdot 3 + 8 = -1",
     r"1 - 0{,}85 = 0{,}15",
     r"2\times 3 + 4 = 10",
+    r"$x^2 + y^2 = 9$",
+    r"$2(3 + 1) = 8$",
+    r"$2 * (3 + 1) = 8$",
+    r"$2 + 3 = 1 + 4$",
+    r"$\frac{1}{2} + 1 = 1.5$",
 ])
 def test_math_gate_reads_complete_latex_arithmetic(content):
     assert deterministic_math_failures(content) == []
@@ -48,6 +53,8 @@ def test_math_gate_reads_complete_latex_arithmetic(content):
     r"3\,690 + 650 = 4\,341",
     r"1 - 0{,}85 = 0{,}25",
     "2 + 3 = 9",
+    "2 * (3 + 1) = 9",
+    "2 + 3 = 1 + 5",
 ])
 def test_math_gate_still_blocks_incorrect_arithmetic(content):
     assert deterministic_math_failures(content)
