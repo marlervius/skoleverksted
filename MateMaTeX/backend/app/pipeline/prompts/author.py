@@ -960,5 +960,8 @@ For uttrykk som ikke kunne verifiseres: skriv tydelige mellomregninger med ekspl
 \\cdot, og skill funksjonsdefinisjoner fra utregningene. Kontroller fasiten mot
 den opprinnelige oppgaven. Ikke fjern oppgaver, fasit eller matematiske påstander
 for å unngå kontrollen, og ikke merk uverifisert innhold som godkjent.
+Ved ukjent funksjon: oppgi den opprinnelige funksjonsdefinisjonen eksplisitt,
+og bruk ulike funksjonsnavn for ulike oppgaver. Ikke finn på en definisjon for
+å få et eksisterende svar til å passe. Regn ut svaret på nytt fra oppgaven.
 Ikke legg til preamble. Behold all annen tekst uendret.
 """

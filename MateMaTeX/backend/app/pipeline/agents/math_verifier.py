@@ -98,6 +98,16 @@ def run_final_math_verifier(state: PipelineState) -> PipelineState:
         state.math_verification_attempts += 1
         if result.all_correct:
             state.verified_latex_body = source
+        from app.pipeline.routing_helpers import can_retry_math
+
+        if can_retry_math(state):
+            # Repair the actual editor output, then bypass another editorial
+            # rewrite. The repaired document still passes all validators.
+            state.raw_latex_body = source
+            state.verified_latex_body = ""
+            state.edited_latex_body = ""
+            state.author_retry_reason = "math"
+            state.skip_editor_once = True
         step.output_summary = f"Endelig fasitkontroll: {result.summary}"
         logger.info(
             "final_math_verifier_complete",

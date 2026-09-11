@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import re
 import structlog
-from sympy import Eq, Symbol, simplify, solve, sqrt, sympify, expand, cancel
+from sympy import Eq, Symbol, Lambda, simplify, solve, sqrt, sympify, expand, cancel
+from sympy.core.function import AppliedUndef
 from app.models.state import MathClaim, VerificationResult
 from m1.scorer import looks_like_prose, numeric_agreement
 
@@ -28,6 +29,7 @@ _CLAIM_TIMEOUT = 8
 _VERIFIABLE_MACROS = frozenset({
     "frac", "sqrt", "binom", "cdot", "times", "div", "left", "right",
     "mathrm", "mathbf", "mathit", "mathsf", "mathtt", "operatorname", "pi",
+    "le", "leq", "ge", "geq",
 })
 
 
@@ -78,6 +80,7 @@ class MathChecker:
         (SymPy is already loaded in this interpreter — a thread pool caused
         spurious timeouts on Windows when workers first touched SymPy).
         """
+        self._function_definitions = self._extract_function_definitions(latex_content)
         claims = self._extract_claims(latex_content)
         result = VerificationResult()
         result.claims_checked = len(claims)
@@ -141,6 +144,36 @@ class MathChecker:
     # ------------------------------------------------------------------
     # Extraction
     # ------------------------------------------------------------------
+    def _extract_function_definitions(self, content: str) -> dict:
+        """Resolve only unambiguous, explicit single-variable definitions.
+
+        Conflicting definitions remain unresolved rather than borrowing a
+        function from another exercise. Reset on every document verification.
+        """
+        definitions = {}
+        ambiguous = set()
+        for pattern in self._EQUATION_PATTERNS:
+            for match in pattern.finditer(content):
+                signature = re.fullmatch(r"([a-zA-Z])\(([a-zA-Z])\)", match[1].strip())
+                if not signature:
+                    continue
+                name, variable = signature.groups()
+                try:
+                    expression = self._manual_parse(match[2].strip())
+                    symbol = Symbol(variable)
+                    if (expression is None or not hasattr(expression, "free_symbols")
+                            or expression.has(AppliedUndef)
+                            or expression.free_symbols - {symbol}):
+                        ambiguous.add(name)
+                        continue
+                    definition = Lambda(symbol, expression)
+                    if name in definitions and definitions[name] != definition:
+                        ambiguous.add(name)
+                    definitions[name] = definition
+                except Exception:
+                    ambiguous.add(name)
+        return {name: value for name, value in definitions.items() if name not in ambiguous}
+
     def _extract_claims(self, latex_content: str) -> list[MathClaim]:
         """Extract verifiable mathematical claims from the LaTeX."""
         claims: list[MathClaim] = []
@@ -260,6 +293,38 @@ class MathChecker:
             claim.error_message = "No equality found"
             return
 
+        # Relations in a chain are separate claims, never arithmetic operands.
+        normalized = re.sub(r"\\(?:leq|le)\b", "<=", expr_str)
+        normalized = re.sub(r"\\(?:geq|ge)\b", ">=", normalized)
+        relations = re.split(r"(<=|>=|=|<|>)", normalized)
+        if any(op != "=" for op in relations[1::2]):
+            unresolved = None
+            for i in range(1, len(relations), 2):
+                left, op, right = relations[i-1:i+2]
+                if op == "=":
+                    pair = MathClaim(latex_expression=f"{left} = {right}",
+                                     claim_type="equation", context=claim.context)
+                    self._verify_equation(pair)
+                    correct, error = pair.is_correct, pair.error_message
+                else:
+                    lhs, rhs = self._parse_latex_expr(left), self._parse_latex_expr(right)
+                    correct, error = None, f"Unresolved relation: {left} {op} {right}"
+                    if lhs is not None and rhs is not None:
+                        relation = {"<": lambda: lhs < rhs, ">": lambda: lhs > rhs,
+                                    "<=": lambda: lhs <= rhs, ">=": lambda: lhs >= rhs}[op]()
+                        if relation == True:
+                            correct, error = True, ""
+                        elif relation == False:
+                            correct, error = False, f"False relation: {left} {op} {right}"
+                if correct is False:
+                    claim.is_correct, claim.error_message = False, error
+                    return
+                if correct is None:
+                    unresolved = error
+            claim.is_correct = None if unresolved else True
+            claim.error_message = unresolved or ""
+            return
+
         # Check every adjacent equality in a calculation chain. Feeding the
         # entire RHS to the expression parser made ordinary worked solutions
         # such as 2*3+1=6+1=7 unparseable.
@@ -297,6 +362,11 @@ class MathChecker:
         if lhs is None or rhs is None:
             claim.is_correct = None
             claim.error_message = "Could not parse one or both sides"
+            return
+
+        if any(getattr(side, "has", lambda *_: False)(AppliedUndef) for side in (lhs, rhs)):
+            claim.is_correct = None
+            claim.error_message = "Function definition missing or ambiguous; provide an explicit definition"
             return
 
         if looks_like_prose(lhs, rhs):
@@ -603,6 +673,11 @@ class MathChecker:
 
         # Manual parse only for reliability: parse_latex can hang without full antlr.
         manual = self._manual_parse(expr)
+        if manual is not None and hasattr(manual, "atoms"):
+            for call in manual.atoms(AppliedUndef):
+                definition = getattr(self, "_function_definitions", {}).get(str(call.func))
+                if definition is not None and len(call.args) == 1:
+                    manual = manual.subs(call, definition(*call.args))
         return manual
 
     def _manual_parse(self, expr: str):
@@ -678,6 +753,8 @@ class MathChecker:
         # Clean remaining LaTeX controls and symbols
         s = s.replace('\\left', '').replace('\\right', '')
         s = s.replace('\\', '')
+        # School notation commonly omits multiplication in 2x and 3(x+1).
+        s = re.sub(r"(?<=\d)(?=[a-df-zA-DF-Z(]|[eE](?![+-]?\d))", "*", s)
 
         try:
             return sympify(s)
@@ -720,7 +797,7 @@ class MathChecker:
         combined = f"{lhs} {rhs}"
         if re.search(r"[+\-*/^]|\\frac|\\sqrt|\\cdot", combined):
             return True
-        if re.search(r"\d", combined) and "=" in combined:
+        if re.search(r"\d", combined):
             return True
         return False
 
