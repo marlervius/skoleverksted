@@ -956,5 +956,9 @@ Her er det nåværende innholdet:
 {current_latex}
 
 OPPGAVE: Rett ALLE feilene beskrevet over. Returner HELE det korrigerte LaTeX body-innholdet.
+For uttrykk som ikke kunne verifiseres: skriv tydelige mellomregninger med eksplisitt
+\\cdot, og skill funksjonsdefinisjoner fra utregningene. Kontroller fasiten mot
+den opprinnelige oppgaven. Ikke fjern oppgaver, fasit eller matematiske påstander
+for å unngå kontrollen, og ikke merk uverifisert innhold som godkjent.
 Ikke legg til preamble. Behold all annen tekst uendret.
 """

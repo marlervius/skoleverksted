@@ -108,6 +108,26 @@ class TestEquationVerification:
 class TestMultipleEquations:
     """Test documents with multiple equations."""
 
+    @pytest.mark.parametrize("latex", [
+        r"$2 \cdot 3 + 1 = 6 + 1 = 7$",
+        r"\[\frac{6}{3} = 2\]",
+        r"$1 - 0{,}85 = 0{,}15$",
+    ])
+    def test_worked_calculation_is_fully_verified(self, checker, latex):
+        result = checker.verify(latex)
+        assert result.claims_correct == 1
+        assert result.claims_unparseable == result.claims_incorrect == 0
+
+    def test_wrong_last_step_of_chain_is_blocked(self, checker):
+        result = checker.verify(r"$2 \cdot 3 = 6 = 7$")
+        assert result.claims_incorrect == 1
+
+    def test_unresolved_only_feedback_is_sent_to_author(self, checker):
+        from app.verification.math_checker import format_errors_for_agent
+        result = checker.verify(r"$f(0) = a \cdot 0 + b = b$")
+        assert result.claims_unparseable == 1
+        assert "f(0)" in format_errors_for_agent(result)
+
     def test_all_correct(self, checker: MathChecker):
         """Multiple correct equations."""
         latex = r"""

@@ -214,6 +214,7 @@ _UNARY_OPS: dict[type[ast.unaryop], Callable[[float], float]] = {
 
 
 def _numeric_expression(value: str) -> float:
+    value = re.sub(r"(?<=[\d)])\s*(?=\()|(?<=\))\s*(?=\d)", "*", value)
     node = ast.parse(value.replace("^", "**"), mode="eval").body
 
     def evaluate(item: ast.AST) -> float:
@@ -239,12 +240,22 @@ def deterministic_math_failures(content: str) -> list[str]:
     content = re.sub(r"\\div\b", "/", content)
     content = re.sub(r"\^\{(-?\d+)\}", r"^\1", content)
     failures: list[str] = []
-    pattern = re.compile(r"(?<![\w\\.])(-?\d+(?:[.,]\d+)?(?:\s*[-+*/^]\s*-?\d+(?:[.,]\d+)?)+)\s*=\s*(-?\d+(?:[.,]\d+)?)(?!\d|[.,]\d)")
+    expression = r"[-+\d(][\d., \t()+*/^\-]*"
+    pattern = re.compile(rf"(?<![\w\\.])({expression})\s*=\s*({expression})")
     for match in pattern.finditer(content):
-        left, right = (part.replace(",", ".") for part in match.groups())
+        # Never evaluate a numeric suffix of symbolic/LaTeX notation, e.g.
+        # x^2 + y^2 = 9 or \\frac{1}{2} + 1 = 1.5. The domain verifier
+        # handles those complete expressions. A partial match proves nothing.
+        before = content[:match.start()].rstrip()
+        after = content[match.end():].lstrip()
+        if before and before[-1] in "^*/+-{(}\\":
+            continue
+        if after and (after[0].isalnum() or after[0] in "^{)}*/+-"):
+            continue
+        left, right = (part.strip().rstrip(".").replace(",", ".") for part in match.groups())
         try:
-            if abs(_numeric_expression(left) - float(right)) > 1e-9:
-                failures.append(match.group(0))
+            if abs(_numeric_expression(left) - _numeric_expression(right)) > 1e-9:
+                failures.append(match.group(0).strip().rstrip("."))
         except (SyntaxError, TypeError, ValueError, ZeroDivisionError, OverflowError):
             failures.append(match.group(0))
     return failures
