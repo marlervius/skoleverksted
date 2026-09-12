@@ -241,6 +241,10 @@ class TestFinalizeStatus:
     @pytest.fixture(autouse=True)
     def final_compile(self, monkeypatch):
         from app.verification.latex_checker import LatexChecker
+        from app.pipeline.agents import release_repair
+        from app.models.state import ContentQualityReport
+        monkeypatch.setattr(release_repair, "evaluate_content_quality", lambda *a: ContentQualityReport(passed=True))
+        monkeypatch.setattr(release_repair.LLMInterface, "invoke", lambda *a: r"\title{T}\maketitle")
         monkeypatch.setattr(LatexChecker, "check", lambda self, doc: LatexCompilationResult(success=True, pdf_base64="cGRm"))
 
     """Test final status reflects math verification quality."""
@@ -256,11 +260,14 @@ class TestFinalizeStatus:
                 all_correct=False,
             ),
         )
-        result = finalize(state)
+        monkeypatch_target = "app.pipeline.agents.release_repair.MathChecker.verify"
+        from unittest.mock import patch
+        with patch(monkeypatch_target, return_value=state.math_verification):
+            result = finalize(state)
         assert result.status == PipelineStatus.FAILED
-        assert "grunnlov" in result.error_message.lower() or "§1" in result.error_message
+        assert "automatiske reparasjonsforsøk" in result.error_message
 
-    def test_completed_with_warnings_when_unparseable_only(self):
+    def test_failed_after_automatic_repair_when_unparseable_only(self):
         state = PipelineState(
             request=GenerationRequest(grade="8. trinn", topic="Algebra"),
             raw_latex_body="\\title{T}\\maketitle",
@@ -274,9 +281,13 @@ class TestFinalizeStatus:
                 all_correct=False,
             ),
         )
-        result = finalize(state)
-        assert result.status == PipelineStatus.COMPLETED_WITH_WARNINGS
-        assert "unparseable" in result.warning_reason
+        monkeypatch_target = "app.pipeline.agents.release_repair.MathChecker.verify"
+        from unittest.mock import patch
+        with patch(monkeypatch_target, return_value=state.math_verification):
+            result = finalize(state)
+        assert result.status == PipelineStatus.FAILED
+        assert result.warning_reason == "verification"
+        assert result.pdf_base64 == ""
 
     def test_warning_reason_fallback(self):
         state = PipelineState(
@@ -289,7 +300,10 @@ class TestFinalizeStatus:
                 claims_checked=3, claims_correct=3, all_correct=True
             ),
         )
-        result = finalize(state)
+        monkeypatch_target = "app.pipeline.agents.release_repair.MathChecker.verify"
+        from unittest.mock import patch
+        with patch(monkeypatch_target, return_value=state.math_verification):
+            result = finalize(state)
         assert result.status == PipelineStatus.COMPLETED_WITH_WARNINGS
         assert "fallback" in result.warning_reason
 
@@ -305,7 +319,10 @@ class TestFinalizeStatus:
                 all_correct=True,
             ),
         )
-        result = finalize(state)
+        monkeypatch_target = "app.pipeline.agents.release_repair.MathChecker.verify"
+        from unittest.mock import patch
+        with patch(monkeypatch_target, return_value=state.math_verification):
+            result = finalize(state)
         assert result.status == PipelineStatus.COMPLETED
         assert result.warning_reason == ""
 
@@ -323,7 +340,10 @@ class TestFinalizeStatus:
                 all_correct=True,
             ),
         )
-        result = finalize(state)
+        monkeypatch_target = "app.pipeline.agents.release_repair.MathChecker.verify"
+        from unittest.mock import patch
+        with patch(monkeypatch_target, return_value=state.math_verification):
+            result = finalize(state)
         assert result.status == PipelineStatus.FAILED
         assert result.warning_reason == "latex_compilation"
         assert "PDF" in result.error_message

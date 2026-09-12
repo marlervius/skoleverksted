@@ -46,7 +46,7 @@ def prepare_job(monkeypatch, *, real_compiler=False):
             return LatexCompilationResult(success=True, pdf_bytes=b"%PDF-1.4\nfixture")
         monkeypatch.setattr(LatexChecker, "check", compile_document)
     state = PipelineState(
-        owner_id="test-teacher", request=GenerationRequest(grade="VG1 1T", topic="Funksjoner"),
+        owner_id="test-teacher", request=GenerationRequest(grade="VG1 1T", topic="Funksjoner", include_exercises=False, include_theory=False),
         raw_latex_body=BODY, edited_latex_body=BODY,
         math_verification=MathChecker().verify(BODY),
     )
@@ -82,6 +82,8 @@ def test_repaired_pdf_survives_restart_and_passes_the_actual_export_routes(clien
     assert client.get(url + "/pdf").status_code == 409
     assert client.post(url + "/approve").status_code == 200
     assert client.get(url + "/pdf").content == preview.content
+    shared = client.post("/sharing", json={"resource_type": "generation", "resource_id": state.job_id})
+    assert shared.status_code == 200, shared.text
 
 
 @pytest.mark.parametrize("mutation", ["body", "document", "manifest", "file"])

@@ -139,12 +139,13 @@ async def create_share(
         require_export_ready(
             export_id="matematikk.shared_pdf",
             content=shared_content,
+            release_manifest=snapshot.get("release_manifest") or None,
             verification_status=passport.get("status", "missing"),
             verified_revision=passport.get("content_revision", ""),
             verification_version=passport.get("version", ""),
             teacher_approved=bool(snapshot.get("teacher_approved_at")),
             approved_revision=str(snapshot.get("approved_digest") or ""),
-            quarantined_texts=[item.get("original_text", "") for item in snapshot.get("quarantine", [])],
+            quarantined_texts=[item.get("original_text", "") for item in snapshot.get("quarantine", []) if item.get("status", "withheld") == "withheld"],
         )
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

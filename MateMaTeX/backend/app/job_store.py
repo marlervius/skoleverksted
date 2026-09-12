@@ -116,6 +116,12 @@ def get_resource_snapshot(resource_type: str, resource_id: str) -> dict | None:
             "material_type": state.request.material_type,
             "job_id": state.job_id,
             "status": state.status.value,
+            "verification_content": state.verification_content,
+            "truth_passport": state.truth_passport,
+            "release_manifest": state.release_manifest,
+            "quarantine": state.quarantine,
+            "teacher_approved_at": state.teacher_approved_at,
+            "approved_digest": state.approved_digest,
         }
     return _shared_resources.get(resource_id)
 

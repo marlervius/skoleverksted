@@ -86,7 +86,7 @@ export function mapApiResultToGenerationResult(
   const latex = (raw.latex_compilation ?? {}) as Record<string, unknown>;
 
   const statusRaw = String(raw.status ?? "");
-  const status: GenerationResult["status"] =
+  let status: GenerationResult["status"] =
     statusRaw === "pending" ||
     statusRaw === "running" ||
     statusRaw === "completed" ||
@@ -94,6 +94,11 @@ export function mapApiResultToGenerationResult(
     statusRaw === "failed"
       ? statusRaw
       : "failed";
+
+  const blockedLegacyResult =
+    (status === "completed" || status === "completed_with_warnings") &&
+    (raw.source_approved === false || Number(mv.claims_unparseable ?? 0) > 0 || Number(mv.claims_incorrect ?? 0) > 0);
+  if (blockedLegacyResult) status = "failed";
 
   return {
     jobId: String(raw.job_id ?? ""),
@@ -132,7 +137,9 @@ export function mapApiResultToGenerationResult(
     },
     latexCompiled: Boolean(raw.pdf_available ?? latex.success),
     totalDuration: Number(raw.total_duration_seconds ?? 0),
-    error: String(raw.error ?? ""),
+    error: blockedLegacyResult
+      ? "Dette resultatet er ikke ferdig verifisert. Generer på nytt for automatisk reparasjon og sluttkontroll."
+      : String(raw.error ?? ""),
     generationMeta,
     errorCategory: categorizeError(
       String(raw.error ?? ""),

@@ -92,6 +92,10 @@ def try_restore_cached_pipeline(
                 return None
 
         restored = PipelineState(**data)
+        if (not restored.source_approved
+                or restored.math_verification.claims_unparseable
+                or restored.math_verification.claims_incorrect):
+            return None
         restored.job_id = job_id
         if created_at is not None:
             restored.created_at = created_at
@@ -410,8 +414,13 @@ def finalize(state: PipelineState) -> PipelineState:
     Final node: assemble the complete document and compute summary stats.
     """
     config = get_config()
-    mv = state.math_verification
     compiled_document = state.full_document
+    if state.request.material_type == "differensiert":
+        _apply_differentiation(state)
+    from app.pipeline.agents.release_repair import prepare_release
+    if not prepare_release(state):
+        return state
+    mv = state.math_verification
 
     # Safety net: never mark completed when SymPy confirmed wrong answers.
     if mv.claims_incorrect > 0 and not config.verification_fail_open:
@@ -491,23 +500,7 @@ def finalize(state: PipelineState) -> PipelineState:
         else:
             state.raw_latex_body = body
 
-    if state.request.material_type == "differensiert":
-        _apply_differentiation(state)
-        try:
-            from app.verification.latex_checker import LatexChecker
-
-            checker = LatexChecker(pdflatex_path=config.pdflatex_path)
-            compile_result = checker.check(state.full_document)
-            state.latex_compilation = compile_result
-            if compile_result.pdf_base64:
-                state.pdf_base64 = compile_result.pdf_base64
-        except Exception as e:
-            logger.warning(
-                "differentiation_recompile_failed",
-                error=str(e),
-                job_id=state.job_id,
-            )
-    elif not state.full_document:
+    if not state.full_document:
         state.full_document = wrap_with_style(body, state.request.pdf_style)
     elif state.full_document:
         # Preserve any preamble repair made by the LaTeX fixer, while binding
@@ -598,8 +591,11 @@ def finalize(state: PipelineState) -> PipelineState:
         state.status = PipelineStatus.COMPLETED
 
     if not state.source_approved:
-        state.warning_reason = ",".join(filter(None, [state.warning_reason, "needs_user_review"]))
-        state.status = PipelineStatus.COMPLETED_WITH_WARNINGS
+        state.status = PipelineStatus.FAILED
+        state.error_message = "Sluttkontrollen kunne ikke verifisere dokumentet. Eksport er stoppet."
+        state.pdf_base64 = ""
+        state.pdf_path = ""
+        return state
 
     # Persist proof for the exact rendered document and PDF bytes. A restored
     # job must not release a stale file after the final body was changed.
