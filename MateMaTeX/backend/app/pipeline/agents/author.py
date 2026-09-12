@@ -14,14 +14,12 @@ import structlog
 
 from app.config import get_config
 from app.curriculum import format_boundaries_for_prompt, get_language_level_instructions
-from app.models.llm import LLMInterface
+from app.models.llm import LLMInterface, TruncatedResponseError
 from app.models.state import AgentRole, AgentStep, PipelineState
 from app.pipeline.prompts.author import (
     FEW_SHOT_EXAMPLES,
     SYSTEM_PROMPT,
-    build_author_fix_prompt,
     build_author_prompt,
-    build_author_quality_fix_prompt,
 )
 
 logger = structlog.get_logger()
@@ -72,10 +70,6 @@ def run_author(state: PipelineState) -> PipelineState:
             from app.verification.math_checker import format_errors_for_agent
 
             error_report = format_errors_for_agent(state.math_verification)
-            user_prompt = build_author_fix_prompt(
-                current_latex=state.raw_latex_body,
-                error_report=error_report,
-            )
             step.input_summary = (
                 f"MATH RETRY: fixing {state.math_verification.claims_incorrect} errors"
             )
@@ -83,13 +77,6 @@ def run_author(state: PipelineState) -> PipelineState:
             from app.verification.content_quality import format_quality_report_for_author
 
             quality_report = format_quality_report_for_author(state.content_quality)
-            user_prompt = build_author_quality_fix_prompt(
-                pedagogical_plan=state.pedagogical_plan,
-                current_latex=state.raw_latex_body,
-                quality_report=quality_report,
-                grade=state.request.grade,
-                content_options=state.request.model_dump(),
-            )
             step.input_summary = (
                 f"QUALITY RETRY #{state.content_quality_attempts}: "
                 f"score {state.content_quality.score}/100"
@@ -111,7 +98,21 @@ def run_author(state: PipelineState) -> PipelineState:
             )
             step.input_summary = f"Plan: {state.pedagogical_plan[:100]}..."
 
-        response = llm.invoke(full_system, user_prompt)
+        if is_math_retry or is_quality_retry:
+            from app.pipeline.document_edits import apply_edits, edit_prompt
+            instructions = error_report if is_math_retry else quality_report
+            response = apply_edits(state.raw_latex_body, llm.invoke(
+                "Du reparerer matematikkmateriell. Returner kun JSON-endringslisten.",
+                edit_prompt(state.raw_latex_body, instructions),
+            ))
+        else:
+            try:
+                response = llm.invoke(full_system, user_prompt)
+            except TruncatedResponseError:
+                from app.pipeline.partitioned_author import generate_in_parts
+                logger.info("author_partition_after_truncation", job_id=state.job_id)
+                response = generate_in_parts(llm, full_system, user_prompt, state)
+
         body = response.strip()
 
         import re as _re

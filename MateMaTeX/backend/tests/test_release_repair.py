@@ -1,4 +1,5 @@
 """Final repair must fix the rendered revision without releasing unchecked PDFs."""
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -23,7 +24,7 @@ def state():
 
 def test_repairs_actual_rendered_body_and_verifies_replacement(monkeypatch, state):
     model = Mock()
-    model.invoke.return_value = r"$2+2=4$"
+    model.invoke.return_value = json.dumps({"edits": [{"before": "$2+2=5$", "after": "$2+2=4$"}]})
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
     assert release_repair.prepare_release(state)
     assert "$2+2=5$" in model.invoke.call_args.args[1]
@@ -34,7 +35,7 @@ def test_repairs_actual_rendered_body_and_verifies_replacement(monkeypatch, stat
 
 def test_no_progress_terminates_and_clears_stale_release(monkeypatch, state):
     model = Mock()
-    model.invoke.return_value = r"$2+2=5$"
+    model.invoke.return_value = '{"edits": []}'
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
     assert not release_repair.prepare_release(state)
     assert model.invoke.call_count == 1
@@ -68,7 +69,7 @@ def test_provider_timeout_is_terminal(monkeypatch, state):
 
 def test_repair_budget_is_two_attempts(monkeypatch, state):
     model = Mock()
-    model.invoke.side_effect = [r"$2+2=6$", r"$2+2=7$"]
+    model.invoke.side_effect = [json.dumps({"edits": [{"before": f"$2+2={before}$", "after": f"$2+2={after}$"}]}) for before, after in [(5, 6), (6, 7)]]
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
     assert not release_repair.prepare_release(state)
     assert model.invoke.call_count == 2
@@ -82,7 +83,7 @@ def test_finalize_compiles_the_repaired_revision(monkeypatch, state):
     from app.pipeline.graph import finalize
     from app.verification.latex_checker import LatexChecker
     model = Mock()
-    model.invoke.return_value = r"$2+2=4$"
+    model.invoke.return_value = json.dumps({"edits": [{"before": "$2+2=5$", "after": "$2+2=4$"}]})
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
     compiled = []
     def compile_repaired(self, document):

@@ -275,6 +275,10 @@ class LLMInterface:
                 response, provider=self._provider_name, model=self._model_name
             )
             return _message_content_to_str(response.content)
+        except TruncatedResponseError:
+            # A smaller output contract is needed; do not resend the same
+            # oversized request to a second provider. Callers can partition it.
+            raise
         except Exception as primary_err:
             logger.warning(
                 "primary_llm_failed",
@@ -321,6 +325,10 @@ class LLMInterface:
                 response, provider=self._provider_name, model=self._model_name
             )
             return _message_content_to_str(response.content)
+        except TruncatedResponseError:
+            # A smaller output contract is needed; do not resend the same
+            # oversized request to a second provider. Callers can partition it.
+            raise
         except Exception as primary_err:
             logger.warning(
                 "primary_llm_failed",

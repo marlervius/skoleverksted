@@ -7,10 +7,9 @@ import time
 from app.models.llm import LLMInterface
 from app.models.state import AgentRole, AgentStep, PipelineState, PipelineStatus
 from app.pipeline.cancel import is_cancelled
-from app.pipeline.prompts.author import build_author_fix_prompt
+from app.pipeline.document_edits import apply_edits, edit_prompt
 from app.verification.math_checker import MathChecker, format_errors_for_agent
 from app.verification.content_quality import evaluate_content_quality, format_quality_report_for_author
-from app.latex.text_sanitize import sanitize_latex_body
 from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
 from Skoleverksted.backend.platform.quality_runtime import run_bounded_sync
 
@@ -82,19 +81,17 @@ def prepare_release(state: PipelineState) -> bool:
                 *quality.deterministic_failures,
                 quality.passport.summary if not quality.source_approved else "",
             ])
-            prompt = build_author_fix_prompt(body, feedback)
+            prompt = edit_prompt(body, feedback)
             response = run_bounded_sync(
                 lambda: LLMInterface(temperature=0).invoke(
                     "Du reparerer matematikkmateriell automatisk. Bevar oppgaver, fasit, "
-                    "læringsmål og nødvendig figurinnhold. Returner kun komplett LaTeX-body. "
+                    "læringsmål og nødvendig figurinnhold. Returner kun JSON-endringslisten. "
                     "Ikke be om lærergjennomgang og ikke skjul påstander for kontrollen.", prompt),
                 timeout_seconds=max(0.1, deadline - time.monotonic()),
                 cancel_check=lambda: is_cancelled(state.job_id),
                 operation_name="automatic mathematics release repair",
             )
-            response = re.sub(r"^```(?:latex|tex)?\s*", "", response.strip())
-            response = re.sub(r"\s*```$", "", response)
-            body = sanitize_latex_body(response.strip())
+            body = apply_edits(body, response)
         raise ValueError("Sluttkandidaten bestod ikke alle kontrollene")
     except Exception as exc:
         step.error = str(exc)
