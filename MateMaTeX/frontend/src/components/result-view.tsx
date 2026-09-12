@@ -96,12 +96,6 @@ export function ResultView() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
   const [includeSolutionsExport, setIncludeSolutionsExport] = useState(true);
-  const [approvalChecks, setApprovalChecks] = useState({
-    reviewed: false,
-    language: false,
-    classFit: false,
-    mathReviewed: false,
-  });
   const [yearPlanContext, setYearPlanContext] = useState<MathematicsYearPlanContext | null>(null);
   const [yearPlanSaveStatus, setYearPlanSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [yearPlanSaveMessage, setYearPlanSaveMessage] = useState("");
@@ -276,11 +270,7 @@ export function ResultView() {
     !hasUnparseable &&
     result.mathVerification.allCorrect;
   const hasMathIssues = hasUnparseable || hasIncorrect;
-  const canShare =
-    approvalChecks.reviewed &&
-    approvalChecks.language &&
-    approvalChecks.classFit &&
-    (!hasMathIssues || approvalChecks.mathReviewed);
+  const canShare = isSuccess && result.sourceApproved === true && !hasMathIssues;
 
   const handleSaveToYearPlan = async () => {
     if (!yearPlanContext || !canShare || !isSuccess) return;
@@ -308,7 +298,7 @@ export function ResultView() {
       const title = `${materialLabel}: ${yearPlanContext.topic}`;
       const verificationNote = isVerifiedFasit
         ? `MateMaTeX verifiserte ${result.mathVerification.claimsChecked} matematiske påstander uten avvik.`
-        : "MateMaTeX-resultatet er manuelt gjennomgått og godkjent av lærer.";
+        : "MateMaTeX-resultatet har bestått automatisk sluttkontroll.";
       await saveYearPlanMaterial({
         planId: yearPlanContext.planId,
         periodId: yearPlanContext.periodId,
@@ -569,7 +559,7 @@ export function ResultView() {
               )}
               {isSuccess
                 ? hasWarnings
-                  ? "Materiale generert — krever gjennomgang"
+                  ? "Materiale generert — automatisk kontrollert"
                   : "Materiale generert"
                 : "Generering feilet"}
             </h2>
@@ -618,7 +608,7 @@ export function ResultView() {
             <div className="card mb-6">
               <h3 className="text-sm font-medium mb-2">Koblet til LK20-mål</h3>
               <p className="text-xs text-text-muted mb-2">
-                Sjekk at dokumentet dekker disse målene før du deler med elever.
+                Disse målene er valgt for dokumentet.
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {selectedCompetencyGoals.map((goal) => (
@@ -1265,12 +1255,6 @@ export function ResultView() {
 
               <button
                 onClick={() => {
-                  setApprovalChecks({
-                    reviewed: false,
-                    language: false,
-                    classFit: false,
-                    mathReviewed: false,
-                  });
                   handleDifferentiate();
                 }}
                 disabled={diffLoading}
@@ -1284,7 +1268,7 @@ export function ResultView() {
                 onClick={handleShare}
                 className="btn-secondary"
                 disabled={!canShare || shareLoading}
-                title={!canShare ? "Kryss av sjekklisten først" : undefined}
+                title={!canShare ? "Automatisk sluttkontroll må være bestått" : undefined}
               >
                 <Share2 size={14} />
                 {shareLoading ? "Oppretter..." : shareUrl ? "Lenke kopiert" : "Del"}
@@ -1326,53 +1310,20 @@ export function ResultView() {
               <div className="rounded-lg border border-border bg-surface-elevated/40 p-3">
                 <p className="text-xs font-medium mb-2 flex items-center gap-1.5">
                   <CheckSquare size={14} />
-                  Kvalitetssjekk før deling
+                  Automatisk kvalitetssjekk
                 </p>
-                <div className="flex flex-wrap gap-4 text-xs text-text-secondary">
-                  <label className="flex items-center gap-1.5">
-                    <input
-                      type="checkbox"
-                      checked={approvalChecks.reviewed}
-                      onChange={(e) => setApprovalChecks((s) => ({ ...s, reviewed: e.target.checked }))}
-                    />
-                    Jeg har lest gjennom innholdet
-                  </label>
-                  <label className="flex items-center gap-1.5">
-                    <input
-                      type="checkbox"
-                      checked={approvalChecks.language}
-                      onChange={(e) => setApprovalChecks((s) => ({ ...s, language: e.target.checked }))}
-                    />
-                    Språket passer elevgruppen
-                  </label>
-                  <label className="flex items-center gap-1.5">
-                    <input
-                      type="checkbox"
-                      checked={approvalChecks.classFit}
-                      onChange={(e) => setApprovalChecks((s) => ({ ...s, classFit: e.target.checked }))}
-                    />
-                    Oppgavene passer klassen min
-                  </label>
-                  {hasMathIssues && (
-                    <label className="flex items-center gap-1.5 text-accent-orange">
-                      <input
-                        type="checkbox"
-                        checked={approvalChecks.mathReviewed}
-                        onChange={(e) =>
-                          setApprovalChecks((s) => ({ ...s, mathReviewed: e.target.checked }))
-                        }
-                      />
-                      Jeg har manuelt sjekket mattepåstandene markert over
-                    </label>
-                  )}
-                </div>
+                <p className="text-xs text-text-secondary">
+                  {canShare
+                    ? "Appen har kontrollert og verifisert materialet automatisk. Det er klart for deling."
+                    : "Materialet har ikke bestått automatisk sluttkontroll. Generer på nytt for automatisk reparasjon."}
+                </p>
               </div>
               {yearPlanContext && isSuccess && (
                 <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-accent-blue/20 bg-accent-blue/5 p-3">
                   <div className="min-w-56 flex-1">
                     <p className="text-xs font-semibold text-text-primary">Koblet til årsplanen</p>
                     <p className="mt-1 text-xs text-text-secondary">
-                      Fullfør kvalitetssjekken for å godkjenne og lagre PDF-en på perioden «{yearPlanContext.topic}».
+                      Lagre den automatisk kontrollerte PDF-en på perioden «{yearPlanContext.topic}».
                     </p>
                     {yearPlanSaveMessage && (
                       <p
@@ -1392,7 +1343,7 @@ export function ResultView() {
                       className="btn-primary"
                       onClick={() => void handleSaveToYearPlan()}
                       disabled={!canShare || yearPlanSaveStatus === "saving"}
-                      title={!canShare ? "Fullfør kvalitetssjekken først" : undefined}
+                      title={!canShare ? "Automatisk sluttkontroll må være bestått" : undefined}
                     >
                       <CheckCircle2 size={14} />
                       {yearPlanSaveStatus === "saving" ? "Lagrer …" : "Godkjenn og lagre i årsplanen"}

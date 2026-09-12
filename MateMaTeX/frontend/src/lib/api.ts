@@ -513,8 +513,7 @@ export async function downloadJobPdf(
     typeof window !== "undefined"
       ? `/api/generate/${encodeURIComponent(jobId)}/pdf`
       : apiUrl(`generate/${encodeURIComponent(jobId)}/pdf`);
-  const approval = await fetch(url, { method: "POST" });
-  if (!approval.ok) throw new Error(await readErrorMessage(approval));
+  await approveJobRelease(jobId);
   const res = await fetch(url);
   if (!res.ok) throw new Error(await readErrorMessage(res));
   const objectUrl = URL.createObjectURL(await res.blob());
@@ -525,6 +524,14 @@ export async function downloadJobPdf(
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(objectUrl);
+}
+
+export async function approveJobRelease(jobId: string): Promise<void> {
+  const url = typeof window !== "undefined"
+    ? `/api/generate/${encodeURIComponent(jobId)}/pdf`
+    : apiUrl(`generate/${encodeURIComponent(jobId)}/approve`);
+  const approval = await fetch(url, { method: "POST" });
+  if (!approval.ok) throw new Error(await readErrorMessage(approval));
 }
 
 export interface CostEstimateResponse {
@@ -863,6 +870,7 @@ export async function createShare(params: {
   expires_hours?: number;
   max_views?: number;
 }): Promise<{ success: boolean; token: string; share_url: string; expires_at: string | null }> {
+  if (params.resource_type === "generation") await approveJobRelease(params.resource_id);
   return fetchJson(apiUrl("sharing"), { method: "POST", body: JSON.stringify(params) });
 }
 
