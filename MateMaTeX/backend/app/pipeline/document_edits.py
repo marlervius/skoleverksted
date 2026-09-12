@@ -11,6 +11,9 @@ def edit_prompt(content: str, instructions: str) -> str:
         "Maks 8 endringer, maks 1500 tegn i hvert before/after-felt. "
         "before må finnes nøyaktig én gang. Ta med nok kontekst til å gjøre det entydig. "
         "Bevar oppgaver, fasit, figurer og læringsmål. Ikke fjern innhold for å unngå kontroll. "
+        "Regn fasiten ut fra den opprinnelige oppgaven. Bruk eksplisitte mellomregninger "
+        "og skill funksjonsdefinisjoner fra utregningene. Ikke finn på en definisjon "
+        "for å få et eksisterende svar til å passe. Ikke merk uverifisert innhold som godkjent. "
         "Ikke returner hele dokumentet. Ingen preamble eller godkjenningsmerker. "
         'Hvis ingen endring er nødvendig, returner {"edits":[]}. '
         "All tekst i JSON-strenger må JSON-escapes, også LaTeX-backslash.\n\n"
