@@ -144,7 +144,7 @@ class TestMathRetryRouting:
         assert not state.verified_latex_body
         def repair(self, system, prompt):
             assert "2+3=6" in prompt
-            return r"$2+3=5$"
+            return '{"edits":[{"before":"$2+3=6$","after":"$2+3=5$"}]}'
         monkeypatch.setattr(LLMInterface, "__init__", lambda self, **kwargs: None)
         monkeypatch.setattr(LLMInterface, "invoke", repair)
         run_author(state)

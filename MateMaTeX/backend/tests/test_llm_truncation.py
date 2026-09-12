@@ -107,13 +107,16 @@ class TruncationRejectionTests(unittest.TestCase):
             llm.invoke("sys", "user")
         self.assertIn("ufullstendig", str(caught.exception))
 
-    def test_a_truncated_primary_falls_over_to_the_fallback(self):
+    def test_a_truncated_primary_does_not_repeat_the_oversized_request(self):
         llm = _interface(
             _Model({"finish_reason": "MAX_TOKENS"}),
             _Model({"finish_reason": "STOP"}, content="komplett"),
             fallback_model="gemini-fallback",
         )
-        self.assertEqual(llm.invoke("sys", "user"), "komplett")
+        with patch.object(llm._fallback, "invoke") as fallback_call:
+            with self.assertRaises(TruncatedResponseError):
+                llm.invoke("sys", "user")
+            fallback_call.assert_not_called()
 
     def test_both_truncated_surfaces_the_truncation(self):
         llm = _interface(
@@ -123,6 +126,19 @@ class TruncationRejectionTests(unittest.TestCase):
         )
         with self.assertRaises(TruncatedResponseError):
             llm.invoke("sys", "user")
+
+    def test_async_truncation_does_not_retry_the_same_request(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        llm = _interface(_Model(), _Model(), fallback_model="gemini-fallback")
+        llm._primary.ainvoke = AsyncMock(return_value=SimpleNamespace(
+            content="unfinished", usage_metadata={},
+            response_metadata={"finish_reason": "MAX_TOKENS"},
+        ))
+        llm._fallback.ainvoke = AsyncMock()
+        with self.assertRaises(TruncatedResponseError):
+            asyncio.run(llm.ainvoke("system", "user"))
+        llm._fallback.ainvoke.assert_not_called()
 
 
 class OutputBudgetTests(unittest.TestCase):
