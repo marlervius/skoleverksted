@@ -160,6 +160,10 @@ def run_latex_fixer(state: PipelineState) -> PipelineState:
             state.layout_fix_attempts > 0
             and any("Layout-problemer" in e for e in state.latex_compilation.errors)
         )
+        if layout_mode:
+            # A successful compile has no compilation error report, but the
+            # layout pass has attached concrete width/overflow diagnostics.
+            error_report = "\n".join(state.latex_compilation.errors)
         user_prompt = build_fixer_prompt(
             full_document=state.full_document,
             compilation_errors=error_report,

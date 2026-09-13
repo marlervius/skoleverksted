@@ -39,6 +39,7 @@ from app.latex.preamble import (
     wrap_with_style,
 )
 from app.models.state import (
+    AgentRole,
     GenerationRequest,
     PipelineState,
     PipelineStatus,
@@ -392,19 +393,8 @@ def _apply_differentiation(state: PipelineState) -> None:
 
 def should_route_after_layout(state: PipelineState) -> Literal["latex_fixer", "finalize"]:
     """One layout-driven fix pass before delivery (resize floats / overfull boxes)."""
-    if state.layout_fix_requested and state.layout_fix_attempts < 1:
-        state.layout_fix_attempts += 1
-        state.layout_fix_requested = False
-        hints = [
-            i.detail
-            for i in state.layout_report.issues
-            if i.kind in ("oversized_float", "overfull_hbox")
-        ][:6]
-        state.latex_compilation.errors = [
-            "Layout-problemer — reduser figur/tabell-bredde med \\resizebox eller mindre axis width:",
-            *hints,
-        ]
-        logger.info("layout_route_to_fixer", job_id=state.job_id, hints=len(hints))
+    if state.layout_fix_requested:
+        logger.info("layout_route_to_fixer", job_id=state.job_id)
         return "latex_fixer"
     return "finalize"
 
@@ -639,7 +629,9 @@ def finalize(state: PipelineState) -> PipelineState:
 # Graph builder
 # ---------------------------------------------------------------------------
 
-def create_pipeline() -> StateGraph:
+def create_pipeline(
+    on_progress: Callable[[PipelineState], None] | None = None,
+) -> StateGraph:
     """
     Build the LangGraph pipeline.
 
@@ -662,21 +654,39 @@ def create_pipeline() -> StateGraph:
     # Define the graph with PipelineState
     graph = StateGraph(PipelineState)
 
+    def tracked(
+        name: str, node: Callable[[PipelineState], PipelineState],
+    ) -> Callable[[PipelineState], PipelineState]:
+        def run(state: PipelineState) -> PipelineState:
+            role = (
+                "math_verifier"
+                if name in {"finalize", "final_math_verifier", "math_blocked"}
+                else name
+            )
+            state.current_agent = AgentRole(role)
+            if on_progress is not None:
+                try:
+                    on_progress(state)
+                except Exception as exc:
+                    logger.warning("pipeline_progress_callback_failed", error=str(exc))
+            return node(state)
+        return run
+
     # Add nodes
-    graph.add_node("pedagogue", run_pedagogue)
-    graph.add_node("author", run_author)
-    graph.add_node("math_verifier", run_math_verifier)
-    graph.add_node("editor", run_editor)
-    graph.add_node("final_math_verifier", run_final_math_verifier)
-    graph.add_node("content_quality", run_content_quality)
-    graph.add_node("tikz_validator", run_tikz_validator)    # Rule-based figure fixer
-    graph.add_node("table_validator", run_table_validator)  # Rule-based table fixer
-    graph.add_node("latex_validator", run_latex_validator)
-    graph.add_node("latex_fixer", run_latex_fixer)
-    graph.add_node("latex_fallback", run_latex_fallback)
-    graph.add_node("math_blocked", run_math_blocked)
-    graph.add_node("layout", run_layout)  # Track E: non-destructive layout QA
-    graph.add_node("finalize", finalize)
+    graph.add_node("pedagogue", tracked("pedagogue", run_pedagogue))
+    graph.add_node("author", tracked("author", run_author))
+    graph.add_node("math_verifier", tracked("math_verifier", run_math_verifier))
+    graph.add_node("editor", tracked("editor", run_editor))
+    graph.add_node("final_math_verifier", tracked("final_math_verifier", run_final_math_verifier))
+    graph.add_node("content_quality", tracked("content_quality", run_content_quality))
+    graph.add_node("tikz_validator", tracked("tikz_validator", run_tikz_validator))
+    graph.add_node("table_validator", tracked("table_validator", run_table_validator))
+    graph.add_node("latex_validator", tracked("latex_validator", run_latex_validator))
+    graph.add_node("latex_fixer", tracked("latex_fixer", run_latex_fixer))
+    graph.add_node("latex_fallback", tracked("latex_fallback", run_latex_fallback))
+    graph.add_node("math_blocked", tracked("math_blocked", run_math_blocked))
+    graph.add_node("layout", tracked("layout", run_layout))
+    graph.add_node("finalize", tracked("finalize", finalize))
 
     # Set entry point
     graph.set_entry_point("pedagogue")
@@ -782,8 +792,8 @@ def run_pipeline(
         job_id: Reuse this job id (so the API and SSE clients can track the same
             job). When omitted a fresh id is generated.
         owner_id: User id that owns this job (for authorization checks).
-        on_progress: Optional callback invoked with the latest state after every
-            graph super-step, enabling live SSE progress streaming.
+        on_progress: Optional callback invoked before each node and after every
+            graph super-step, enabling live SSE and status-poll progress.
 
     Returns:
         Final PipelineState with all outputs and observability data.
@@ -817,7 +827,7 @@ def run_pipeline(
             on_progress(restored)
         return restored
 
-    graph = create_pipeline()
+    graph = create_pipeline(on_progress=on_progress)
     compiled = graph.compile()
 
     # Run, streaming intermediate state so the SSE endpoint sees live progress.

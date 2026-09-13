@@ -35,6 +35,16 @@ _MATH_RE = re.compile(
 # LaTeX.
 _CMD_RE = re.compile(r"(\\[a-zA-Z@]+\*?(?:\[[^\]]*\])?(?:\{[^{}]*\})*)")
 
+# Graphics are executable LaTeX, not prose: '*' is multiplication, '#' may
+# be a macro parameter, and backticks can be PGF character codes. Protect
+# whole blocks before looking for inline math/commands. Also cover standalone
+# plotting/math commands used in macros and incomplete generated figures.
+_GRAPHICS_RE = re.compile(
+    r"\\begin\{(?P<env>tikzpicture|axis|groupplot|polaraxis|semilogxaxis|"
+    r"semilogyaxis|loglogaxis)\}[\s\S]*?\\end\{(?P=env)\}"
+    r"|\\(?:addplot3?|draw|path|fill|filldraw|pgfmath[a-zA-Z]+)\b[\s\S]*?;"
+)
+
 _ENUMITEM_COUNTER_RE = re.compile(
     r"(\blabel\s*=\s*[([]?\\(?:alph|Alph|arabic|roman|Roman))(?!\*)"
 )
@@ -61,7 +71,8 @@ def strip_markdown(text: str) -> str:
         placeholders.append(match.group(0))
         return f"{_PLACEHOLDER_PREFIX}{len(placeholders) - 1}\x00"
 
-    protected = _MATH_RE.sub(_stash, text)
+    protected = _GRAPHICS_RE.sub(_stash, text)
+    protected = _MATH_RE.sub(_stash, protected)
     protected = _CMD_RE.sub(_stash, protected)
 
     protected = re.sub(r"\*{1,3}", "", protected)

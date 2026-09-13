@@ -223,6 +223,7 @@ export interface JobStatusResponse {
   job_id: string;
   status: string;
   ready: boolean;
+  current_agent?: string | null;
   latex_compiled: boolean;
   total_duration_seconds: number;
   error: string;
@@ -268,11 +269,12 @@ async function pollJobUntilTerminal(
   jobId: string,
   onComplete: (data: StreamCompletePayload) => void,
   signal: { cancelled: boolean },
-  onGiveUp?: (message: string) => void
+  onGiveUp?: (message: string) => void,
+  onCurrentAgent?: (agent: string) => void
 ): Promise<boolean> {
   activeWatchSignals.add(signal);
   try {
-    return await pollJobLoop(jobId, onComplete, signal, onGiveUp);
+    return await pollJobLoop(jobId, onComplete, signal, onGiveUp, onCurrentAgent);
   } finally {
     activeWatchSignals.delete(signal);
   }
@@ -282,7 +284,8 @@ async function pollJobLoop(
   jobId: string,
   onComplete: (data: StreamCompletePayload) => void,
   signal: { cancelled: boolean },
-  onGiveUp?: (message: string) => void
+  onGiveUp?: (message: string) => void,
+  onCurrentAgent?: (agent: string) => void
 ): Promise<boolean> {
   let notFoundStreak = 0;
   for (let i = 0; i < MAX_JOB_POLL_ATTEMPTS; i++) {
@@ -303,6 +306,10 @@ async function pollJobLoop(
     }
     notFoundStreak = 0;
     if (raw.kind === "error") continue;
+    if (signal.cancelled || abortedJobs.has(jobId)) return false;
+    if (!raw.data.ready && raw.data.current_agent) {
+      onCurrentAgent?.(raw.data.current_agent);
+    }
     if (!raw.data.ready) continue;
     const status = String(raw.data.status ?? "");
     if (!TERMINAL_GENERATE_STATUSES.has(status)) continue;
@@ -386,7 +393,7 @@ export function streamProgress(
     };
     void (async () => {
       if (finished || signal.cancelled) return;
-      await pollJobUntilTerminal(jobId, (data) => finish(data), signal, giveUp);
+      await pollJobUntilTerminal(jobId, (data) => finish(data), signal, giveUp, callbacks.onCurrentAgent);
     })();
   });
 
@@ -402,7 +409,7 @@ export function streamProgress(
       callbacks.onError?.(msg);
       closeActiveStream();
     };
-    await pollJobUntilTerminal(jobId, (data) => finish(data), signal, giveUp);
+    await pollJobUntilTerminal(jobId, (data) => finish(data), signal, giveUp, callbacks.onCurrentAgent);
   })();
 
   const close = () => {
