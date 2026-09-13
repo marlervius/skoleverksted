@@ -139,3 +139,27 @@ def test_plain_tabular_is_still_centered():
     fixed, count = _wrap_tabular_in_center(r"\begin{tabular}{cc}1 & 4\end{tabular}")
     assert fixed.startswith(r"\begin{center}")
     assert count == 1
+
+
+def test_real_pgfplot_survives_cleanup_and_pdf_export():
+    if not shutil.which("pdflatex"):
+        if os.getenv("CI"):
+            pytest.fail("CI must install the production mathematics PDF compiler")
+        pytest.skip("pdflatex is exercised by the required CI job")
+    from app.latex.compiler import compile_latex_to_bytes
+    from app.latex.preamble import wrap_with_preamble
+    from app.latex.text_sanitize import sanitize_latex_body
+
+    body = r"""
+\section*{Lineær funksjon}
+\begin{tikzpicture}
+\begin{axis}[width=8cm, height=6cm, xlabel={$x$}, ylabel={$y$}]
+\addplot[thick, domain=-0.5:5.5, samples=50] {2*x + 1};
+\end{axis}
+\end{tikzpicture}
+"""
+    document = wrap_with_preamble(body)
+    for _ in range(3):
+        document = sanitize_latex_body(document)
+    pdf, log = compile_latex_to_bytes(document, engine="pdflatex")
+    assert pdf and pdf.startswith(b"%PDF-"), log

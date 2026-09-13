@@ -1,6 +1,30 @@
 """Tests for LaTeX text sanitization."""
 
+import pytest
+
 from app.latex.text_sanitize import normalize_text, sanitize_latex_body, strip_markdown
+
+
+@pytest.mark.parametrize("code", [
+    r"\addplot[thick, domain=-0.5:5.5, samples=50] {2*x + 1};",
+    r"\addplot3[surf] {x*y};",
+    r"\draw[domain=0:3] plot (\x, {2*\x + 1});",
+    r"\pgfmathsetmacro{\value}{2*3};",
+    r"\begin{tikzpicture}\foreach \x in {1,2} {\node at (\x,2*\x) {$x$};}\end{tikzpicture}",
+    r"\begin{axis}[width=0.8*\linewidth]\addplot {2*x + 1};\end{axis}",
+])
+def test_graphics_survive_repeated_markdown_cleanup(code):
+    text = "**Oppgave**\n" + code + "\n**Fasit**"
+    expected = "Oppgave\n" + code + "\nFasit"
+    for _ in range(4):
+        text = sanitize_latex_body(text)
+        assert text == expected
+        assert "\x00" not in text
+
+
+def test_graphics_inside_nested_command_restores_without_placeholders():
+    raw = r"\resizebox{\linewidth}{!}{\begin{tikzpicture}\addplot {2*x};\end{tikzpicture}}"
+    assert sanitize_latex_body(raw) == raw
 
 
 class TestNormalizeText:
