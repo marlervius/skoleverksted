@@ -4,14 +4,19 @@ from datetime import datetime
 import re
 import time
 
+import structlog
+
 from app.models.llm import LLMInterface
 from app.models.state import AgentRole, AgentStep, PipelineState, PipelineStatus
 from app.pipeline.cancel import is_cancelled
 from app.pipeline.document_edits import apply_edits, edit_prompt
+from app.public_errors import RELEASE_VERIFICATION_ERROR
 from app.verification.math_checker import MathChecker, format_errors_for_agent
 from app.verification.content_quality import evaluate_content_quality, format_quality_report_for_author
 from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
 from Skoleverksted.backend.platform.quality_runtime import run_bounded_sync
+
+logger = structlog.get_logger()
 
 
 def prepare_release(state: PipelineState) -> bool:
@@ -30,6 +35,7 @@ def prepare_release(state: PipelineState) -> bool:
     state.current_agent = AgentRole.MATH_VERIFIER
     deadline = time.monotonic() + 180
     seen = set()
+    repair_error = ""
     state.teacher_approved_at = ""
     state.approved_digest = ""
     try:
@@ -38,8 +44,6 @@ def prepare_release(state: PipelineState) -> bool:
                 raise RuntimeError("Avbrutt av bruker")
             if not body.strip():
                 raise ValueError("Sluttkontrollen mottok tomt innhold")
-            if body in seen:
-                raise ValueError("Reparasjonen ga ingen endring")
             seen.add(body)
             state.math_verification = MathChecker().verify(body)
             state.math_verification_attempts += 1
@@ -72,6 +76,7 @@ def prepare_release(state: PipelineState) -> bool:
                 state.edited_latex_body = body
                 state.verified_latex_body = body
                 step.output_summary = f"Automatisk sluttkontroll bestått etter {attempt} reparasjoner"
+                logger.info("release_verification_passed", job_id=state.job_id, repairs=attempt)
                 return True
             if attempt == 2 or time.monotonic() >= deadline:
                 break
@@ -80,6 +85,7 @@ def prepare_release(state: PipelineState) -> bool:
                 format_quality_report_for_author(state.content_quality),
                 *quality.deterministic_failures,
                 quality.passport.summary if not quality.source_approved else "",
+                repair_error,
             ])
             prompt = edit_prompt(body, feedback)
             response = run_bounded_sync(
@@ -91,15 +97,30 @@ def prepare_release(state: PipelineState) -> bool:
                 cancel_check=lambda: is_cancelled(state.job_id),
                 operation_name="automatic mathematics release repair",
             )
-            body = apply_edits(body, response)
+            step.retries += 1
+            try:
+                candidate = apply_edits(body, response)
+                if candidate in seen:
+                    raise ValueError("Reparasjonen ga ingen ny endring")
+            except ValueError as exc:
+                # A rejected edit never mutates the candidate. Give the model
+                # actionable feedback within the existing two-call budget.
+                repair_error = (
+                    f"Forrige endringsliste ble avvist: {exc}. "
+                    "Returner en gyldig JSON-endringsliste som retter de uløste problemene."
+                )
+                logger.warning("release_repair_rejected", job_id=state.job_id,
+                               attempt=attempt + 1, reason=str(exc))
+                continue
+            body = candidate
+            repair_error = ""
         raise ValueError("Sluttkandidaten bestod ikke alle kontrollene")
     except Exception as exc:
         step.error = str(exc)
         state.status = PipelineStatus.FAILED
         state.error_message = (
             "Avbrutt av bruker" if is_cancelled(state.job_id) else
-            "Appen kunne ikke rette og verifisere materialet etter automatiske "
-            "reparasjonsforsøk. Genereringen ble stoppet før eksport."
+            RELEASE_VERIFICATION_ERROR
         )
         state.warning_reason = "verification"
         state.pdf_base64 = ""
@@ -108,6 +129,12 @@ def prepare_release(state: PipelineState) -> bool:
         state.teacher_approved_at = ""
         state.approved_digest = ""
         state.release_manifest = {}
+        logger.warning(
+            "release_verification_failed", job_id=state.job_id,
+            error=str(exc), error_type=type(exc).__name__, repairs=step.retries,
+            incorrect=state.math_verification.claims_incorrect,
+            unparseable=state.math_verification.claims_unparseable,
+        )
         return False
     finally:
         step.completed_at = datetime.now()

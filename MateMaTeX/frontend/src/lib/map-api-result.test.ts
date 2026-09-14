@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mapApiResultToGenerationResult } from "./map-api-result";
+import { categorizeError, mapApiResultToGenerationResult } from "./map-api-result";
 
 describe("automatic mathematics release", () => {
+  it("retains compilation errors for a verified document", () => {
+    expect(categorizeError("Den verifiserte teksten kunne ikke kompileres.", false, true)).toBe("latex");
+  });
   it.each([
     { source_approved: false },
     { source_approved: true, math_verification: { claims_unparseable: 1 } },
@@ -10,6 +13,27 @@ describe("automatic mathematics release", () => {
     const result = mapApiResultToGenerationResult({ status: "completed_with_warnings", ...details });
     expect(result.status).toBe("failed");
     expect(result.error).toContain("automatisk reparasjon");
+    expect(result.errorCategory).toBe("verification");
+  });
+
+  it("explains the production verification failure even when its message was sanitized", () => {
+    const result = mapApiResultToGenerationResult({
+      status: "failed", warning_reason: "verification",
+      error: "KI-genereringen feilet midlertidig. Prøv igjen.",
+      latex_compilation: { success: true },
+      math_verification: { claims_checked: 34, claims_correct: 5, claims_unparseable: 29 },
+    });
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("Eksport er stoppet");
+    expect(result.errorCategory).toBe("verification");
+  });
+
+  it("keeps cancellation distinct from verification failure", () => {
+    const result = mapApiResultToGenerationResult({
+      status: "failed", warning_reason: "verification", error: "Avbrutt av bruker",
+    });
+    expect(result.error).toBe("Avbrutt av bruker");
+    expect(result.errorCategory).toBe("aborted");
   });
 
   it("keeps verified figure fallback deliverable", () => {

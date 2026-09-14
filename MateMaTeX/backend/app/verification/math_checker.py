@@ -877,5 +877,5 @@ def format_errors_for_agent(result: VerificationResult) -> str:
                 lines.append(f"  Merknad: {c.error_message}")
             lines.append("")
 
-    lines.append("RETT ALLE FEILENE OVER og returner hele dokumentet med korreksjoner.")
+    lines.append("RETT ALLE FEILENE OVER. Følg svarformatet i reparasjonsinstruksjonen.")
     return "\n".join(lines)

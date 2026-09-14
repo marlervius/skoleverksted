@@ -10,13 +10,18 @@ _SAFE_PREFIXES = (
     "Materialet leveres ikke",
 )
 
+RELEASE_VERIFICATION_ERROR = (
+    "Appen kunne ikke rette og verifisere materialet etter automatiske "
+    "reparasjonsforsøk. Genereringen ble stoppet før eksport."
+)
+
 
 def public_generation_error(error: object) -> str:
     """Return a Norwegian message without leaking SDK or credential details."""
     message = str(error or "").strip()
     if not message:
         return "KI-genereringen feilet midlertidig. Prøv igjen."
-    if message.startswith(_SAFE_PREFIXES):
+    if message == RELEASE_VERIFICATION_ERROR or message.startswith(_SAFE_PREFIXES):
         return message
 
     normalized = message.casefold()

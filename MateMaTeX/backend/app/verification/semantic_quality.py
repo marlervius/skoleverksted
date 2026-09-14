@@ -18,7 +18,7 @@ logger = structlog.get_logger()
 _RUBRIC_PROMPT = """\
 Du er en erfaren norsk matematikklærer. Vurder LaTeX-kapittelkroppen (uten preamble)
 mot rubrikken nedenfor. Svar KUN med JSON:
-{"score": 0-100, "issues": [{"code": "...", "message": "..."}]}
+{{"score": 0-100, "issues": [{{"code": "...", "message": "..."}}]}}
 
 RUBRIKK (0–100):
 - Progresjon: bygger logisk fra enkelt til avansert?
