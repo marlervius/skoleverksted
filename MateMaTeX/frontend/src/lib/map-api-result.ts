@@ -100,6 +100,15 @@ export function mapApiResultToGenerationResult(
     (raw.source_approved === false || Number(mv.claims_unparseable ?? 0) > 0 || Number(mv.claims_incorrect ?? 0) > 0);
   if (blockedLegacyResult) status = "failed";
 
+  const verificationFailed = status === "failed" &&
+    String(raw.warning_reason ?? "").split(",").includes("verification");
+  const rawError = String(raw.error ?? "");
+  const error = blockedLegacyResult
+    ? "Dette resultatet er ikke ferdig verifisert. Generer på nytt for automatisk reparasjon og sluttkontroll."
+    : verificationFailed && (!rawError || rawError === "KI-genereringen feilet midlertidig. Prøv igjen.")
+      ? "Sluttkontrollen kunne ikke verifisere materialet etter automatiske reparasjonsforsøk. Eksport er stoppet. Prøv en ny generering."
+      : rawError;
+
   return {
     jobId: String(raw.job_id ?? ""),
     status,
@@ -137,14 +146,12 @@ export function mapApiResultToGenerationResult(
     },
     latexCompiled: Boolean(raw.pdf_available ?? latex.success),
     totalDuration: Number(raw.total_duration_seconds ?? 0),
-    error: blockedLegacyResult
-      ? "Dette resultatet er ikke ferdig verifisert. Generer på nytt for automatisk reparasjon og sluttkontroll."
-      : String(raw.error ?? ""),
+    error,
     generationMeta,
     errorCategory: categorizeError(
-      String(raw.error ?? ""),
+      error,
       Boolean(latex.success),
-      raw.status === "failed"
+      status === "failed"
     ),
   };
 }
@@ -162,6 +169,7 @@ export function categorizeError(
 ): ErrorCategory {
   if (!failed) return "unknown";
   const m = errorMessage.toLowerCase();
+  if (m.includes("avbrutt")) return "aborted";
   if (
     m.includes("sympy") ||
     m.includes("fasit") ||
@@ -170,7 +178,6 @@ export function categorizeError(
   ) {
     return "verification";
   }
-  if (m.includes("avbrutt")) return "aborted";
   if (
     m.includes("latex") ||
     m.includes("kompiler") ||
@@ -178,6 +185,9 @@ export function categorizeError(
     m.includes("compile")
   ) {
     return "latex";
+  }
+  if (m.includes("verifiser") || m.includes("sluttkontroll")) {
+    return "verification";
   }
   if (
     !latexCompiled &&
@@ -221,7 +231,7 @@ export function errorCategoryLabel(cat: ErrorCategory): string {
     case "aborted":
       return "Avbrutt av bruker";
     case "verification":
-      return "Fasit-verifisering (SymPy)";
+      return "Kvalitets- og fasitkontroll";
     case "latex":
       return "LaTeX-kompilering";
     case "model":

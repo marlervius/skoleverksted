@@ -100,6 +100,14 @@ class PublicGenerationErrorTests(unittest.TestCase):
             "KI-genereringen feilet midlertidig. Prøv igjen.",
         )
 
+    def test_release_diagnostic_does_not_allow_arbitrary_suffixes(self):
+        from app.public_errors import RELEASE_VERIFICATION_ERROR
+        self.assertEqual(public_generation_error(RELEASE_VERIFICATION_ERROR), RELEASE_VERIFICATION_ERROR)
+        self.assertEqual(
+            public_generation_error(RELEASE_VERIFICATION_ERROR + " internal secret detail"),
+            "KI-genereringen feilet midlertidig. Prøv igjen.",
+        )
+
     def test_math_safety_error_remains_actionable(self):
         message = "SymPy fant 2 feil i fasiten. Materialet leveres ikke."
         self.assertEqual(public_generation_error(message), message)

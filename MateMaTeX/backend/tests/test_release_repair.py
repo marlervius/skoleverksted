@@ -38,7 +38,7 @@ def test_no_progress_terminates_and_clears_stale_release(monkeypatch, state):
     model.invoke.return_value = '{"edits": []}'
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
     assert not release_repair.prepare_release(state)
-    assert model.invoke.call_count == 1
+    assert model.invoke.call_count == 2
     assert state.status == PipelineStatus.FAILED
     assert not state.pdf_base64 and not state.pdf_path
     assert not state.source_approved and not state.teacher_approved_at
@@ -49,6 +49,43 @@ def test_verified_candidate_never_calls_model(monkeypatch, state):
     state.full_document = r"\begin{document}$2+2=4$\end{document}"
     monkeypatch.setattr(release_repair, "LLMInterface", Mock(side_effect=AssertionError("unexpected model")))
     assert release_repair.prepare_release(state)
+
+
+@pytest.mark.parametrize("rejected", [
+    "not JSON", '{"edits": []}',
+    '{"edits": [{"before": "missing anchor", "after": "replacement"}]}',
+])
+def test_rejected_edit_gets_bounded_retry_against_unchanged_candidate(monkeypatch, state, rejected):
+    model = Mock()
+    model.invoke.side_effect = [rejected, json.dumps({"edits": [
+        {"before": "$2+2=5$", "after": "$2+2=4$"},
+    ]})]
+    monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
+    assert release_repair.prepare_release(state)
+    assert model.invoke.call_count == 2
+    retry_prompt = model.invoke.call_args.args[1]
+    assert "Forrige endringsliste ble avvist" in retry_prompt
+    assert "$2+2=5$" in retry_prompt
+    assert "og returner hele dokumentet med korreksjoner" not in retry_prompt
+    assert state.final_latex_body == "$2+2=4$"
+    assert state.math_verification.claims_incorrect == 0
+    assert state.steps[-1].retries == 2
+
+
+def test_release_failure_retains_safe_diagnostic_and_logs_counts(monkeypatch, state):
+    from app.public_errors import RELEASE_VERIFICATION_ERROR, public_generation_error
+    model = Mock()
+    model.invoke.return_value = '{"edits": []}'
+    monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
+    log = Mock()
+    monkeypatch.setattr(release_repair, "logger", log)
+    assert not release_repair.prepare_release(state)
+    assert public_generation_error(state.error_message) == RELEASE_VERIFICATION_ERROR
+    log.warning.assert_any_call(
+        "release_verification_failed", job_id=state.job_id,
+        error="Sluttkandidaten bestod ikke alle kontrollene", error_type="ValueError",
+        repairs=2, incorrect=1, unparseable=0,
+    )
 
 
 def test_empty_repair_is_not_approved(monkeypatch, state):
