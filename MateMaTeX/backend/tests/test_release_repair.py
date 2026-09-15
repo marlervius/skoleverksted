@@ -83,7 +83,7 @@ def test_release_failure_retains_safe_diagnostic_and_logs_counts(monkeypatch, st
     assert public_generation_error(state.error_message) == RELEASE_VERIFICATION_ERROR
     log.warning.assert_any_call(
         "release_verification_failed", job_id=state.job_id,
-        error="Sluttkandidaten bestod ikke alle kontrollene", error_type="ValueError",
+        error="Sluttkandidaten bestod ikke alle kontrollene", error_type="_ReviewRequired",
         repairs=2, incorrect=1, unparseable=0,
     )
 

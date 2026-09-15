@@ -267,7 +267,7 @@ class TestFinalizeStatus:
         assert result.status == PipelineStatus.FAILED
         assert "automatiske reparasjonsforsøk" in result.error_message
 
-    def test_failed_after_automatic_repair_when_unparseable_only(self):
+    def test_review_required_after_automatic_repair_when_unparseable_only(self):
         state = PipelineState(
             request=GenerationRequest(grade="8. trinn", topic="Algebra"),
             raw_latex_body="\\title{T}\\maketitle",
@@ -285,9 +285,10 @@ class TestFinalizeStatus:
         from unittest.mock import patch
         with patch(monkeypatch_target, return_value=state.math_verification):
             result = finalize(state)
-        assert result.status == PipelineStatus.FAILED
+        assert result.status == PipelineStatus.REVIEW_REQUIRED
         assert result.warning_reason == "verification"
         assert result.pdf_base64 == ""
+        assert not result.source_approved
 
     def test_warning_reason_fallback(self):
         state = PipelineState(

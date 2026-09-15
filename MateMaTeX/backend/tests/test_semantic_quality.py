@@ -39,3 +39,13 @@ def test_semantic_weaknesses_reach_content_gate(monkeypatch):
     assert not result.content_quality.passed
     assert result.content_quality.semantic_score == 61
     assert result.content_quality.score == 61
+
+
+def test_full_chapter_including_exercises_reaches_the_rubric(monkeypatch):
+    model = Mock()
+    model.invoke.return_value = '{"score": 85, "issues": []}'
+    monkeypatch.setattr("app.config.get_settings", lambda: SimpleNamespace(google_api_key="test-key"))
+    monkeypatch.setattr("app.models.llm.LLMInterface", lambda **kw: model)
+    body = "Innledning. " * 1200 + r"\section{Logaritmereglene}\section{Oppgaver} Siste oppgave."
+    evaluate_semantic_quality(body, GenerationRequest(grade="VG1 1T", topic="Funksjoner", material_type="kapittel"))
+    assert model.invoke.call_args.args[1].endswith(body)

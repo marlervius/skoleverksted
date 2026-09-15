@@ -92,14 +92,14 @@ export default function HistoryPage() {
                     className={`inline-block mt-2 text-[10px] font-medium px-2 py-0.5 rounded-full ${
                       entry.status === "completed"
                         ? "bg-accent-green/15 text-accent-green"
-                        : entry.status === "completed_with_warnings"
+                        : entry.status === "completed_with_warnings" || entry.status === "review_required"
                           ? "bg-accent-orange/15 text-accent-orange"
                           : "bg-accent-red/15 text-accent-red"
                     }`}
                   >
                     {entry.status === "completed"
                       ? "OK"
-                      : entry.status === "completed_with_warnings"
+                      : entry.status === "review_required" ? "Til gjennomgang" : entry.status === "completed_with_warnings"
                         ? "Advarsel"
                         : "Feilet"}
                   </span>

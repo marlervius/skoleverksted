@@ -30,6 +30,7 @@ _shared_resources: dict[str, dict] = {}
 TERMINAL_STATUSES = (
     PipelineStatus.COMPLETED,
     PipelineStatus.COMPLETED_WITH_WARNINGS,
+    PipelineStatus.REVIEW_REQUIRED,
     PipelineStatus.FAILED,
 )
 

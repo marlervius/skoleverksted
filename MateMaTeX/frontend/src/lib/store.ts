@@ -95,6 +95,7 @@ export interface GenerationResult {
     | "running"
     | "completed"
     | "completed_with_warnings"
+    | "review_required"
     | "failed";
   fullDocument: string;
   pdfUrl: string;

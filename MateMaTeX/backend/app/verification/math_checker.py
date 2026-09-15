@@ -14,6 +14,7 @@ from sympy import Eq, Symbol, Lambda, simplify, solve, sqrt, sympify, expand, ca
 from sympy.core.function import AppliedUndef
 from app.models.state import MathClaim, VerificationResult
 from m1.scorer import looks_like_prose, numeric_agreement
+from app.verification.math_context import math_islands, context_ranges, local_context
 
 logger = structlog.get_logger()
 
@@ -44,22 +45,6 @@ class MathChecker:
     - Fraction/root simplification
     """
 
-    # Patterns to extract mathematical claims from LaTeX
-    _MAX_CLAIMS = 40
-
-    _EQUATION_PATTERNS = [
-        # Standalone equation: $expr = expr$
-        re.compile(r'\$([^$]+?)\s*=\s*([^$]+?)\$'),
-        # Display equation: \[ expr = expr \]
-        re.compile(r'\\\[(.+?)\s*=\s*(.+?)\\\]', re.DOTALL),
-    ]
-
-    # Pattern for "Oppgave N ... fasit: answer" or solution blocks
-    _SOLUTION_PATTERNS = [
-        # a) $x = 3$  or  a) x = 3
-        re.compile(r'[a-z]\)\s*\$?\\?x\s*=\s*([^$\\\n,]+)\$?'),
-    ]
-
     # Patterns to find equations inside taskbox environments
     _TASK_EQUATION_PATTERN = re.compile(
         r'\\begin\{taskbox\}\{([^}]*)\}(.*?)\\end\{taskbox\}',
@@ -80,7 +65,8 @@ class MathChecker:
         (SymPy is already loaded in this interpreter — a thread pool caused
         spurious timeouts on Windows when workers first touched SymPy).
         """
-        self._function_definitions = self._extract_function_definitions(latex_content)
+        self._function_definitions = {}
+        definitions_by_context = {}
         claims = self._extract_claims(latex_content)
         result = VerificationResult()
         result.claims_checked = len(claims)
@@ -90,6 +76,10 @@ class MathChecker:
         start_time = time.monotonic()
 
         for claim in claims:
+            scope = claim.verification_context or latex_content
+            if scope not in definitions_by_context:
+                definitions_by_context[scope] = self._extract_function_definitions(scope)
+            self._function_definitions = definitions_by_context[scope]
             # Check total timeout
             if time.monotonic() - start_time > _TOTAL_TIMEOUT:
                 logger.warning("math_verification_total_timeout", checked_so_far=result.claims_correct + result.claims_incorrect + result.claims_unparseable)
@@ -152,19 +142,23 @@ class MathChecker:
         """
         definitions = {}
         ambiguous = set()
-        for pattern in self._EQUATION_PATTERNS:
-            for match in pattern.finditer(content):
-                signature = re.fullmatch(r"([a-zA-Z])\(([a-zA-Z])\)", match[1].strip())
+        for island in math_islands(content):
+            if "=" in island.text:
+                lhs, rhs = island.text.split("=", 1)
+                signature = re.fullmatch(r"([a-zA-Z](?:_\{?\w+\}?)?)\(([a-zA-Z])\)", lhs.strip())
                 if not signature:
                     continue
                 name, variable = signature.groups()
                 try:
-                    expression = self._manual_parse(match[2].strip())
+                    expression = self._manual_parse(rhs.strip())
                     symbol = Symbol(variable)
                     if (expression is None or not hasattr(expression, "free_symbols")
-                            or expression.has(AppliedUndef)
-                            or expression.free_symbols - {symbol}):
+                            or expression.has(AppliedUndef)):
                         ambiguous.add(name)
+                        continue
+                    if expression.free_symbols - {symbol}:
+                        # A template such as ax+b is not a competing numeric
+                        # definition for a worked example's explicit 2x+1.
                         continue
                     definition = Lambda(symbol, expression)
                     if name in definitions and definitions[name] != definition:
@@ -190,10 +184,10 @@ class MathChecker:
         """Extract 'LHS = RHS' equations from inline/display math."""
         claims: list[MathClaim] = []
 
-        for pattern in self._EQUATION_PATTERNS:
-            for match in pattern.finditer(content):
-                lhs_raw = match.group(1).strip()
-                rhs_raw = match.group(2).strip()
+        ranges = context_ranges(content)
+        for island in math_islands(content):
+            if "=" in island.text:
+                lhs_raw, rhs_raw = (part.strip() for part in island.text.split("=", 1))
 
                 if not self._is_valid_math_fragment(lhs_raw) or not self._is_valid_math_fragment(rhs_raw):
                     continue
@@ -207,7 +201,8 @@ class MathChecker:
                 claim = MathClaim(
                     latex_expression=f"{lhs_raw} = {rhs_raw}",
                     claim_type="equation",
-                    context=content[max(0, match.start() - 40):match.end() + 40],
+                    context=content[max(0, island.start - 80):island.end + 80],
+                    verification_context=local_context(content, island.start, ranges),
                 )
                 claims.append(claim)
 
@@ -234,7 +229,13 @@ class MathChecker:
             task_body = task_match.group(2)
 
             # Find equations in the task (e.g., "Løs likningen $2x + 3 = 7$")
-            equations_in_task = re.findall(r'\$([^$]*?[=<>][^$]*?)\$', task_body)
+            equations_in_task = [island.text for island in math_islands(task_body)
+                                 if "=" in island.text]
+            if len(equations_in_task) != 1:
+                continue  # Do not guess which subproblem an answer belongs to.
+            task_lhs, task_rhs = equations_in_task[0].split("=", 1)
+            if self._is_definition(task_lhs, task_rhs):
+                continue
 
             # Find the corresponding solution
             task_num = re.search(r'(\d+)', task_title)
@@ -248,16 +249,14 @@ class MathChecker:
                     sol_text = sol_match_task.group(1)
 
                     # For each sub-answer (a), b), etc.)
-                    sub_answers = re.findall(
-                        r'([a-z])\)\s*\$?([^$\n,]+?)\$?(?:\s|\\|$)',
-                        sol_text,
-                    )
-                    for sub_letter, answer in sub_answers:
-                        if '=' in answer:
+                    for island in math_islands(sol_text):
+                        answer = island.text
+                        if re.fullmatch(r"[a-z]\s*=\s*[^=]+", answer):
                             claim = MathClaim(
                                 latex_expression=answer.strip(),
                                 claim_type="solution",
-                                context=f"Oppgave {task_num.group(1)}{sub_letter}): equations={equations_in_task}",
+                                context=f"Oppgave {task_num.group(1)}: equations={equations_in_task}",
+                                verification_context=task_body + "\n" + sol_text,
                             )
                             claims.append(claim)
 
@@ -564,6 +563,15 @@ class MathChecker:
             if lhs is None or rhs is None:
                 continue
 
+            sides = list(lhs) if isinstance(lhs, (list, tuple)) else [lhs]
+            sides += list(rhs) if isinstance(rhs, (list, tuple)) else [rhs]
+            if not any(var in getattr(side, "free_symbols", set()) for side in sides):
+                # An auxiliary substitution (u=2^x) is not a solution for an
+                # equation in x. It cannot establish a mathematical error.
+                claim.is_correct = None
+                claim.error_message = "Solution variable is absent from the original equation; auxiliary substitution requires review"
+                return
+
             # Substitute the claimed solution
             try:
                 # Support element-by-element substitution for lists
@@ -683,6 +691,9 @@ class MathChecker:
     def _manual_parse(self, expr: str):
         """Manual fallback parser for common LaTeX math patterns."""
         s = re.sub(r"(?<=\d)\{,\}(?=\d)", ".", expr)
+        s = s.replace(r"\dfrac", r"\frac").replace(r"\tfrac", r"\frac")
+        s = s.replace(r"\,", "").replace(r"\;", "").replace(r"\!", "")
+        s = re.sub(r"(\d+(?:\.\d+)?)\\%", r"(\1/100)", s)
 
         # Convert caret superscript to ** early to simplify other replacements
         s = s.replace('^', '**')
@@ -765,17 +776,19 @@ class MathChecker:
     # Helpers
     # ------------------------------------------------------------------
     def _cap_claims(self, claims: list[MathClaim]) -> list[MathClaim]:
-        """Deduplicate and limit work — large documents produced 60+ false claims."""
-        seen: set[str] = set()
+        """Deduplicate within a scope; the time budget bounds verification.
+
+        Never silently discard the latter part of a chapter or an identical
+        answer belonging to a different exercise.
+        """
+        seen: set[tuple[str, str]] = set()
         out: list[MathClaim] = []
         for claim in claims:
-            key = claim.latex_expression.strip()
+            key = (claim.latex_expression.strip(), claim.verification_context)
             if key in seen:
                 continue
             seen.add(key)
             out.append(claim)
-            if len(out) >= self._MAX_CLAIMS:
-                break
         return out
 
     @staticmethod

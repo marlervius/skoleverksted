@@ -24,6 +24,7 @@ class PipelineStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    REVIEW_REQUIRED = "review_required"
     FAILED = "failed"
 
 
@@ -143,6 +144,7 @@ class MathClaim(BaseModel):
     error_message: str = ""
     expected_result: str = ""
     actual_result: str = ""
+    verification_context: str = Field(default="", exclude=True)
 
 
 class VerificationResult(BaseModel):

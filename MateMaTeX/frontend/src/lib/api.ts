@@ -149,6 +149,7 @@ export interface GenerateResponse {
 const TERMINAL_GENERATE_STATUSES = new Set([
   "completed",
   "completed_with_warnings",
+  "review_required",
   "failed",
 ]);
 
@@ -499,9 +500,9 @@ export async function watchGenerationJob(
   }
 }
 
-export async function fetchJobPdfObjectUrl(jobId: string): Promise<string> {
+export async function fetchJobPdfObjectUrl(jobId: string, draft = false): Promise<string> {
   const url =
-    typeof window !== "undefined"
+    draft ? apiUrl(`generate/${encodeURIComponent(jobId)}/draft-preview`) : typeof window !== "undefined"
       ? `/api/generate/${encodeURIComponent(jobId)}/pdf?preview=true`
       : apiUrl(`generate/${encodeURIComponent(jobId)}/pdf?preview=true`);
   const res = await fetch(url);

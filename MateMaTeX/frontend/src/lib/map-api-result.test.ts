@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { categorizeError, mapApiResultToGenerationResult } from "./map-api-result";
+import { categorizeError, isSuccessfulStatus, mapApiResultToGenerationResult } from "./map-api-result";
 
 describe("automatic mathematics release", () => {
+  it("preserves review drafts without presenting them as approved", () => {
+    const result = mapApiResultToGenerationResult({ status: "review_required", source_approved: false,
+      full_document: "draft", pdf_available: false, math_verification: { claims_unparseable: 30 } });
+    expect(result.status).toBe("review_required");
+    expect(result.fullDocument).toBe("draft");
+    expect(isSuccessfulStatus(result.status)).toBe(false);
+    expect(result.sourceApproved).toBe(false);
+  });
   it("retains compilation errors for a verified document", () => {
     expect(categorizeError("Den verifiserte teksten kunne ikke kompileres.", false, true)).toBe("latex");
   });

@@ -354,6 +354,7 @@ async def stream_progress(
             if state.status in (
                 PipelineStatus.COMPLETED,
                 PipelineStatus.COMPLETED_WITH_WARNINGS,
+                PipelineStatus.REVIEW_REQUIRED,
                 PipelineStatus.FAILED,
             ):
                 yield _sse_event("complete", {
@@ -511,6 +512,8 @@ async def get_job_pdf(job_id: str, preview: bool = False, user_id: str = Depends
     if state.status in (PipelineStatus.RUNNING, PipelineStatus.PENDING):
         raise HTTPException(status_code=202, detail="Job still running")
 
+    if state.status == PipelineStatus.REVIEW_REQUIRED:
+        raise HTTPException(status_code=409, detail="Utkastet er ikke godkjent for eksport.")
     reasons = source_approval_reasons(
         content=state.verification_content,
         release_manifest=state.release_manifest or None,
@@ -592,13 +595,38 @@ async def get_job_pdf(job_id: str, preview: bool = False, user_id: str = Depends
     return Response(content=pdf_bytes, media_type="application/pdf", headers={"Cache-Control": "private, max-age=0, must-revalidate"})
 
 
+@app.get("/generate/{job_id}/draft-preview")
+async def get_draft_preview(job_id: str, user_id: str = Depends(get_current_user)):
+    state = resolve_job(job_id, _jobs)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    _authorize_job(state, user_id)
+    if state.status != PipelineStatus.REVIEW_REQUIRED:
+        raise HTTPException(status_code=409, detail="Jobben er ikke et utkast til gjennomgang.")
+    from app.verification.draft_preview import watermarked_draft
+    from app.verification.latex_checker import LatexChecker
+    try:
+        document = watermarked_draft(state.full_document)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Utkastet mangler dokumentramme. LaTeX-teksten er bevart.")
+    result = await asyncio.to_thread(LatexChecker(pdflatex_path=get_config().pdflatex_path).check, document)
+    if not result.success:
+        raise HTTPException(status_code=422, detail="Utkastet kunne ikke forhåndsvises. LaTeX-teksten er bevart.")
+    pdf = result.pdf_bytes or (base64.b64decode(result.pdf_base64) if result.pdf_base64 else b"")
+    if not pdf:
+        raise HTTPException(status_code=422, detail="Forhåndsvisningen mangler PDF-data.")
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Cache-Control": "no-store", "Content-Disposition": 'inline; filename="utkast-ikke-godkjent.pdf"',
+    })
+
+
 @app.post("/generate/{job_id}/approve")
 async def approve_job(job_id: str, user_id: str = Depends(get_current_user)):
     state = resolve_job(job_id, _jobs)
     if state is None:
         raise HTTPException(status_code=404, detail="Job not found")
     _authorize_job(state, user_id)
-    if state.status in (PipelineStatus.RUNNING, PipelineStatus.PENDING, PipelineStatus.FAILED):
+    if state.status in (PipelineStatus.RUNNING, PipelineStatus.PENDING, PipelineStatus.FAILED, PipelineStatus.REVIEW_REQUIRED):
         raise HTTPException(status_code=409, detail="Dokumentet er ikke klart for lærergodkjenning.")
     reasons = source_approval_reasons(
         content=state.verification_content,
@@ -798,6 +826,8 @@ def _run_job(job_id: str, request: GenerationRequest, owner_id: str = "") -> Non
         queue.fail(job_id, state.error_message or "Matematikkgenereringen feilet")
     elif state and state.status in {PipelineStatus.COMPLETED, PipelineStatus.COMPLETED_WITH_WARNINGS}:
         queue.finish(job_id, message="Ferdig" if state.status == PipelineStatus.COMPLETED else "Ferdig med merknader")
+    elif state and state.status == PipelineStatus.REVIEW_REQUIRED:
+        queue.needs_review(job_id, message="Utkast klart til faglig gjennomgang")
 
 
 def _authorize_job(state: PipelineState, user_id: str) -> None:

@@ -19,12 +19,16 @@ from Skoleverksted.backend.platform.quality_runtime import run_bounded_sync
 logger = structlog.get_logger()
 
 
+class _ReviewRequired(ValueError):
+    """A checked draft remains unresolved after the bounded repair budget."""
+
+
 def prepare_release(state: PipelineState) -> bool:
     """Reserve two repairs after layout; every mutation gets a fresh audit.
 
     The earlier author budget may already be spent. This separate, bounded
-    budget prevents that from handing unresolved work back to the teacher.
-    No PDF or approval from an earlier revision survives a failed check.
+    budget gives the final candidate its own repair attempts before an
+    unresolved draft requires review. No earlier PDF or approval survives.
     """
     body = (state.final_latex_body or state.edited_latex_body
             or state.verified_latex_body or state.raw_latex_body)
@@ -114,7 +118,7 @@ def prepare_release(state: PipelineState) -> bool:
                 continue
             body = candidate
             repair_error = ""
-        raise ValueError("Sluttkandidaten bestod ikke alle kontrollene")
+        raise _ReviewRequired("Sluttkandidaten bestod ikke alle kontrollene")
     except Exception as exc:
         step.error = str(exc)
         state.status = PipelineStatus.FAILED
@@ -129,8 +133,26 @@ def prepare_release(state: PipelineState) -> bool:
         state.teacher_approved_at = ""
         state.approved_digest = ""
         state.release_manifest = {}
+        state.compiled_document_digest = ""
+        state.latex_compilation.pdf_base64 = ""
+        state.latex_compilation.pdf_bytes = None
+        state.latex_compilation.pdf_path = ""
+        if (isinstance(exc, _ReviewRequired) and body.strip()
+                and not state.math_verification.claims_incorrect and not is_cancelled(state.job_id)):
+            # Review is a terminal draft state, never an approval or export.
+            state.status = PipelineStatus.REVIEW_REQUIRED
+            state.error_message = "Utkastet er bevart. Noen faglige kontroller krever gjennomgang før materialet kan godkjennes."
+            state.final_latex_body = body
+            state.verification_content = body
+            if match:
+                state.full_document = state.full_document[:match.start(1)] + body + state.full_document[match.end(1):]
+            else:
+                from app.latex.preamble import wrap_with_style
+                state.full_document = wrap_with_style(body, state.request.pdf_style)
+            step.error = ""
+            step.output_summary = state.error_message
         logger.warning(
-            "release_verification_failed", job_id=state.job_id,
+            "release_review_required" if state.status == PipelineStatus.REVIEW_REQUIRED else "release_verification_failed", job_id=state.job_id,
             error=str(exc), error_type=type(exc).__name__, repairs=step.retries,
             incorrect=state.math_verification.claims_incorrect,
             unparseable=state.math_verification.claims_unparseable,
