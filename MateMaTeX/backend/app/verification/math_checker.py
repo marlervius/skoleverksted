@@ -563,6 +563,15 @@ class MathChecker:
             if lhs is None or rhs is None:
                 continue
 
+            sides = list(lhs) if isinstance(lhs, (list, tuple)) else [lhs]
+            sides += list(rhs) if isinstance(rhs, (list, tuple)) else [rhs]
+            if not any(var in getattr(side, "free_symbols", set()) for side in sides):
+                # An auxiliary substitution (u=2^x) is not a solution for an
+                # equation in x. It cannot establish a mathematical error.
+                claim.is_correct = None
+                claim.error_message = "Solution variable is absent from the original equation; auxiliary substitution requires review"
+                return
+
             # Substitute the claimed solution
             try:
                 # Support element-by-element substitution for lists
