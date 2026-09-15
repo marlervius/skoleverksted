@@ -176,15 +176,15 @@ export function ResultView() {
 
     if (
       !result?.jobId ||
-      !isSuccessfulStatus(result.status) ||
-      !result.latexCompiled ||
+      (!isSuccessfulStatus(result.status) && result.status !== "review_required") ||
+      (!result.latexCompiled && result.status !== "review_required") ||
       result.pdfBase64
     ) {
       return;
     }
 
     setPdfPreviewLoading(true);
-    fetchJobPdfObjectUrl(result.jobId)
+    fetchJobPdfObjectUrl(result.jobId, result.status === "review_required")
       .then((url) => {
         if (cancelled) {
           URL.revokeObjectURL(url);
@@ -206,7 +206,7 @@ export function ResultView() {
       cancelled = true;
       if (revoke) URL.revokeObjectURL(revoke);
     };
-  }, [result?.jobId, result?.status, result?.latexCompiled, result?.fullDocument]);
+  }, [result?.jobId, result?.status, result?.latexCompiled, result?.fullDocument, result?.pdfBase64]);
 
   // Auto-compile a PDF preview for the active differentiation level on demand.
   useEffect(() => {
@@ -542,7 +542,7 @@ export function ResultView() {
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         className={`card mb-6 ${
-          isSuccess
+          result.status === "review_required" ? "!border-accent-orange/30 bg-accent-orange/5" : isSuccess
             ? hasWarnings
               ? "!border-accent-orange/30 bg-accent-orange/5"
               : "!border-accent-green/30 bg-accent-green/5"
@@ -555,20 +555,20 @@ export function ResultView() {
               {isSuccess ? (
                 <CheckCircle2 size={20} className="text-accent-green" />
               ) : (
-                <AlertTriangle size={20} className="text-accent-red" />
+                <AlertTriangle size={20} className={result.status === "review_required" ? "text-amber-600" : "text-accent-red"} />
               )}
               {isSuccess
                 ? hasWarnings
                   ? "Materiale generert — automatisk kontrollert"
                   : "Materiale generert"
-                : "Generering feilet"}
+                : result.status === "review_required" ? "Utkast klart til gjennomgang" : "Generering feilet"}
             </h2>
             <p className="mt-1 break-words text-sm text-text-secondary">
               {isSuccess
                 ? `${result.fromCache ? "Hentet fra hurtigbuffer · " : ""}Ferdig på ${result.totalDuration.toFixed(1)} sekunder`
                 : result.error}
             </p>
-            {!isSuccess && (
+            {!isSuccess && result.status !== "review_required" && (
               <p className="text-xs text-text-muted mt-1">
                 Feilkategori: {errorCategoryLabel(result.errorCategory || "unknown")}
               </p>
@@ -601,6 +601,35 @@ export function ResultView() {
           </div>
         </div>
       </motion.div>
+
+      {result.status === "review_required" && (
+        <div className="space-y-6">
+          <section className="card">
+            <h3 className="font-semibold">Dette må kontrolleres</h3>
+            <p className="mt-2 text-sm text-text-secondary">Utkastet er ikke godkjent. Eksport, deling og lærergodkjenning er sperret til kontrollene er bestått.</p>
+            <ul className="mt-4 list-disc pl-5 space-y-2 text-sm">
+              {result.contentQuality?.issues.map((issue, index) => <li key={`quality-${index}`}>{issue.message}</li>)}
+            </ul>
+            {result.mathVerification.unparseableClaims.length > 0 && (
+              <details className="mt-4">
+                <summary className="cursor-pointer">{result.mathVerification.claimsUnparseable} matematiske uttrykk kunne ikke verifiseres automatisk</summary>
+                <ul className="mt-3 space-y-3 text-sm">
+                  {result.mathVerification.unparseableClaims.map((claim, index) => (
+                    <li key={`${claim.claimId}-${index}`}><code className="break-all">{claim.latexExpression}</code><p className="text-text-secondary">{claim.errorMessage}</p></li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </section>
+          <section className="card">
+            <h3 className="font-semibold mb-3">Forhåndsvisning – ikke godkjent</h3>
+            {pdfPreviewLoading && <p>Lager vannmerket forhåndsvisning …</p>}
+            {pdfPreviewError && <p role="alert">{pdfPreviewError}</p>}
+            {pdfPreviewUrl && <iframe title="Utkast – ikke godkjent" src={pdfPreviewUrl} className="w-full h-[75vh] rounded border" />}
+            <details className="mt-4"><summary className="cursor-pointer">Vis bevart LaTeX-tekst</summary><pre className="mt-3 whitespace-pre-wrap break-words text-xs max-h-96 overflow-auto">{result.fullDocument}</pre></details>
+          </section>
+        </div>
+      )}
 
       {isSuccess && (
         <>

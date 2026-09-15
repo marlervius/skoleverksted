@@ -210,6 +210,11 @@ class DurableJobGate:
             retryable=False,
         )
 
+    def needs_review(self, job_id: str, *, message: str) -> Job | None:
+        return self._store.update_job_state(
+            job_id, status="needs_review", message=message, progress=100, retryable=False,
+        )
+
     def fail(self, job_id: str, message: str) -> Job | None:
         return self._store.update_job_state(
             job_id,

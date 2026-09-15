@@ -48,7 +48,9 @@ def evaluate_semantic_quality(
         if not get_settings().google_api_key:
             return 100, []
 
-        sample = body[:12_000]
+        # The rubric judges chapter-wide coverage and exercises. A prefix is
+        # not a representative chapter and often ends halfway through a figure.
+        sample = body
         llm = LLMInterface(temperature=0.1)
         prompt = _RUBRIC_PROMPT.format(grade=request.grade)
         raw = llm.invoke(

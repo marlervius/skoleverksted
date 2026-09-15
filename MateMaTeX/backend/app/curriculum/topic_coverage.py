@@ -21,7 +21,7 @@ SUBTOPIC_KEYWORDS: dict[str, list[str]] = {
     "Rasjonale funksjoner": ["rasjonal", "asymptot"],
     "Eksponentialfunksjoner": ["eksponential", "vekstfaktor", "a \\cdot b^x", "a·b^x"],
     "Logaritmer": ["logaritm", "\\lg", "ln("],
-    "Logaritmeregler": ["logaritmeregel", "lg(a", "lg a"],
+    "Logaritmeregler": ["logaritmeregel", "logaritmeregl", "lg(a", "lg a"],
     "Eksponentiallikninger": ["eksponentiallikning", "b^x", "10^x", "2^x"],
     "Lineære modeller": ["lineær modell", "modellere", "praktisk"],
     "Grafisk framstilling": ["koordinatsystem", "tegn graf", "grafen til"],

@@ -91,6 +91,7 @@ export function mapApiResultToGenerationResult(
     statusRaw === "running" ||
     statusRaw === "completed" ||
     statusRaw === "completed_with_warnings" ||
+    statusRaw === "review_required" ||
     statusRaw === "failed"
       ? statusRaw
       : "failed";

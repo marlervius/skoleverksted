@@ -62,11 +62,11 @@ export function createGenerationController() {
           if (!active(jobId)) return;
           const result = mapApiResultToGenerationResult(raw, snapshot);
           useAppStore.getState().setResult(result);
-          if (isSuccessfulStatus(result.status)) {
+          if (isSuccessfulStatus(result.status) || result.status === "review_required") {
             appendHistory({
               jobId, createdAt: new Date().toISOString(), topic: snapshot.topic,
               grade: snapshot.grade, materialType: snapshot.materialType, favorite: false,
-              status: result.status === "completed_with_warnings" ? "completed_with_warnings" : "completed",
+              status: result.status === "review_required" ? "review_required" : result.status === "completed_with_warnings" ? "completed_with_warnings" : "completed",
               warningReason: result.warningReason, request: snapshot,
             });
           }

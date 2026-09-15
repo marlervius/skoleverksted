@@ -15,11 +15,11 @@ describe("status polling when SSE is silent", () => {
     vi.useRealTimers();
   });
 
-  it("updates the active work and delivers completion without SSE events", async () => {
+  it.each(["completed", "review_required"])("delivers terminal %s without SSE events", async (status) => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ready: false, current_agent: "latex_validator" }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ready: false, current_agent: "latex_fixer" }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ ready: true, status: "completed", latex_compiled: true }) });
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ready: true, status, latex_compiled: status === "completed" }) });
     vi.stubGlobal("fetch", fetcher);
     const onCurrentAgent = vi.fn();
     const onComplete = vi.fn();
@@ -30,7 +30,7 @@ describe("status polling when SSE is silent", () => {
     expect(onCurrentAgent).toHaveBeenLastCalledWith("latex_fixer");
     await vi.advanceTimersByTimeAsync(500);
     expect(onComplete).toHaveBeenCalledOnce();
-    expect(onComplete.mock.calls[0][0].status).toBe("completed");
+    expect(onComplete.mock.calls[0][0].status).toBe(status);
   });
 
   it("ignores an in-flight status response after the watcher is closed", async () => {

@@ -7,7 +7,7 @@ import { appendHistory } from "./generation-history";
 vi.mock("./api", () => ({
   startGeneration: vi.fn(), getResult: vi.fn(), streamProgress: vi.fn(),
   closeActiveStream: vi.fn(), isJobAborted: () => false,
-  isTerminalGenerateStatus: (s: string) => ["completed", "completed_with_warnings", "failed"].includes(s),
+  isTerminalGenerateStatus: (s: string) => ["completed", "completed_with_warnings", "review_required", "failed"].includes(s),
 }));
 vi.mock("./generation-history", () => ({ appendHistory: vi.fn() }));
 
@@ -62,6 +62,21 @@ describe("mathematics generation lifecycle", () => {
     expect(getResult).toHaveBeenCalledWith("job");
     expect(streamProgress).not.toHaveBeenCalled();
     expect(useAppStore.getState().isGenerating).toBe(false);
+  });
+
+  it("terminates a review draft and saves it in history without approval", async () => {
+    vi.mocked(startGeneration).mockResolvedValue({ job_id: "job", status: "review_required", message: "" });
+    vi.mocked(getResult).mockResolvedValue({
+      job_id: "job", status: "review_required", full_document: "preserved draft",
+      pdf_available: false, source_approved: false, math_verification: {},
+      latex_compilation: { success: false }, steps: [], total_duration_seconds: 91,
+      total_tokens: 0, error: "Utkastet krever gjennomgang",
+    });
+    await controller.generate();
+    expect(streamProgress).not.toHaveBeenCalled();
+    expect(useAppStore.getState().isGenerating).toBe(false);
+    expect(useAppStore.getState().result).toMatchObject({ status: "review_required", sourceApproved: false });
+    expect(appendHistory).toHaveBeenCalledWith(expect.objectContaining({ status: "review_required", jobId: "job" }));
   });
 
   it("does not update the UI when a start response arrives after page disposal", async () => {

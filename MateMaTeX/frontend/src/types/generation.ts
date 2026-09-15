@@ -20,6 +20,7 @@ export interface StreamCompletePayload {
     | "running"
     | "completed"
     | "completed_with_warnings"
+    | "review_required"
     | "failed";
   total_duration: number;
   total_steps: number;
