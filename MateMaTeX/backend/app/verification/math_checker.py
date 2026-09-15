@@ -860,7 +860,7 @@ class MathChecker:
         )
 
 
-def format_errors_for_agent(result: VerificationResult) -> str:
+def format_errors_for_agent(result: VerificationResult, *, max_claims: int | None = None) -> str:
     """Format verification errors into instructions for the author agent to fix."""
     if result.all_correct and not result.claims_unparseable:
         return ""
@@ -870,7 +870,11 @@ def format_errors_for_agent(result: VerificationResult) -> str:
         f"SymPy fant {result.claims_incorrect} feil av {result.claims_checked} sjekket.\n",
     ]
 
-    for i, err in enumerate(result.errors, 1):
+    errors = result.errors if max_claims is None else result.errors[:max_claims]
+    remaining = None if max_claims is None else max(0, max_claims - len(errors))
+    uncertain = (result.unparseable_claims if remaining is None
+                 else result.unparseable_claims[:remaining])
+    for i, err in enumerate(errors, 1):
         lines.append(f"FEIL {i}:")
         lines.append(f"  Uttrykk: {err.latex_expression}")
         lines.append(f"  Type: {err.claim_type}")
@@ -884,11 +888,18 @@ def format_errors_for_agent(result: VerificationResult) -> str:
 
     if result.unparseable_claims:
         lines.append(f"=== KUNNE IKKE VERIFISERE ({len(result.unparseable_claims)}) ===\n")
-        for i, c in enumerate(result.unparseable_claims, 1):
+        for i, c in enumerate(uncertain, 1):
             lines.append(f"UVISS {i}: {c.latex_expression}")
             if c.error_message:
                 lines.append(f"  Merknad: {c.error_message}")
+            lines.append(f"  Kontekst: ...{c.context}...")
+            if c.verification_context and len(c.verification_context) <= 4000:
+                lines.append(f"  Oppgave/eksempel: {c.verification_context}")
             lines.append("")
 
-    lines.append("RETT ALLE FEILENE OVER. Følg svarformatet i reparasjonsinstruksjonen.")
+    omitted = len(result.errors) + len(result.unparseable_claims) - len(errors) - len(uncertain)
+    if omitted:
+        lines.append(f"{omitted} øvrige uttrykk kontrolleres i senere reparasjonsrunder. "
+                     "Prioriter uttrykkene ovenfor i dette svaret.")
+    lines.append("RETT FEILENE OVER. Følg svarformatet i reparasjonsinstruksjonen.")
     return "\n".join(lines)

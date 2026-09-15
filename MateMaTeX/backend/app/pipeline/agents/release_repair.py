@@ -18,17 +18,22 @@ from Skoleverksted.backend.platform.quality_runtime import run_bounded_sync
 
 logger = structlog.get_logger()
 
+_MAX_REPAIRS = 10
+_MAX_STALLED_REPAIRS = 2
+_CLAIMS_PER_REPAIR = 6  # Leave space for language/source edits in the eight-edit response.
+
 
 class _ReviewRequired(ValueError):
     """A checked draft remains unresolved after the bounded repair budget."""
 
 
 def prepare_release(state: PipelineState) -> bool:
-    """Reserve two repairs after layout; every mutation gets a fresh audit.
+    """Repair in small batches after layout; every mutation gets a fresh audit.
 
     The earlier author budget may already be spent. This separate, bounded
-    budget gives the final candidate its own repair attempts before an
-    unresolved draft requires review. No earlier PDF or approval survives.
+    budget gives large chapters enough rounds while progress is being made.
+    Two stalled repairs, ten total repairs, or the deadline stop the loop.
+    An unresolved draft never inherits an earlier PDF or approval.
     """
     body = (state.final_latex_body or state.edited_latex_body
             or state.verified_latex_body or state.raw_latex_body)
@@ -40,10 +45,12 @@ def prepare_release(state: PipelineState) -> bool:
     deadline = time.monotonic() + 180
     seen = set()
     repair_error = ""
+    previous_problems = None
+    stalled = 0
     state.teacher_approved_at = ""
     state.approved_digest = ""
     try:
-        for attempt in range(3):
+        for attempt in range(_MAX_REPAIRS + 1):
             if is_cancelled(state.job_id):
                 raise RuntimeError("Avbrutt av bruker")
             if not body.strip():
@@ -74,19 +81,35 @@ def prepare_release(state: PipelineState) -> bool:
                     state.content_quality.passed = False
                     state.content_quality.score = min(state.content_quality.score, score)
             mv = state.math_verification
+            language_issues = [i for i in state.content_quality.issues if i.code == "language"]
             if (mv.all_correct and not mv.claims_incorrect and not mv.claims_unparseable
-                    and quality.source_approved and state.content_quality.passed):
+                    and quality.source_approved and state.content_quality.passed and not language_issues):
                 state.final_latex_body = body
                 state.edited_latex_body = body
                 state.verified_latex_body = body
                 step.output_summary = f"Automatisk sluttkontroll bestått etter {attempt} reparasjoner"
                 logger.info("release_verification_passed", job_id=state.job_id, repairs=attempt)
                 return True
-            if attempt == 2 or time.monotonic() >= deadline:
+            # Compare verified problems, not merely whether the model changed
+            # text. Rewording an unresolved claim cannot buy unlimited retries.
+            problems = (
+                mv.claims_incorrect,
+                mv.claims_unparseable,
+                int(not quality.source_approved),
+                int(not state.content_quality.passed),
+                len(state.content_quality.issues),
+                100 - state.content_quality.score,
+            )
+            if previous_problems is not None:
+                stalled = 0 if problems < previous_problems else stalled + 1
+            previous_problems = problems
+            if (attempt == _MAX_REPAIRS or stalled >= _MAX_STALLED_REPAIRS
+                    or time.monotonic() >= deadline):
                 break
             feedback = "\n".join([
-                format_errors_for_agent(mv),
+                format_errors_for_agent(mv, max_claims=_CLAIMS_PER_REPAIR),
                 format_quality_report_for_author(state.content_quality),
+                *(f"SPRÅKFEIL SOM MÅ RETTES: {i.message}" for i in language_issues),
                 *quality.deterministic_failures,
                 quality.passport.summary if not quality.source_approved else "",
                 repair_error,
@@ -108,7 +131,7 @@ def prepare_release(state: PipelineState) -> bool:
                     raise ValueError("Reparasjonen ga ingen ny endring")
             except ValueError as exc:
                 # A rejected edit never mutates the candidate. Give the model
-                # actionable feedback within the existing two-call budget.
+                # actionable feedback within the bounded progress budget.
                 repair_error = (
                     f"Forrige endringsliste ble avvist: {exc}. "
                     "Returner en gyldig JSON-endringsliste som retter de uløste problemene."

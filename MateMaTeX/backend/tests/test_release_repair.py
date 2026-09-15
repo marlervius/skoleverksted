@@ -104,7 +104,7 @@ def test_provider_timeout_is_terminal(monkeypatch, state):
     assert not state.pdf_base64
 
 
-def test_repair_budget_is_two_attempts(monkeypatch, state):
+def test_two_stalled_repairs_stop_even_when_model_changes_text(monkeypatch, state):
     model = Mock()
     model.invoke.side_effect = [json.dumps({"edits": [{"before": f"$2+2={before}$", "after": f"$2+2={after}$"}]}) for before, after in [(5, 6), (6, 7)]]
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
@@ -137,3 +137,66 @@ def test_finalize_compiles_the_repaired_revision(monkeypatch, state):
     assert result.release_manifest["file_hash"] == hashlib.sha256(b"new-pdf").hexdigest()
     assert "$2+2=4$" in result.verification_content
     assert not result.teacher_approved_at
+
+
+def test_large_chapter_repairs_39_expressions_in_verified_batches(monkeypatch, state):
+    from app.verification.math_checker import MathChecker
+
+    original = [rf"${i}\cdot{{2+1}}={i*3}$" for i in range(1, 40)]
+    replacements = [rf"${i}\cdot(2+1)={i*3}$" for i in range(1, 40)]
+    body = "Innledning som skal bevares.\n" + "\n".join(original)
+    state.full_document = r"\begin{document}" + body + r"\end{document}"
+    assert MathChecker().verify(body).claims_unparseable == 39
+    model = Mock()
+    model.invoke.side_effect = [json.dumps({"edits": [
+        {"before": before, "after": after}
+        for before, after in zip(original[start:start+6], replacements[start:start+6])
+    ]}) for start in range(0, 39, 6)]
+    monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
+
+    assert release_repair.prepare_release(state)
+    assert model.invoke.call_count == 7
+    assert state.math_verification.claims_checked == state.math_verification.claims_correct == 39
+    assert not state.math_verification.claims_unparseable
+    assert state.final_latex_body == "Innledning som skal bevares.\n" + "\n".join(replacements)
+    first_prompt = model.invoke.call_args_list[0].args[1]
+    feedback = first_prompt.split("DOKUMENT:")[0]
+    assert "UVISS 6:" in feedback and "UVISS 7:" not in feedback
+    assert "33 øvrige uttrykk" in feedback
+    assert "Kontekst:" in feedback
+
+
+def test_language_warning_is_repaired_even_when_overall_score_passes(monkeypatch, state):
+    from app.models.state import ContentQualityIssue, ContentQualityReport
+
+    state.full_document = r"\begin{document}Finn negasymptoten. $2+2=4$\end{document}"
+    def check_quality(body, request):
+        issues = ([ContentQualityIssue(code="language", severity="warning",
+                   message="Rett skrivefeilen negasymptoten til asymptoten.")]
+                  if "negasymptoten" in body else [])
+        return ContentQualityReport(passed=True, score=95, issues=issues)
+    monkeypatch.setattr(release_repair, "evaluate_content_quality", check_quality)
+    model = Mock()
+    model.invoke.return_value = json.dumps({"edits": [
+        {"before": "negasymptoten", "after": "asymptoten"},
+    ]})
+    monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
+    assert release_repair.prepare_release(state)
+    assert "SPRÅKFEIL SOM MÅ RETTES" in model.invoke.call_args.args[1]
+    assert "negasymptoten" not in state.final_latex_body
+    assert not state.content_quality.issues
+
+
+def test_progress_does_not_remove_the_total_repair_limit(monkeypatch, state):
+    original = [f"${i}+1={i+2}$" for i in range(1, 13)]
+    state.full_document = r"\begin{document}" + "\n".join(original) + r"\end{document}"
+    model = Mock()
+    model.invoke.side_effect = [json.dumps({"edits": [
+        {"before": original[i-1], "after": f"${i}+1={i+1}$"},
+    ]}) for i in range(1, 13)]
+    monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
+    assert not release_repair.prepare_release(state)
+    assert model.invoke.call_count == 10
+    assert state.math_verification.claims_incorrect == 2
+    assert state.status == PipelineStatus.FAILED
+    assert not state.source_approved and not state.pdf_base64
