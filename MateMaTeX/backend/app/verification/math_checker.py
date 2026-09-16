@@ -67,6 +67,7 @@ class MathChecker:
         spurious timeouts on Windows when workers first touched SymPy).
         """
         self._function_definitions = {}
+        self._scope_problem_cache = {}
         definitions_by_context = {}
         claims = self._extract_claims(latex_content)
         result = VerificationResult()
@@ -227,23 +228,22 @@ class MathChecker:
             value = self._manual_parse(answer[2])
             if value is None or not hasattr(value, "free_symbols") or value.free_symbols:
                 continue
-            variable = Symbol(answer[1])
-            for equation in math_islands(scope):
-                if equation.text.count("=") != 1:
-                    continue
-                left, right = equation.text.split("=")
-                if self._is_definition(left, right):
-                    continue
-                lhs, rhs = self._manual_parse(left), self._manual_parse(right)
-                if lhs is None or rhs is None:
-                    continue
-                if variable not in (getattr(lhs, "free_symbols", set()) | getattr(rhs, "free_symbols", set())):
-                    continue
-                claims.append(MathClaim(
-                    latex_expression=island.text, claim_type="solution",
-                    context=f"equations={[equation.text]!r}", verification_context=scope,
-                ))
-                break
+            problems = self._scope_problems(scope, Symbol(answer[1]))
+            if not problems:
+                continue
+            # An example or a section often solves several equations in the
+            # same variable. Pair the answer with the equation it solves; the
+            # first equation in scope is not evidence that it belongs there.
+            equation = next((text for text, lhs, rhs, _ in problems
+                             if self._satisfies(lhs, rhs, Symbol(answer[1]), value)), None)
+            if equation is None and self._single_task_problem(scope, problems):
+                equation = problems[0][0]  # Nothing else it could answer: a real error.
+            if equation is None:
+                continue  # Ambiguous; the equation claims still require a stated root.
+            claims.append(MathClaim(
+                latex_expression=island.text, claim_type="solution",
+                context=f"equations={[equation]!r}", verification_context=scope,
+            ))
 
         return claims
 
@@ -510,7 +510,9 @@ class MathChecker:
         """Prove a condition against ALL stated real roots in its local scope.
 
         Substitution alone misses lost roots (x^2=4, x=2). Comparing finite
-        solution sets also catches that error. Ambiguous scopes stay unresolved.
+        solution sets also catches that error. A scope that solves several
+        different equations in the same variable is ambiguous: an answer to one
+        of them is never evidence that another was solved wrongly.
         """
         symbols = lhs.free_symbols | rhs.free_symbols
         if len(symbols) != 1:
@@ -526,19 +528,90 @@ class MathChecker:
                 answers.append(answer)
         if not answers:
             return False
-        roots = solveset(lhs - rhs, variable, domain=S.Reals)
-        if not isinstance(roots, FiniteSet):
+        roots = self._real_roots(lhs, rhs, variable)
+        if roots is None:
             return False
-        stated = FiniteSet(*answers)
-        # Symbolically prove equality of every root, without float sampling.
-        same = len(roots) == len(stated) and all(
-            any(simplify(root - answer) == 0 for answer in stated) for root in roots
-        )
+        problems = self._scope_problems(claim.verification_context, variable)
+        single_problem = all(self._same_roots(found, roots) for _, _, _, found in problems)
+        missing = [root for root in roots if not any(self._same_value(root, a) for a in answers)]
+        extra = [a for a in answers if not any(self._same_value(a, root) for root in roots)]
+        if missing and not single_problem:
+            return False  # The stated answers may all belong to other equations.
+        # Every stated answer in an exercise answers that exercise; elsewhere an
+        # extra value may be a different quantity (a price, a time, a count).
+        same = not missing and not (extra and self._single_task_problem(claim.verification_context, problems))
         claim.is_correct = same
         claim.expected_result = str(roots)
-        claim.actual_result = str(stated)
+        claim.actual_result = str(FiniteSet(*answers))
         claim.error_message = "" if same else "Stated solutions do not match the complete real solution set"
         return True
+
+    def _scope_problems(self, scope: str, variable) -> list[tuple]:
+        """Equations in ``variable`` within a scope, with their real roots.
+
+        Roots are None when they cannot be determined exactly.
+        """
+        cache = getattr(self, "_scope_problem_cache", None)
+        if cache is None:
+            cache = self._scope_problem_cache = {}
+        key = (scope, str(variable))
+        if key not in cache:
+            problems = []
+            for equation in math_islands(scope):
+                if equation.text.count("=") != 1:
+                    continue
+                left, right = equation.text.split("=")
+                if self._is_definition(left, right):
+                    continue
+                lhs, rhs = self._manual_parse(left), self._manual_parse(right)
+                if lhs is None or rhs is None:
+                    continue
+                symbols = getattr(lhs, "free_symbols", set()) | getattr(rhs, "free_symbols", set())
+                if variable not in symbols:
+                    continue
+                roots = self._real_roots(lhs, rhs, variable) if symbols == {variable} else None
+                problems.append((equation.text, lhs, rhs, roots))
+            cache[key] = problems
+        return cache[key]
+
+    @staticmethod
+    def _single_task_problem(scope: str, problems: list[tuple]) -> bool:
+        """An exercise scope whose equations all have the same solutions."""
+        if not problems or not scope.lstrip().startswith(r"\begin{taskbox}"):
+            return False
+        first = problems[0][3]
+        return all(MathChecker._same_roots(found, first) for _, _, _, found in problems)
+
+    @staticmethod
+    def _real_roots(lhs, rhs, variable):
+        try:
+            roots = solveset(lhs - rhs, variable, domain=S.Reals)
+        except Exception:
+            return None
+        return roots if isinstance(roots, FiniteSet) else None
+
+    @staticmethod
+    def _same_value(a, b) -> bool:
+        try:
+            difference = simplify(a - b)
+            if difference == 0:
+                return True
+            # Decimal fasit values such as 16,8 are floats; 84/5 - 16.8 is ~1e-15.
+            return abs(complex(difference.evalf())) < 1e-9
+        except Exception:
+            return False
+
+    @staticmethod
+    def _same_roots(a, b) -> bool:
+        return (a is not None and b is not None and len(a) == len(b)
+                and all(any(MathChecker._same_value(x, y) for y in b) for x in a))
+
+    @staticmethod
+    def _satisfies(lhs, rhs, variable, value) -> bool:
+        try:
+            return MathChecker._same_value((lhs - rhs).subs(variable, value), 0)
+        except Exception:
+            return False
 
     def _verify_solution(self, claim: MathClaim) -> None:
         """
