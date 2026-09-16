@@ -42,6 +42,50 @@ def test_wrong_or_incomplete_fasit_is_blocked(equation, answer):
     assert MathChecker().verify(exercise(equation, answer)).claims_incorrect > 0
 
 
+_SEVERAL_EQUATIONS = {
+    "example": r"""\begin{eksempel}{Løs likningene}
+a) $-2x + 4 = 0$ gir $-2x = -4$, altså $x = 2$.
+b) $25x + 80 = 500$ gir $25x = 420$, altså $x = 16{,}8$.
+\end{eksempel}""",
+    "section": r"""\section{Lineære likninger}
+Vi løser $-2x + 4 = 0$. Da får vi $-2x = -4$ og $x = 2$.
+Et abonnement koster 80 kr pluss 25 kr per time: $25x + 80 = 500$, så $x = 16{,}8$.""",
+    "exercise": r"""\begin{taskbox}{Oppgave 3}
+Løs likningene.
+\begin{enumerate}
+\item $-2x + 4 = 0$
+\item $25x + 80 = 500$
+\end{enumerate}
+\end{taskbox}
+\section*{Løsningsforslag}
+\textbf{Oppgave 3}
+$-2x = -4$, så $x = 2$. Deretter $25x = 420$, så $x = 16{,}8$.""",
+    "align": r"""\begin{eksempel}{To likninger}
+\begin{align*}
+-2x + 4 &= 0 \\ -2x &= -4 \\ x &= 2
+\end{align*}
+\begin{align*}
+25x + 80 &= 500 \\ 25x &= 420 \\ x &= 16{,}8
+\end{align*}
+\end{eksempel}""",
+}
+
+
+@pytest.mark.parametrize("name", _SEVERAL_EQUATIONS)
+def test_answers_to_other_equations_in_the_same_scope_are_not_errors(name):
+    """Production regression: -2x+4=0 was failed because x=16,8 was in scope."""
+    result = MathChecker().verify(_SEVERAL_EQUATIONS[name])
+    assert result.claims_incorrect == 0, [(c.latex_expression, c.error_message) for c in result.errors]
+    assert result.claims_correct > 0
+
+
+@pytest.mark.parametrize("name", _SEVERAL_EQUATIONS)
+def test_a_wrong_answer_among_several_equations_is_still_never_released(name):
+    wrong = _SEVERAL_EQUATIONS[name].replace("16{,}8", "17{,}8")
+    result = MathChecker().verify(wrong)
+    assert result.claims_incorrect + result.claims_unparseable > 0
+
+
 def test_logarithms_are_actually_checked():
     result = MathChecker().verify(r"$\lg(100)=2$. $\ln(1)=0$. $\log(1000)=2$.")
     assert result.claims_correct == 2
