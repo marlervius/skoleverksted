@@ -34,6 +34,10 @@ def prepare_release(state: PipelineState) -> bool:
     budget gives large chapters enough rounds while progress is being made.
     Two stalled repairs, ten total repairs, or the deadline stop the loop.
     An unresolved draft never inherits an earlier PDF or approval.
+
+    A document is released only when every machine-provable check passes.
+    Pedagogical suggestions from the rubric drive repairs while budget lasts,
+    and are then delivered as notes rather than withholding a proven document.
     """
     body = (state.final_latex_body or state.edited_latex_body
             or state.verified_latex_body or state.raw_latex_body)
@@ -48,6 +52,7 @@ def prepare_release(state: PipelineState) -> bool:
     previous_problems = None
     stalled = 0
     state.teacher_approved_at = ""
+    state.automatic_approved_revision = ""
     state.approved_digest = ""
     try:
         for attempt in range(_MAX_REPAIRS + 1):
@@ -67,6 +72,8 @@ def prepare_release(state: PipelineState) -> bool:
             body = quality.approved_content
             state.math_verification = MathChecker().verify(body)
             state.content_quality = evaluate_content_quality(body, state.request)
+            rules_passed = state.content_quality.passed
+            semantic_issues = []
             if state.request.material_type == "kapittel":
                 from app.verification.semantic_quality import evaluate_semantic_quality
                 score, issues = run_bounded_sync(
@@ -77,34 +84,54 @@ def prepare_release(state: PipelineState) -> bool:
                 )
                 state.content_quality.semantic_score = score
                 state.content_quality.issues.extend(issues)
-                if issues and score < 70:
+                semantic_issues = issues
+                if score < 70:
                     state.content_quality.passed = False
                     state.content_quality.score = min(state.content_quality.score, score)
             mv = state.math_verification
             language_issues = [i for i in state.content_quality.issues if i.code == "language"]
-            if (mv.all_correct and not mv.claims_incorrect and not mv.claims_unparseable
-                    and quality.source_approved and state.content_quality.passed and not language_issues):
-                state.final_latex_body = body
-                state.edited_latex_body = body
-                state.verified_latex_body = body
-                step.output_summary = f"Automatisk sluttkontroll bestått etter {attempt} reparasjoner"
-                logger.info("release_verification_passed", job_id=state.job_id, repairs=attempt)
-                return True
+            # Only machine-provable defects withhold the document. The rubric's
+            # pedagogical suggestions are opinions: they steer every remaining
+            # repair round, but a proven document is never held back — and never
+            # handed to a teacher for manual sign-off — because of them.
+            blocking = (not mv.all_correct or mv.claims_incorrect or mv.claims_unparseable
+                        or not quality.source_approved or not rules_passed or language_issues)
+            advisory = bool(semantic_issues) or state.content_quality.semantic_score < 70
             # Compare verified problems, not merely whether the model changed
             # text. Rewording an unresolved claim cannot buy unlimited retries.
             problems = (
                 mv.claims_incorrect,
                 mv.claims_unparseable,
                 int(not quality.source_approved),
-                int(not state.content_quality.passed),
+                int(not rules_passed),
                 len(state.content_quality.issues),
                 100 - state.content_quality.score,
             )
             if previous_problems is not None:
                 stalled = 0 if problems < previous_problems else stalled + 1
             previous_problems = problems
-            if (attempt == _MAX_REPAIRS or stalled >= _MAX_STALLED_REPAIRS
-                    or time.monotonic() >= deadline):
+            budget_spent = (attempt == _MAX_REPAIRS or stalled >= _MAX_STALLED_REPAIRS
+                            or time.monotonic() >= deadline)
+            if not blocking and (not advisory or budget_spent):
+                state.final_latex_body = body
+                state.edited_latex_body = body
+                state.verified_latex_body = body
+                state.truth_passport = quality.passport.model_dump(mode="json")
+                state.quality_rounds = [item.model_dump(mode="json") for item in quality.rounds]
+                state.quarantine = [item.model_dump(mode="json") for item in quality.quarantine]
+                state.quality_stop_reason = quality.stop_reason
+                state.verification_content = body
+                state.release_manifest = quality.release_manifest.model_dump(mode="json") if quality.release_manifest else {}
+                state.source_approved = quality.source_approved
+                step.output_summary = (
+                    f"Automatisk sluttkontroll bestått etter {attempt} reparasjoner"
+                    + (f" — {len(state.content_quality.issues)} forbedringsforslag står igjen"
+                       if advisory else "")
+                )
+                logger.info("release_verification_passed", job_id=state.job_id,
+                            repairs=attempt, advisory=advisory)
+                return True
+            if budget_spent:
                 break
             feedback = "\n".join([
                 format_errors_for_agent(mv, max_claims=_CLAIMS_PER_REPAIR),
@@ -154,6 +181,7 @@ def prepare_release(state: PipelineState) -> bool:
         state.pdf_path = ""
         state.source_approved = False
         state.teacher_approved_at = ""
+        state.automatic_approved_revision = ""
         state.approved_digest = ""
         state.release_manifest = {}
         state.compiled_document_digest = ""
@@ -164,7 +192,7 @@ def prepare_release(state: PipelineState) -> bool:
                 and not state.math_verification.claims_incorrect and not is_cancelled(state.job_id)):
             # Review is a terminal draft state, never an approval or export.
             state.status = PipelineStatus.REVIEW_REQUIRED
-            state.error_message = "Utkastet er bevart. Noen faglige kontroller krever gjennomgang før materialet kan godkjennes."
+            state.error_message = "Appen klarte ikke å verifisere hele dokumentet innen forsøksgrensen. Utkastet er bevart, men er ikke klart til bruk. Prøv igjen for en ny automatisk kontroll og reparasjon."
             state.final_latex_body = body
             state.verification_content = body
             if match:

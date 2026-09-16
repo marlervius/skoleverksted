@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from unittest.mock import Mock
+import pytest
 
 from app.models.state import GenerationRequest
 from app.verification.semantic_quality import evaluate_semantic_quality
@@ -49,3 +50,13 @@ def test_full_chapter_including_exercises_reaches_the_rubric(monkeypatch):
     body = "Innledning. " * 1200 + r"\section{Logaritmereglene}\section{Oppgaver} Siste oppgave."
     evaluate_semantic_quality(body, GenerationRequest(grade="VG1 1T", topic="Funksjoner", material_type="kapittel"))
     assert model.invoke.call_args.args[1].endswith(body)
+
+
+@pytest.mark.parametrize("response", ["not JSON", "{}", '{"score":95}', '{"score":95,"issues":[{}]}'])
+def test_missing_or_malformed_audit_never_becomes_a_passing_score(monkeypatch, response):
+    model = Mock(invoke=Mock(return_value=response))
+    monkeypatch.setattr("app.config.get_settings", lambda: SimpleNamespace(google_api_key="test-key"))
+    monkeypatch.setattr("app.models.llm.LLMInterface", lambda **kw: model)
+    with pytest.raises(ValueError, match="sluttkontroll"):
+        evaluate_semantic_quality("Forklaring. " * 60,
+            GenerationRequest(grade="VG1 1T", topic="Funksjoner", material_type="kapittel"))

@@ -560,8 +560,8 @@ export function ResultView() {
               {isSuccess
                 ? hasWarnings
                   ? "Materiale generert — automatisk kontrollert"
-                  : "Materiale generert"
-                : result.status === "review_required" ? "Utkast klart til gjennomgang" : "Generering feilet"}
+                  : "Ferdig kontrollert og klart til bruk"
+                : result.status === "review_required" ? "Automatisk kontroll kunne ikke fullføres" : "Generering feilet"}
             </h2>
             <p className="mt-1 break-words text-sm text-text-secondary">
               {isSuccess
@@ -605,8 +605,8 @@ export function ResultView() {
       {result.status === "review_required" && (
         <div className="space-y-6">
           <section className="card">
-            <h3 className="font-semibold">Dette må kontrolleres</h3>
-            <p className="mt-2 text-sm text-text-secondary">Utkastet er ikke godkjent. Eksport, deling og lærergodkjenning er sperret til kontrollene er bestått.</p>
+            <h3 className="font-semibold">Dette klarte ikke appen å løse</h3>
+            <p className="mt-2 text-sm text-text-secondary">Appen kontrollerer og reparerer materialet automatisk. Dokumentet blir klart til bruk når alle sluttkontroller er bestått. Det kreves ingen lærergodkjenning.</p>
             <ul className="mt-4 list-disc pl-5 space-y-2 text-sm">
               {result.contentQuality?.issues.map((issue, index) => <li key={`quality-${index}`}>{issue.message}</li>)}
             </ul>
@@ -713,9 +713,9 @@ export function ResultView() {
 
           {hasUnparseable && !hasIncorrect && (
             <div className="card mb-6 !border-accent-orange/30 bg-accent-orange/5">
-              <h3 className="text-sm font-semibold mb-2">Lærer kontroll anbefales</h3>
+              <h3 className="text-sm font-semibold mb-2">Automatisk kontroll er ikke fullført</h3>
               <p className="text-xs text-text-secondary mb-3">
-                Noen oppgaver kunne ikke verifiseres automatisk. De er merket i PDF-en — kontroller fasit manuelt.
+                Noen oppgaver kunne ikke verifiseres automatisk. Start en ny generering for automatisk reparasjon og sluttkontroll.
               </p>
               <div className="space-y-2 max-h-56 overflow-y-auto">
                 {result.mathVerification.unparseableClaims.map((c) => (
@@ -766,22 +766,43 @@ export function ResultView() {
                 </span>
               </div>
               {result.contentQuality.passed ? (
-                <p className="text-xs text-text-secondary">
-                  Struktur og valgte pensumområder bestod den automatiske innholdskontrollen.
-                  {result.contentQuality.semanticScore !== undefined &&
-                    result.contentQuality.semanticScore < 100 && (
-                      <span className="block mt-1">
-                        Semantisk vurdering: {result.contentQuality.semanticScore}/100
-                        {result.contentQuality.semanticSummary
-                          ? ` — ${result.contentQuality.semanticSummary}`
-                          : ""}
-                      </span>
-                    )}
-                </p>
+                <>
+                  <p className="text-xs text-text-secondary">
+                    Struktur og valgte pensumområder bestod den automatiske innholdskontrollen.
+                    {result.contentQuality.semanticScore !== undefined &&
+                      result.contentQuality.semanticScore < 100 && (
+                        <span className="block mt-1">
+                          Semantisk vurdering: {result.contentQuality.semanticScore}/100
+                          {result.contentQuality.semanticSummary
+                            ? ` — ${result.contentQuality.semanticSummary}`
+                            : ""}
+                        </span>
+                      )}
+                  </p>
+                  {result.contentQuality.issues.length > 0 && (
+                    <>
+                      <p className="mt-3 text-xs text-text-secondary">
+                        Materialet er ferdig kontrollert. Sluttkontrollen foreslår i tillegg
+                        dette hvis du vil finpusse innholdet:
+                      </p>
+                      <div className="mt-2 space-y-1.5 max-h-48 overflow-y-auto">
+                        {result.contentQuality.issues.slice(0, 12).map((issue, index) => (
+                          <div
+                            key={`${issue.code}-${index}`}
+                            className="text-xs text-text-secondary rounded-md border border-border px-2 py-1"
+                          >
+                            {issue.message}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
               ) : (
                 <>
                   <p className="text-xs text-text-secondary mb-3">
-                    Kontroller disse punktene før materialet brukes:
+                    Matematikken er verifisert automatisk. Den faglige vurderingen mener
+                    materialet kan bli bedre på disse punktene:
                   </p>
                   {result.contentQuality.semanticScore !== undefined &&
                     result.contentQuality.semanticScore < 100 && (
@@ -1375,7 +1396,7 @@ export function ResultView() {
                       title={!canShare ? "Automatisk sluttkontroll må være bestått" : undefined}
                     >
                       <CheckCircle2 size={14} />
-                      {yearPlanSaveStatus === "saving" ? "Lagrer …" : "Godkjenn og lagre i årsplanen"}
+                      {yearPlanSaveStatus === "saving" ? "Lagrer …" : "Lagre i årsplanen"}
                     </button>
                   )}
                 </div>

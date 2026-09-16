@@ -33,6 +33,10 @@ kvalitetspass, drift og offentlig API-adresse er felles.
 - **Global kvalitetsport** kontrollerer alle KI-generatorer og alle eksportløp.
   Kildegodkjenning og lærergodkjenning bindes til samme tekstrevisjon; feil,
   gamle pass og endret innhold blokkeres på serveren.
+- **Matematikk frigis automatisk.** Sluttkontrollen reparerer og verifiserer
+  dokumentet til alle maskinelt beviselige kontroller er bestått, og utsteder
+  godkjenningen selv for den eksakte tekstrevisjonen. Ingen lærergodkjenning
+  kreves, og klienten kan ikke påstå at noe er godkjent.
 - **TeachingPackage** har canonical pakke-/artefakttilstand, durable parent/child-
   jobber, innholdsrevisjoner, faktapass, kvalitetspass, lærerreview, atomisk
   årsplanprojeksjon og ZIP-eksport etter godkjenning. Ikke-godkjente artefakter

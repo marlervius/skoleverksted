@@ -79,8 +79,9 @@ def test_repaired_pdf_survives_restart_and_passes_the_actual_export_routes(clien
     preview = client.get(url + "/pdf?preview=true")
     assert preview.status_code == 200, preview.text
     assert preview.content.startswith(b"%PDF-")
-    assert client.get(url + "/pdf").status_code == 409
-    assert client.post(url + "/approve").status_code == 200
+    assert client.get(url + "/pdf").status_code == 200
+    assert state.automatic_approved_revision
+    assert not state.teacher_approved_at
     assert client.get(url + "/pdf").content == preview.content
     shared = client.post("/sharing", json={"resource_type": "generation", "resource_id": state.job_id})
     assert shared.status_code == 200, shared.text

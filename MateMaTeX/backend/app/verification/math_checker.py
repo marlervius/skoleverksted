@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import structlog
-from sympy import Eq, Symbol, Lambda, simplify, solve, sqrt, sympify, expand, cancel
+from sympy import Eq, Symbol, Lambda, S, FiniteSet, log, solveset, simplify, solve, sqrt, sympify, expand, cancel
 from sympy.core.function import AppliedUndef
 from app.models.state import MathClaim, VerificationResult
 from m1.scorer import looks_like_prose, numeric_agreement
@@ -31,6 +31,7 @@ _VERIFIABLE_MACROS = frozenset({
     "frac", "sqrt", "binom", "cdot", "times", "div", "left", "right",
     "mathrm", "mathbf", "mathit", "mathsf", "mathtt", "operatorname", "pi",
     "le", "leq", "ge", "geq",
+    "lg", "log", "ln", "dfrac", "tfrac",
 })
 
 
@@ -216,49 +217,33 @@ class MathChecker:
         """
         claims: list[MathClaim] = []
 
-        # Find the solution section
-        sol_match = self._SOLUTION_SECTION_PATTERN.search(content)
-        if not sol_match:
-            return claims
-
-        solution_text = sol_match.group(1)
-
-        # Extract tasks and their equations
-        for task_match in self._TASK_EQUATION_PATTERN.finditer(content):
-            task_title = task_match.group(1)
-            task_body = task_match.group(2)
-
-            # Find equations in the task (e.g., "Løs likningen $2x + 3 = 7$")
-            equations_in_task = [island.text for island in math_islands(task_body)
-                                 if "=" in island.text]
-            if len(equations_in_task) != 1:
-                continue  # Do not guess which subproblem an answer belongs to.
-            task_lhs, task_rhs = equations_in_task[0].split("=", 1)
-            if self._is_definition(task_lhs, task_rhs):
+        ranges = context_ranges(content)
+        for island in math_islands(content):
+            answer = re.fullmatch(r"([a-z])\s*=\s*([^=]+)", island.text)
+            if not answer:
                 continue
-
-            # Find the corresponding solution
-            task_num = re.search(r'(\d+)', task_title)
-            if task_num:
-                sol_pattern = re.compile(
-                    rf'\\textbf\{{Oppgave\s*{task_num.group(1)}\}}(.*?)(?=\\textbf|$)',
-                    re.DOTALL,
-                )
-                sol_match_task = sol_pattern.search(solution_text)
-                if sol_match_task:
-                    sol_text = sol_match_task.group(1)
-
-                    # For each sub-answer (a), b), etc.)
-                    for island in math_islands(sol_text):
-                        answer = island.text
-                        if re.fullmatch(r"[a-z]\s*=\s*[^=]+", answer):
-                            claim = MathClaim(
-                                latex_expression=answer.strip(),
-                                claim_type="solution",
-                                context=f"Oppgave {task_num.group(1)}: equations={equations_in_task}",
-                                verification_context=task_body + "\n" + sol_text,
-                            )
-                            claims.append(claim)
+            scope = local_context(content, island.start, ranges)
+            # A definition such as u=2^x is not an asserted numeric solution.
+            value = self._manual_parse(answer[2])
+            if value is None or not hasattr(value, "free_symbols") or value.free_symbols:
+                continue
+            variable = Symbol(answer[1])
+            for equation in math_islands(scope):
+                if equation.text.count("=") != 1:
+                    continue
+                left, right = equation.text.split("=")
+                if self._is_definition(left, right):
+                    continue
+                lhs, rhs = self._manual_parse(left), self._manual_parse(right)
+                if lhs is None or rhs is None:
+                    continue
+                if variable not in (getattr(lhs, "free_symbols", set()) | getattr(rhs, "free_symbols", set())):
+                    continue
+                claims.append(MathClaim(
+                    latex_expression=island.text, claim_type="solution",
+                    context=f"equations={[equation.text]!r}", verification_context=scope,
+                ))
+                break
 
         return claims
 
@@ -302,7 +287,8 @@ class MathChecker:
                 left, op, right = relations[i-1:i+2]
                 if op == "=":
                     pair = MathClaim(latex_expression=f"{left} = {right}",
-                                     claim_type="equation", context=claim.context)
+                                     claim_type="equation", context=claim.context,
+                                     verification_context=claim.verification_context)
                     self._verify_equation(pair)
                     correct, error = pair.is_correct, pair.error_message
                 else:
@@ -334,6 +320,7 @@ class MathChecker:
                 pair = MathClaim(
                     latex_expression=f"{left.strip()} = {right.strip()}",
                     claim_type="equation", context=claim.context,
+                    verification_context=claim.verification_context,
                 )
                 self._verify_equation(pair)
                 if pair.is_correct is False:
@@ -467,6 +454,9 @@ class MathChecker:
                 pass
 
             if getattr(diff, "free_symbols", None):
+                if (not self._context_claims_identity(claim.context)
+                        and self._verify_equation_solution_set(claim, lhs, rhs)):
+                    return
                 # A symbolic equation can be an equation to solve/define, not an
                 # identity. Numeric disagreement therefore does NOT prove a
                 # fasit error unless the surrounding text explicitly claims an
@@ -515,6 +505,40 @@ class MathChecker:
             except Exception:
                 claim.is_correct = None
                 claim.error_message = "Could not determine equality"
+
+    def _verify_equation_solution_set(self, claim: MathClaim, lhs, rhs) -> bool:
+        """Prove a condition against ALL stated real roots in its local scope.
+
+        Substitution alone misses lost roots (x^2=4, x=2). Comparing finite
+        solution sets also catches that error. Ambiguous scopes stay unresolved.
+        """
+        symbols = lhs.free_symbols | rhs.free_symbols
+        if len(symbols) != 1:
+            return False
+        variable = next(iter(symbols))
+        answers = []
+        for island in math_islands(claim.verification_context):
+            match = re.fullmatch(rf"{re.escape(str(variable))}\s*=\s*([^=]+)", island.text)
+            if match:
+                answer = self._parse_latex_expr(match[1])
+                if answer is None or not hasattr(answer, "free_symbols") or answer.free_symbols:
+                    return False
+                answers.append(answer)
+        if not answers:
+            return False
+        roots = solveset(lhs - rhs, variable, domain=S.Reals)
+        if not isinstance(roots, FiniteSet):
+            return False
+        stated = FiniteSet(*answers)
+        # Symbolically prove equality of every root, without float sampling.
+        same = len(roots) == len(stated) and all(
+            any(simplify(root - answer) == 0 for answer in stated) for root in roots
+        )
+        claim.is_correct = same
+        claim.expected_result = str(roots)
+        claim.actual_result = str(stated)
+        claim.error_message = "" if same else "Stated solutions do not match the complete real solution set"
+        return True
 
     def _verify_solution(self, claim: MathClaim) -> None:
         """
@@ -692,6 +716,7 @@ class MathChecker:
         """Manual fallback parser for common LaTeX math patterns."""
         s = re.sub(r"(?<=\d)\{,\}(?=\d)", ".", expr)
         s = s.replace(r"\dfrac", r"\frac").replace(r"\tfrac", r"\frac")
+        s = re.sub(r"\\(lg|log|ln)\s+(\d+(?:\.\d+)?|[a-z])\b", r"\\\1(\2)", s)
         s = s.replace(r"\,", "").replace(r"\;", "").replace(r"\!", "")
         s = re.sub(r"(\d+(?:\.\d+)?)\\%", r"(\1/100)", s)
 
@@ -766,9 +791,13 @@ class MathChecker:
         s = s.replace('\\', '')
         # School notation commonly omits multiplication in 2x and 3(x+1).
         s = re.sub(r"(?<=\d)(?=[a-df-zA-DF-Z(]|[eE](?![+-]?\d))", "*", s)
+        s = re.sub(r"\)(?=\()", ")*", s)
+        s = re.sub(r"\b([abcd])([xyz])\b", r"\1*\2", s)
+        s = re.sub(r"\b([abcd])\s*\(", r"\1*(", s)
 
         try:
-            return sympify(s)
+            return sympify(s, locals={"lg": lambda value: log(value, 10),
+                                      "log": lambda value: log(value, 10), "ln": log})
         except Exception:
             return None
 

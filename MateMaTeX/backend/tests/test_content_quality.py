@@ -213,7 +213,8 @@ class TestContentQuality:
 
 
 class TestContentQualityRouting:
-    def test_retry_when_failing(self):
+    def test_retry_when_failing(self, monkeypatch):
+        monkeypatch.setattr("app.verification.semantic_quality.evaluate_semantic_quality", lambda *args: (100, []))
         from app.models.state import ContentQualityIssue, ContentQualityReport, PipelineState
         from app.pipeline.agents.content_quality import run_content_quality
 

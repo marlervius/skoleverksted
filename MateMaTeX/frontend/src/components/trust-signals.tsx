@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Shield, Calculator, Users } from "lucide-react";
+import { Shield, Calculator, CheckCircle2 } from "lucide-react";
 
 /** Compact trust row for the generator landing page. */
 export function TrustSignals() {
@@ -16,8 +16,8 @@ export function TrustSignals() {
         Ingen elevdata
       </span>
       <span className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border bg-surface-elevated/50 text-text-secondary">
-        <Users size={13} className="text-accent-purple" />
-        Lærer kontrollerer uverifiserbart
+        <CheckCircle2 size={13} className="text-accent-purple" />
+        Automatisk sluttkontroll
       </span>
       <Link
         href="/personvern#m1"

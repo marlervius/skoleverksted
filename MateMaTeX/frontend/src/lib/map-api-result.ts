@@ -219,7 +219,7 @@ export function warningReasonLabel(reason: string): string {
     return "Avanserte figurer (f.eks. TikZ) ble fjernet for å få dokumentet til å kompilere. Tekst og oppgaver er beholdt.";
   }
   if (hasContentQuality) {
-    return "Materialet har mangler i pensumdekning eller didaktisk struktur. Se kvalitetsrapporten og kontroller før bruk.";
+    return "Matematikken er verifisert automatisk. Den faglige vurderingen foreslår forbedringer i pensumdekning eller didaktisk struktur — se kvalitetsrapporten.";
   }
   if (hasUnparseable || hasLegacyMath) {
     return "Del av fasiten kunne ikke verifiseres automatisk (f.eks. «vis at» eller modellering). Kontroller manuelt før bruk.";

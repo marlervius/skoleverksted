@@ -93,7 +93,21 @@ def try_restore_cached_pipeline(
                 return None
 
         restored = PipelineState(**data)
-        if (not restored.source_approved
+        from Skoleverksted.backend.platform.quality_gate import content_digest, source_approval_reasons
+        if (restored.automatic_approved_revision != content_digest(restored.verification_content)
+                or restored.compiled_document_digest != content_digest(restored.full_document)
+                or source_approval_reasons(
+                    content=restored.verification_content,
+                    verification_status=str(restored.truth_passport.get("status") or ""),
+                    verified_revision=str(restored.truth_passport.get("content_revision") or ""),
+                    verification_version=str(restored.truth_passport.get("version") or ""),
+                    release_manifest=restored.release_manifest or None,
+                    quarantined_texts=[str(item.get("original_text") or "") for item in restored.quarantine
+                                       if item.get("status", "withheld") == "withheld"],
+                )):
+            return None
+        if (not restored.automatic_approved_revision
+                or not restored.source_approved
                 or restored.math_verification.claims_unparseable
                 or restored.math_verification.claims_incorrect):
             return None
@@ -435,39 +449,9 @@ def finalize(state: PipelineState) -> PipelineState:
         or state.raw_latex_body
     )
 
-    # The shared evidence-first gate runs after mathematical/editorial review
-    # and before the final export candidate is compiled.
-    quality_changed = False
-    try:
-        from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
-
-        quality = run_quality_pipeline(
-            generator_id=(
-                "matematikk.differentiated"
-                if state.request.material_type == "differensiert"
-                else "matematikk.material"
-            ),
-            content=body,
-            topic=state.request.topic,
-            subject="Matematikk",
-            level=state.request.grade,
-        )
-        state.truth_passport = quality.passport.model_dump(mode="json")
-        state.quality_rounds = [item.model_dump(mode="json") for item in quality.rounds]
-        state.quarantine = [item.model_dump(mode="json") for item in quality.quarantine]
-        state.quality_stop_reason = quality.stop_reason
-        state.verification_content = quality.approved_content
-        state.release_manifest = quality.release_manifest.model_dump(mode="json") if quality.release_manifest else {}
-        state.source_approved = quality.source_approved
-        quality_changed = quality.approved_content != body
-        body = quality.approved_content
-    except Exception as exc:
-        state.status = PipelineStatus.FAILED
-        state.error_message = "Den globale kvalitetskontrollen kunne ikke fullføres. Materialet leveres ikke."
-        state.pdf_base64 = ""
-        state.pdf_path = ""
-        logger.warning("global_quality_gate_failed", job_id=state.job_id, error=str(exc))
-        return state
+    # prepare_release has audited mathematics, pedagogy and sources on this
+    # exact revision. Never run another mutating audit after that final check.
+    body = state.verification_content
 
     verified_banner = (
         mv.claims_checked > 0
@@ -501,7 +485,7 @@ def finalize(state: PipelineState) -> PipelineState:
             start += len(r"\begin{document}")
             state.full_document = state.full_document[:start] + "\n" + body + "\n" + state.full_document[end:]
 
-    if state.latex_compilation.success and (quality_changed or state.full_document != compiled_document):
+    if state.latex_compilation.success and state.full_document != compiled_document:
         try:
             from app.verification.latex_checker import LatexChecker
 
@@ -594,6 +578,7 @@ def finalize(state: PipelineState) -> PipelineState:
     pdf_bytes = base64.b64decode(state.pdf_base64) if state.pdf_base64 else Path(state.pdf_path).read_bytes()
     state.compiled_document_digest = content_digest(state.full_document)
     state.release_manifest["file_hash"] = hashlib.sha256(pdf_bytes).hexdigest()
+    state.automatic_approved_revision = content_digest(state.verification_content)
 
     # Only cache a full result that actually carries a usable PDF. Caching a
     # PDF-less "completed" state would make later cache hits return a document

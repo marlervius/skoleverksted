@@ -69,6 +69,33 @@ def _manifest(content: str) -> dict[str, object]:
     ).model_dump(mode="json")
 
 
+@pytest.mark.parametrize("export_id,automatic_revision,allowed", [
+    ("matematikk.pdf", "current", True),
+    ("matematikk.docx", "current", True),
+    ("matematikk.pptx", "current", True),
+    ("matematikk.shared_pdf", "current", True),
+    ("matematikk.pdf", "stale", False),
+    ("matematikk.pdf", "", False),
+    ("fag.pdf", "current", False),
+])
+def test_automatic_revision_is_limited_to_verified_math_exports(export_id, automatic_revision, allowed):
+    from Skoleverksted.backend.platform.quality_gate import content_digest
+    content = "$2+2=4$"
+    revision = content_digest(content)
+    kwargs = dict(export_id=export_id, content=content,
+        verification_status="verified", verified_revision=revision, verification_version="3.0",
+        teacher_approved=False, approved_revision="", release_manifest=_manifest(content),
+        automatic_approved_revision=revision if automatic_revision == "current" else automatic_revision)
+    if allowed:
+        require_export_ready(**kwargs)
+        kwargs["verification_status"] = "needs_review"
+        with pytest.raises(PermissionError):
+            require_export_ready(**kwargs)
+    else:
+        with pytest.raises((PermissionError, ValueError)):
+            require_export_ready(**kwargs)
+
+
 def _audit(content: str, claims: list[TruthClaim], *, status: str = "needs_review", complete: bool = True) -> TruthAudit:
     verified = sum(claim.status == "verified" for claim in claims)
     return TruthAudit(
