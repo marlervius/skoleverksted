@@ -67,7 +67,8 @@ def test_review_status_result_stream_and_export_gates(client, draft):
     assert '"status": "review_required"' in client.get(url + "/stream").text
     assert client.get(url + "/pdf").status_code == 409
     assert client.get(url + "/pdf?preview=true").status_code == 409
-    assert client.post(url + "/approve").status_code == 409
+    # Release is machine-issued; there is no manual approval route to call.
+    assert client.post(url + "/approve").status_code == 404
     assert client.post("/sharing", json={"resource_type": "generation", "resource_id": draft.job_id}).status_code == 409
 
 

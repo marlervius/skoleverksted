@@ -410,7 +410,7 @@ def evaluate_content_quality(
 
 def format_quality_report_for_author(report: ContentQualityReport) -> str:
     """Format issues as instructions for an author retry."""
-    if report.passed:
+    if report.passed and not report.issues:
         return "Ingen kvalitetsproblemer."
 
     lines = [

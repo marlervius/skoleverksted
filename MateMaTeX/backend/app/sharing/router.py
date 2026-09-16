@@ -144,6 +144,7 @@ async def create_share(
             verified_revision=passport.get("content_revision", ""),
             verification_version=passport.get("version", ""),
             teacher_approved=bool(snapshot.get("teacher_approved_at")),
+            automatic_approved_revision=str(snapshot.get("automatic_approved_revision") or ""),
             approved_revision=str(snapshot.get("approved_digest") or ""),
             quarantined_texts=[item.get("original_text", "") for item in snapshot.get("quarantine", []) if item.get("status", "withheld") == "withheld"],
         )

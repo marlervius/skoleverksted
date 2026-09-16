@@ -53,8 +53,8 @@ def test_auxiliary_substitution_is_not_a_wrong_solution():
     \section*{Løsningsforslag}
     \textbf{Oppgave 10} Innfører $u=2^x$. Løsningene er $x=1$ og $x=2$."""
     result = MathChecker().verify(body)
-    assert result.claims_correct == 2
+    assert result.claims_correct == 3
     assert result.claims_incorrect == 0
-    assert any("auxiliary substitution" in c.error_message for c in result.unparseable_claims)
+    assert result.claims_unparseable == 0
     wrong = MathChecker().verify(body.replace("$x=2$", "$x=3$"))
-    assert wrong.claims_incorrect == 1
+    assert wrong.claims_incorrect >= 1

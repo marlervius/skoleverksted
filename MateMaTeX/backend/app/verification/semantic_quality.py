@@ -1,7 +1,7 @@
 """
 LLM rubric pass for kapittel — complements rule-based content_quality.
 
-Low temperature, warning-only: adds issues but does not block delivery alone.
+Low temperature; an unavailable check is never reported as a passing score.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def evaluate_semantic_quality(
     latex_body: str,
     request: GenerationRequest,
 ) -> tuple[int, list[ContentQualityIssue]]:
-    """Return (score, issues). On failure returns (100, [])."""
+    """Return (score, issues); fail closed when a required audit is unavailable."""
     body = (latex_body or "").strip()
     if request.material_type != "kapittel" or len(body) < 500:
         return 100, []
@@ -46,7 +46,7 @@ def evaluate_semantic_quality(
         from app.models.llm import LLMInterface
 
         if not get_settings().google_api_key:
-            return 100, []
+            raise ValueError("Faglig sluttkontroll er ikke konfigurert")
 
         # The rubric judges chapter-wide coverage and exercises. A prefix is
         # not a representative chapter and often ends halfway through a figure.
@@ -59,11 +59,16 @@ def evaluate_semantic_quality(
         )
         match = re.search(r"\{[\s\S]*\}", raw)
         if not match:
-            return 100, []
+            raise ValueError("Faglig sluttkontroll returnerte ikke en vurdering")
         data = json.loads(match.group())
-        score = max(0, min(100, int(data.get("score", 100))))
+        if (not isinstance(data, dict) or type(data.get("score")) is not int
+                or not 0 <= data["score"] <= 100 or not isinstance(data.get("issues"), list)):
+            raise ValueError("Ugyldig faglig vurdering")
+        score = data["score"]
         issues: list[ContentQualityIssue] = []
         for item in data.get("issues", [])[:5]:
+            if not isinstance(item, dict) or not str(item.get("message") or "").strip():
+                raise ValueError("Faglig vurdering mangler begrunnelse")
             issues.append(
                 ContentQualityIssue(
                     code=str(item.get("code", "semantic")),
@@ -79,5 +84,5 @@ def evaluate_semantic_quality(
         )
         return score, issues
     except Exception as e:
-        logger.warning("semantic_quality_skipped", error=str(e))
-        return 100, []
+        logger.warning("semantic_quality_failed", error=str(e))
+        raise ValueError("Faglig sluttkontroll kunne ikke fullføres") from e

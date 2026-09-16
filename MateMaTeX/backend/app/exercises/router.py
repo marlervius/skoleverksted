@@ -28,7 +28,8 @@ from app.exercises.parser import (
 )
 from app.latex.compiler import compile_to_pdf
 from app.latex.preamble import wrap_with_preamble
-from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline, verify_teacher_export
+from Skoleverksted.backend.platform.quality_gate import run_quality_pipeline
+from app.verification.automatic_export import verify_automatic_math_export
 
 logger = structlog.get_logger()
 
@@ -99,7 +100,6 @@ class ExportRequest(BaseModel):
     format: Literal["pdf", "docx"] = "pdf"
     include_solutions: bool = True
     title: str = "Oppgaveark"
-    teacher_approved: bool = False
 
 
 class ExportResponse(BaseModel):
@@ -492,14 +492,10 @@ async def export_exercises(
     full_doc = wrap_with_preamble(body)
     try:
         await asyncio.to_thread(
-            verify_teacher_export,
-            generator_id="matematikk.material",
+            verify_automatic_math_export,
             export_id=f"matematikk.{req.format}",
             content=body,
             topic=req.title,
-            subject="Matematikk",
-            level="VGS",
-            teacher_approved=req.teacher_approved,
         )
     except (PermissionError, ValueError) as exc:
         raise HTTPException(409, str(exc)) from exc

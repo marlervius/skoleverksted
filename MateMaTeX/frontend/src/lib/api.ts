@@ -521,7 +521,6 @@ export async function downloadJobPdf(
     typeof window !== "undefined"
       ? `/api/generate/${encodeURIComponent(jobId)}/pdf`
       : apiUrl(`generate/${encodeURIComponent(jobId)}/pdf`);
-  await approveJobRelease(jobId);
   const res = await fetch(url);
   if (!res.ok) throw new Error(await readErrorMessage(res));
   const objectUrl = URL.createObjectURL(await res.blob());
@@ -532,14 +531,6 @@ export async function downloadJobPdf(
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(objectUrl);
-}
-
-export async function approveJobRelease(jobId: string): Promise<void> {
-  const url = typeof window !== "undefined"
-    ? `/api/generate/${encodeURIComponent(jobId)}/pdf`
-    : apiUrl(`generate/${encodeURIComponent(jobId)}/approve`);
-  const approval = await fetch(url, { method: "POST" });
-  if (!approval.ok) throw new Error(await readErrorMessage(approval));
 }
 
 export interface CostEstimateResponse {
@@ -764,7 +755,6 @@ export async function exportExercises(
       format,
       include_solutions: includeSolutions,
       title,
-      teacher_approved: true,
     }),
   });
 }
@@ -843,7 +833,7 @@ export async function exportPdf(params: {
   high_contrast?: boolean;
   teacher_approved?: boolean;
 }): Promise<{ success: boolean; content_base64: string; filename: string; mime_type: string; errors: string[] }> {
-  return fetchJson(apiUrl("export/pdf"), { method: "POST", body: JSON.stringify({ ...params, teacher_approved: true }) });
+  return fetchJson(apiUrl("export/pdf"), { method: "POST", body: JSON.stringify(params) });
 }
 
 export async function exportDocx(
@@ -853,7 +843,7 @@ export async function exportDocx(
 ): Promise<{ success: boolean; content_base64: string; filename: string; mime_type: string; errors: string[] }> {
   return fetchJson(apiUrl("export/docx"), {
     method: "POST",
-    body: JSON.stringify({ latex_content: latexContent, title, include_solutions: includeSolutions, teacher_approved: true }),
+    body: JSON.stringify({ latex_content: latexContent, title, include_solutions: includeSolutions }),
   });
 }
 
@@ -864,7 +854,7 @@ export async function exportPptx(
 ): Promise<{ success: boolean; content_base64: string; filename: string; mime_type: string; errors: string[] }> {
   return fetchJson(apiUrl("export/pptx"), {
     method: "POST",
-    body: JSON.stringify({ latex_content: latexContent, title, solutions_as: solutionsAs, teacher_approved: true }),
+    body: JSON.stringify({ latex_content: latexContent, title, solutions_as: solutionsAs }),
   });
 }
 
@@ -878,7 +868,6 @@ export async function createShare(params: {
   expires_hours?: number;
   max_views?: number;
 }): Promise<{ success: boolean; token: string; share_url: string; expires_at: string | null }> {
-  if (params.resource_type === "generation") await approveJobRelease(params.resource_id);
   return fetchJson(apiUrl("sharing"), { method: "POST", body: JSON.stringify(params) });
 }
 

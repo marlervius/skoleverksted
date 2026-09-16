@@ -99,7 +99,7 @@ export default function HistoryPage() {
                   >
                     {entry.status === "completed"
                       ? "OK"
-                      : entry.status === "review_required" ? "Til gjennomgang" : entry.status === "completed_with_warnings"
+                      : entry.status === "review_required" ? "Kontroll ikke fullført" : entry.status === "completed_with_warnings"
                         ? "Advarsel"
                         : "Feilet"}
                   </span>

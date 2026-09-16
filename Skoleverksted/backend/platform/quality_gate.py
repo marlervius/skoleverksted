@@ -1137,6 +1137,7 @@ def require_export_ready(
     verified_revision: str,
     teacher_approved: bool,
     approved_revision: str,
+    automatic_approved_revision: str = "",
     verification_version: str = "",
     quarantined_texts: Iterable[str] = (),
     responsibility_approved: bool = False,
@@ -1155,9 +1156,13 @@ def require_export_ready(
         responsibility_approved=responsibility_approved,
         release_manifest=release_manifest,
     )
-    if not teacher_approved:
+    automatic_math_release = (
+        export_id in {"matematikk.pdf", "matematikk.docx", "matematikk.pptx", "matematikk.shared_pdf"}
+        and automatic_approved_revision == revision
+    )
+    if not teacher_approved and not automatic_math_release:
         reasons.append("lærergodkjenning mangler")
-    if approved_revision != revision:
+    if approved_revision != revision and not automatic_math_release:
         reasons.append("lærergodkjenningen gjelder en annen innholdsversjon")
     if reasons:
         raise PermissionError("Eksportporten er lukket: " + "; ".join(reasons) + ".")

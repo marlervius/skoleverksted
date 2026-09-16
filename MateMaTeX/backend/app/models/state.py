@@ -286,6 +286,7 @@ class PipelineState(BaseModel):
     compiled_document_digest: str = ""
     source_approved: bool = False
     teacher_approved_at: str = ""
+    automatic_approved_revision: str = ""
     approved_digest: str = ""
     author_retry_reason: str = Field(
         default="",
