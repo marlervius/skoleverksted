@@ -252,10 +252,11 @@ function pollDelayMs(attempt: number): number {
   return attempt < 90 ? 500 : 1500;
 }
 
-// The backend permits a generation pipeline to run for 420 seconds. Keep the
-// lightweight status watcher alive for roughly nine minutes so it cannot give
-// up while a valid repair/fallback pass is still inside that budget.
-const MAX_JOB_POLL_ATTEMPTS = 420;
+// A generation may use its 420-second budget and then a separate final
+// verification and repair budget of up to six minutes for whole chapters. Keep
+// the lightweight status watcher alive for roughly sixteen minutes so it cannot
+// give up while a valid repair pass is still running.
+const MAX_JOB_POLL_ATTEMPTS = 690;
 
 const JOB_GONE_MESSAGE =
   "Serveren mistet jobben (ofte etter omstart på Render). " +
