@@ -30,7 +30,7 @@ def draft(monkeypatch):
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kwargs: model)
     assert not release_repair.prepare_release(state)
     assert state.status == PipelineStatus.REVIEW_REQUIRED
-    assert model.invoke.call_count == 2
+    assert model.invoke.call_count == release_repair._MAX_STALLED_REPAIRS + 1
     persist_terminal_job(state)
     return state
 

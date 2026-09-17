@@ -38,7 +38,8 @@ def test_no_progress_terminates_and_clears_stale_release(monkeypatch, state):
     model.invoke.return_value = '{"edits": []}'
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
     assert not release_repair.prepare_release(state)
-    assert model.invoke.call_count == 2
+    # Unusable repairs are retried in place, never by re-auditing unchanged text.
+    assert model.invoke.call_count == release_repair._MAX_STALLED_REPAIRS + 1
     assert state.status == PipelineStatus.FAILED
     assert not state.pdf_base64 and not state.pdf_path
     assert not state.source_approved and not state.teacher_approved_at
@@ -73,18 +74,21 @@ def test_rejected_edit_gets_bounded_retry_against_unchanged_candidate(monkeypatc
 
 
 def test_release_failure_retains_safe_diagnostic_and_logs_counts(monkeypatch, state):
-    from app.public_errors import RELEASE_VERIFICATION_ERROR, public_generation_error
+    from app.public_errors import public_generation_error
     model = Mock()
     model.invoke.return_value = '{"edits": []}'
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
     log = Mock()
     monkeypatch.setattr(release_repair, "logger", log)
     assert not release_repair.prepare_release(state)
-    assert public_generation_error(state.error_message) == RELEASE_VERIFICATION_ERROR
+    # A proven fasit error is named, and survives the public error filter.
+    assert public_generation_error(state.error_message) == state.error_message
+    assert state.error_message.startswith("SymPy fant 1 feil i fasiten")
+    assert "2+2 = 5" in state.error_message
     log.warning.assert_any_call(
         "release_verification_failed", job_id=state.job_id,
         error="Sluttkandidaten bestod ikke alle kontrollene", error_type="_ReviewRequired",
-        repairs=2, incorrect=1, unparseable=0,
+        repairs=release_repair._MAX_STALLED_REPAIRS + 1, incorrect=1, unparseable=0,
     )
 
 

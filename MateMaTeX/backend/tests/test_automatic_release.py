@@ -239,6 +239,76 @@ def test_unresolved_mathematics_is_never_released_as_finished(monkeypatch):
     assert not state.automatic_approved_revision and not state.pdf_base64
 
 
+def _proven_chapter(monkeypatch, *, rubric):
+    from app.models.state import ContentQualityReport
+    state = PipelineState(request=GenerationRequest(grade="VG1 1P", topic="Likninger", material_type="kapittel"),
+                          full_document=r"\begin{document}Innledning. " + exercise("2x+3=7", "x=2") + r"\end{document}")
+    monkeypatch.setattr(release_repair, "evaluate_content_quality", lambda *args: ContentQualityReport(passed=True, score=95))
+    monkeypatch.setattr("app.verification.semantic_quality.evaluate_semantic_quality", rubric)
+    return state
+
+
+def _rubric_timeout(body, request):
+    from Skoleverksted.backend.platform.quality_runtime import QualityLayerTimeout
+    raise QualityLayerTimeout("final content quality check timed out")
+
+
+def test_an_unavailable_rubric_never_fails_a_proven_chapter(monkeypatch):
+    """Production regression: a timed-out advisory call stopped the whole job."""
+    state = _proven_chapter(monkeypatch, rubric=_rubric_timeout)
+    monkeypatch.setattr(release_repair, "LLMInterface", Mock(side_effect=AssertionError("No repair needed")))
+    assert release_repair.prepare_release(state)
+    assert state.source_approved and state.verification_content
+    assert "kunne ikke fullføres" in state.content_quality.semantic_summary
+
+
+def test_a_failing_repair_model_delivers_the_verified_revision(monkeypatch):
+    from app.models.state import ContentQualityIssue
+    issue = ContentQualityIssue(code="didactics", severity="warning", message="Flere eksempler ville hjulpet.")
+    state = _proven_chapter(monkeypatch, rubric=lambda body, request: (80, [issue]))
+    model = Mock(invoke=Mock(side_effect=TimeoutError("Modellen svarte ikke")))
+    monkeypatch.setattr(release_repair, "LLMInterface", lambda **kwargs: model)
+    assert release_repair.prepare_release(state)
+    assert 0 < model.invoke.call_count <= release_repair._MAX_STALLED_REPAIRS + 1
+    assert state.content_quality.issues == [issue]
+
+
+def test_a_spent_budget_releases_without_starting_a_repair(monkeypatch):
+    from app.models.state import ContentQualityIssue
+    issue = ContentQualityIssue(code="didactics", severity="warning", message="Flere eksempler ville hjulpet.")
+    state = _proven_chapter(monkeypatch, rubric=lambda body, request: (80, [issue]))
+    monkeypatch.setattr(release_repair, "_RELEASE_BUDGET_SECONDS", release_repair._MIN_REPAIR_ROUND_SECONDS - 1)
+    monkeypatch.setattr(release_repair, "LLMInterface", Mock(side_effect=AssertionError("No time to repair")))
+    assert release_repair.prepare_release(state)
+
+
+def test_rejected_repairs_are_retried_without_reauditing_an_unchanged_document(monkeypatch):
+    from app.models.state import ContentQualityIssue
+    issue = ContentQualityIssue(code="didactics", severity="warning", message="Flere eksempler ville hjulpet.")
+    state = _proven_chapter(monkeypatch, rubric=lambda body, request: (80, [issue]))
+    audits = []
+    original = release_repair.run_quality_pipeline
+    monkeypatch.setattr(release_repair, "run_quality_pipeline", lambda **kw: audits.append(1) or original(**kw))
+    model = Mock(invoke=Mock(return_value="ikke json"))
+    monkeypatch.setattr(release_repair, "LLMInterface", lambda **kwargs: model)
+    assert release_repair.prepare_release(state)
+    assert model.invoke.call_count == release_repair._MAX_STALLED_REPAIRS + 1
+    assert len(audits) == 1
+    assert "ble avvist" in model.invoke.call_args.args[1]
+
+
+def test_an_unrepairable_fasit_error_names_the_error(monkeypatch):
+    state = _proven_chapter(monkeypatch, rubric=lambda body, request: (90, []))
+    state.full_document = r"\begin{document}" + exercise("2x+3=7", "x=5") + r"\end{document}"
+    monkeypatch.setattr(release_repair, "LLMInterface",
+                        lambda **kwargs: Mock(invoke=Mock(side_effect=TimeoutError("Modellen svarte ikke"))))
+    assert not release_repair.prepare_release(state)
+    assert state.status == PipelineStatus.FAILED
+    assert state.error_message.startswith("SymPy fant ")
+    assert "x=5" in state.error_message.replace(" ", "")
+    assert not state.automatic_approved_revision and not state.source_approved
+
+
 def test_raw_export_verifies_math_without_teacher_checkbox():
     from app.verification.automatic_export import verify_automatic_math_export
     assert verify_automatic_math_export(content=exercise("3^x=7", r"x=\frac{\lg(7)}{\lg(3)}"),
