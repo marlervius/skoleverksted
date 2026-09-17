@@ -144,6 +144,10 @@ class MathClaim(BaseModel):
     error_message: str = ""
     expected_result: str = ""
     actual_result: str = ""
+    # False for text that states nothing checkable: a formula such as
+    # y - y_1 = a(x - x_1), an equation still to be solved, or interval
+    # notation. Such text is neither verified nor held against the document.
+    assertion: bool = True
     verification_context: str = Field(default="", exclude=True)
 
 

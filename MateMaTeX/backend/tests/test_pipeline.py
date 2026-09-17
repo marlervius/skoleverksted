@@ -59,7 +59,7 @@ class TestMathRetryRouting:
         from app.pipeline.agents.math_verifier import run_math_verifier
         state = PipelineState(
             request=GenerationRequest(grade="VG1 1T", topic="Funksjoner"),
-            raw_latex_body=r"$f(0) = a \cdot 0 + b = b$",
+            raw_latex_body=r"$f(x)=2x+4$. $f(x)=3x+1$. $f(0) = 2 + 4 = 6$",
         )
         state = run_math_verifier(state)
         assert state.author_retry_reason == "math"
