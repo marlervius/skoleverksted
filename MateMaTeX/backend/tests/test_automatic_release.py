@@ -34,12 +34,89 @@ def test_solves_equations_against_complete_fasit(equation, answer):
 
 @pytest.mark.parametrize("equation,answer", [
     ("3^x=7", r"x=\frac{\lg(3)}{\lg(7)}"),
-    ("x^2=4", "x=2"),  # Missing negative root.
-    ("x^2=4", "x=2$ og $x=-2$ og $x=3"),
+    ("x^2=4", "x=2"),  # Missing negative root, with no reason given.
     (r"\sqrt{x}=2", "x=-4"),
+    ("3x=12", "x=5"),
 ])
 def test_wrong_or_incomplete_fasit_is_blocked(equation, answer):
     assert MathChecker().verify(exercise(equation, answer)).claims_incorrect > 0
+
+
+def test_a_further_value_after_the_roots_is_not_proof_of_an_error():
+    """A drøfting states the symmetry line x = 2 right after the zeros."""
+    body = (r"\begin{taskbox}{Oppgave 1}Løs $-x^2+4x+5=0$.\end{taskbox}\section*{Løsningsforslag}"
+            r"\textbf{Oppgave 1}Nullpunktene er $x_1=-1$ og $x_2=5$. Symmetrilinjen er $x=2$.")
+    result = MathChecker().verify(body)
+    assert result.claims_incorrect == result.claims_unparseable == 0
+    assert result.claims_correct > 0
+
+
+def test_a_root_rejected_for_a_reason_is_not_an_error():
+    body = (r"\begin{eksempel}{Vekstfaktor}Vi har $4b^2 = 36$, så $b^2 = \frac{36}{4} = 9$. "
+            r"Da er $b = \sqrt{9} = 3$. Løsningen $b = -3$ forkaster vi, fordi vekstfaktoren må være positiv."
+            r"\end{eksempel}")
+    result = MathChecker().verify(body)
+    assert result.claims_incorrect == result.claims_unparseable == 0
+
+
+def test_formulas_rules_and_notation_are_not_unverified_claims():
+    """Production regression: 50 of these blocked a correct chapter."""
+    body = r"""\begin{regel}{Ettpunktsformelen}
+$y - y_1 = a(x - x_1)$ og sirkelen $x^2 + y^2 = r^2$. Toppunkt: $x_T = -\frac{b}{2a}$.
+Andregradslikningen $ax^2 + bx + c = 0$.
+$\lg(u \cdot v) = \lg u + \lg v$ og $\lg(u^k) = k \cdot \lg u$.
+\end{regel}
+\begin{eksempel}{Linje}
+Punktene $(x_1, y_1) = (1, 3)$ og $(x_2, y_2) = (4, 9)$ gir $D_f = [-1, 3]$ og
+$y - 3 = 2(x - 1)$, altså $y - 3 = 2x - 2$.
+Videre er $3\lg(x) + 5\lg(x) - 2\lg(x) = (3 + 5 - 2)\lg(x)$ og $x(x^2 - 3) = 0$.
+\end{eksempel}"""
+    result = MathChecker().verify(body)
+    assert result.claims_incorrect == 0, [(c.latex_expression, c.error_message) for c in result.errors]
+    assert result.claims_unparseable == 0, [(c.latex_expression, c.error_message) for c in result.unparseable_claims]
+    assert result.claims_correct >= 3  # The logarithm rules and the rewrite are proven.
+
+
+def test_a_false_rule_is_never_accepted():
+    result = MathChecker().verify(r"Regelen $\lg(u + v) = \lg u + \lg v$ gjelder.")
+    assert result.claims_correct == 0
+    assert result.claims_incorrect + result.claims_unparseable > 0
+
+
+def test_worked_examples_from_a_real_chapter_are_verified():
+    """Production regression: correct answers written as chains, subscripts,
+    rounded decimals and evaluations of a reused function name."""
+    body = r"""\begin{eksempel}{Håndverker}
+Modellen er \[ K(x) = 820x + 650 \] og vi setter inn $x = 4{,}5$:
+\begin{align*}
+K(4{,}5) &= 820 \cdot 4{,}5 + 650 \\ &= 3\,690 + 650 = 4\,340
+\end{align*}
+\begin{align*}
+820x + 650 &= 5\,160 \\ 820x &= 4\,510 \\ x &= \frac{4\,510}{820} = 5{,}5
+\end{align*}
+\end{eksempel}
+\begin{eksempel}{Nullpunkter}
+$-x^2 + 4x + 5 = 0$ gir $(x - 5)(x + 1) = 0$, så $x_1 = -1$ og $x_2 = 5$.
+\end{eksempel}
+\begin{eksempel}{Bil}
+\[ V(t) = 450\,000 \cdot 0{,}88^t \]
+\begin{align*}
+V(5) &= 450\,000 \cdot 0{,}88^5 \\ &= 450\,000 \cdot 0{,}52773
+\end{align*}
+\end{eksempel}
+\begin{eksempel}{Tank}
+\[ V(t) = 400 - 50t \quad \text{for } 0 \le t \le 8 \]
+Da er $V(0) = 400 - 50 \cdot 0 = 400$.
+\end{eksempel}
+\begin{eksempel}{Logaritme}
+$7^x = 25$ gir $x \lg 7 = \lg 25$, så $x = \frac{\lg 25}{\lg 7} \approx 1{,}65$.
+\end{eksempel}"""
+    result = MathChecker().verify(body)
+    assert result.claims_incorrect == 0, [(c.latex_expression, c.error_message) for c in result.errors]
+    assert result.claims_unparseable == 0, [(c.latex_expression, c.error_message) for c in result.unparseable_claims]
+    assert result.claims_correct >= 8
+    wrong = MathChecker().verify(body.replace("= 4\\,340", "= 4\\,350").replace("0{,}52773", "0{,}53773"))
+    assert wrong.claims_incorrect >= 2
 
 
 _SEVERAL_EQUATIONS = {
@@ -305,7 +382,7 @@ def test_an_unrepairable_fasit_error_names_the_error(monkeypatch):
     assert not release_repair.prepare_release(state)
     assert state.status == PipelineStatus.FAILED
     assert state.error_message.startswith("SymPy fant ")
-    assert "x=5" in state.error_message.replace(" ", "")
+    assert "2x+3=7" in state.error_message.replace(" ", "")
     assert not state.automatic_approved_revision and not state.source_approved
 
 

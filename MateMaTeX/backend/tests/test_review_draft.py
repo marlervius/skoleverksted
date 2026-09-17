@@ -20,7 +20,8 @@ from app.verification.latex_checker import LatexChecker
 def draft(monkeypatch):
     state = PipelineState(
         owner_id="teacher", request=GenerationRequest(grade="VG1 1T", topic="Funksjoner", include_exercises=False, include_theory=False),
-        full_document=r"\documentclass{article}\begin{document}$f(0)=4$\end{document}",
+        # f(0)=4 matches none of the chapter's definitions: genuinely unresolved.
+        full_document=r"\documentclass{article}\begin{document}$f(x)=2x+1$. $f(x)=3x+1$. $f(0)=4$\end{document}",
         pdf_base64="stale", pdf_path="stale.pdf", source_approved=True,
         teacher_approved_at="old", release_manifest={"file_hash": "old"},
         latex_compilation=LatexCompilationResult(success=True, pdf_base64="stale"),

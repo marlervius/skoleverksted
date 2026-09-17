@@ -90,8 +90,10 @@ class TestEquationVerification:
         Løs eksponentiallikningene $2^x = 10$ og $10^x = 100$.
         """
         result = checker.verify(latex)
+        # An equation still to be solved asserts nothing; it cannot be wrong
+        # or unverified. Its stated solutions are checked when they are given.
         assert result.claims_incorrect == 0
-        assert result.claims_unparseable == 3
+        assert result.claims_unparseable == 0
 
     def test_correct_symbolic_identity_is_verified(self, checker: MathChecker):
         latex = r"Identiteten $x + 1 = 1 + x$ gjelder for alle x."
@@ -145,10 +147,13 @@ class TestMultipleEquations:
     def test_scientific_notation_is_not_implicit_multiplication(self, checker):
         assert checker.verify(r"$1e-3 + 1e-3 = 0.002$").claims_correct == 1
 
-    def test_missing_function_is_unresolved_not_incorrect(self, checker):
+    def test_function_without_any_formula_checks_only_its_arithmetic(self, checker):
         result = checker.verify(r"$f(0) = 2+4 = 6$")
-        assert result.claims_unparseable == 1
-        assert result.claims_incorrect == 0
+        assert result.claims_correct == 1
+        assert result.claims_unparseable == result.claims_incorrect == 0
+
+    def test_evaluation_against_the_only_definition_is_proven_wrong(self, checker):
+        assert checker.verify(r"$f(x)=2x+1$. $f(0) = 2+4 = 6$").claims_incorrect == 1
 
     def test_conflicting_functions_are_not_borrowed_from_another_exercise(self, checker):
         result = checker.verify(r"$f(x)=2x+4$. $f(x)=3x+1$. $f(0)=2+4=6$")
@@ -156,7 +161,9 @@ class TestMultipleEquations:
 
     def test_function_definitions_do_not_leak_between_documents(self, checker):
         checker.verify(r"$f(x)=2x+4$")
-        assert checker.verify(r"$f(0)=2+2=4$").claims_unparseable == 1
+        checker.verify(r"$f(0)=2+2=4$")
+        assert "f" not in checker._definition_candidates
+        assert "f" not in checker._function_definitions
 
     @pytest.mark.parametrize("latex", [
         r"$2 \cdot 3 + 1 = 6 + 1 = 7$",
@@ -174,7 +181,7 @@ class TestMultipleEquations:
 
     def test_unresolved_only_feedback_is_sent_to_author(self, checker):
         from app.verification.math_checker import format_errors_for_agent
-        result = checker.verify(r"$f(0) = a \cdot 0 + b = b$")
+        result = checker.verify(r"$f(x)=2x+4$. $f(x)=3x+1$. $f(0) = 2 + 4 = 6$")
         assert result.claims_unparseable == 1
         assert "f(0)" in format_errors_for_agent(result)
 
