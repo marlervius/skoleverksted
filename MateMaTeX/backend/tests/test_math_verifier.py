@@ -304,3 +304,64 @@ class TestEdgeCases:
         # This will extract two claims: \gamma_{1} = 2^{3} and \delta_{ij} = 8
         result = checker.verify(latex)
         assert result.claims_incorrect == 0
+
+
+def test_nth_roots_are_verified_not_left_unparseable():
+    """Production regression: a correct cube root blocked a whole chapter."""
+    from app.verification.math_checker import MathChecker
+    correct = MathChecker().verify(r"$\lg(\sqrt[3]{10}) = \lg\left(10^{1/3}\right) = \frac{1}{3}$")
+    assert correct.claims_correct == correct.claims_checked == 1
+    assert MathChecker().verify(r"$\sqrt[3]{8} = 2$").claims_correct == 1
+    assert MathChecker().verify(r"$\sqrt[3]{8} = 3$").claims_incorrect == 1
+
+
+@pytest.mark.parametrize("latex, expected", [
+    (r"$(x^2 + 2x + 1)e^x = (x + 1)^2 e^x$", "correct"),
+    (r"$2x e^{-2x} - 2x^2 e^{-2x} = 2x(1 - x)e^{-2x}$", "correct"),
+    (r"$\left(x^{-2}\right)' = -2x^{-3}$", "correct"),
+    (r"$\left(x^{-2}\right)' = -3x^{-3}$", "incorrect"),
+    (r"La $f(x) = x^2 e^x$. Da er $f'(x) = 2x e^x + x^2 e^x$.", "correct"),
+    (r"La $f(x) = x^2 e^x$. Da er $f'(x) = 2x e^x$.", "incorrect"),
+    (r"La $f(x) = x^3 - 2x$. $f''(x) = 6x$", "correct"),
+    (r"La $f(x) = x^3 - 2x$. $f'(2) = 3 \cdot 2^2 - 2 = 10$", "correct"),
+    (r"Sett $u = 2x - 3$ og $v = x^2 + 4$. Da er $u' = 2$ og $v' = 2x$.", "correct"),
+    (r"Sett $u = 2x - 3$. Da er $u' = 3$.", "incorrect"),
+    (r"Sett $u = x^2 + 1$ og $v = e^x$. $f'(x) = u'(x) \cdot v(x) + u(x) \cdot v'(x) = 2x e^x + (x^2 + 1)e^x$", "correct"),
+    (r"$\frac{d}{dx}\left[x^3\right] = 3x^2$", "correct"),
+    (r"$\frac{d}{dx}\left[x^3\right] = 3x$", "incorrect"),
+    # Rules and implicit differentiation have no formula to differentiate.
+    (r"$(u \cdot v)' = u'v + uv'$", "not_asserted"),
+    (r"$2x + 2y \cdot y' = 0$", "not_asserted"),
+    # f'(x) = 0 is an equation to solve, not a false identity.
+    (r"La $f(x) = x^3 - 3x$. Løs $f'(x) = 0$: $3x^2 - 3 = 0$, så $x = 1$ eller $x = -1$.", "correct"),
+])
+def test_derivatives_are_computed_not_left_unparseable(latex, expected):
+    """Production regression: an R1 chapter left 126 of 201 claims unparseable."""
+    from app.verification.math_checker import MathChecker
+    result = MathChecker().verify(latex)
+    assert result.claims_unparseable == 0
+    if expected == "correct":
+        assert result.claims_correct > 0 and result.claims_incorrect == 0
+    elif expected == "incorrect":
+        assert result.claims_incorrect == 1
+    else:
+        assert result.claims_checked == 0
+
+
+def test_a_hanging_claim_is_abandoned_and_stays_unverified(monkeypatch):
+    import time
+    from app.verification import math_checker
+    monkeypatch.setattr(math_checker, "_CLAIM_HARD_TIMEOUT", 0.2)
+    original = math_checker.MathChecker._verify_claim
+
+    def slow(self, claim):
+        if "7" in claim.latex_expression:
+            time.sleep(2)
+        original(self, claim)
+
+    monkeypatch.setattr(math_checker.MathChecker, "_verify_claim", slow)
+    started = time.monotonic()
+    result = math_checker.MathChecker().verify(r"$2+2=4$ og $3+4=7$")
+    assert time.monotonic() - started < 1.5
+    assert result.claims_correct == 1 and result.claims_unparseable == 1
+    assert not result.unparseable_claims[0].is_correct
