@@ -24,6 +24,47 @@ from app.pipeline.prompts.author import (
 
 logger = structlog.get_logger()
 
+_REPAIR_CALLS = 3
+
+
+def _repair_draft(llm: LLMInterface, state: PipelineState, step: AgentStep, instructions: str) -> str:
+    """Return a repaired draft, or the unchanged draft when no repair was usable.
+
+    A rejected or failed repair must not end the job: the draft still exists,
+    every later revision is verified again, and the release gate keeps its
+    own repair budget. Only the verified document can ever be released.
+    """
+    from app.pipeline.cancel import is_cancelled
+    from app.pipeline.document_edits import apply_edits_report, edit_prompt
+
+    body = state.raw_latex_body
+    feedback = ""
+    for call in range(1, _REPAIR_CALLS + 1):
+        if is_cancelled(state.job_id):
+            raise RuntimeError("Avbrutt av bruker")
+        try:
+            candidate, rejected = apply_edits_report(body, llm.invoke(
+                "Du reparerer matematikkmateriell. Returner kun JSON-endringslisten.",
+                edit_prompt(body, "\n".join(filter(None, [instructions, feedback]))),
+            ))
+        except Exception as exc:
+            feedback = (
+                f"Forrige endringsliste ble avvist: {exc}. Returner en gyldig, kortere "
+                "JSON-endringsliste der hver before-tekst er kopiert nøyaktig fra dokumentet."
+                if isinstance(exc, ValueError) else ""
+            )
+            logger.warning("author_repair_rejected", job_id=state.job_id, call=call,
+                           reason=str(exc), error_type=type(exc).__name__)
+            continue
+        if rejected:
+            logger.info("author_repair_partial", job_id=state.job_id, rejected=rejected[:4])
+        if candidate != body:
+            return candidate
+        feedback = "Forrige svar endret ingenting. Rett de listede problemene i dokumentet."
+    step.output_summary = "Reparasjonen ga ingen brukbar endring; utkastet kontrolleres videre uendret."
+    logger.warning("author_repair_unusable", job_id=state.job_id, calls=_REPAIR_CALLS)
+    return body
+
 
 def run_author(state: PipelineState) -> PipelineState:
     """
@@ -99,12 +140,8 @@ def run_author(state: PipelineState) -> PipelineState:
             step.input_summary = f"Plan: {state.pedagogical_plan[:100]}..."
 
         if is_math_retry or is_quality_retry:
-            from app.pipeline.document_edits import apply_edits, edit_prompt
             instructions = error_report if is_math_retry else quality_report
-            response = apply_edits(state.raw_latex_body, llm.invoke(
-                "Du reparerer matematikkmateriell. Returner kun JSON-endringslisten.",
-                edit_prompt(state.raw_latex_body, instructions),
-            ))
+            response = _repair_draft(llm, state, step, instructions)
         else:
             try:
                 response = llm.invoke(full_system, user_prompt)

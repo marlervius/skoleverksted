@@ -96,8 +96,8 @@ class TestMathRetryRouting:
         )
         assert should_retry_math(state) == "editor"
 
-    def test_blocked_after_max_retries(self):
-        """SymPy-confirmed errors block delivery after retries (grunnlov §1)."""
+    def test_spent_author_budget_continues_to_release_repair(self):
+        """The release gate repairs what the author could not and blocks incorrect fasit."""
         state = PipelineState(
             request=GenerationRequest(
                 grade="8. trinn", topic="Algebra", material_type="kapittel"
@@ -109,6 +109,8 @@ class TestMathRetryRouting:
             ),
             math_verification_attempts=3,  # At max
         )
+        assert should_retry_math(state) == "editor"
+        state.error_message = "Endelig fasitkontroll feilet: checker crashed"
         assert should_retry_math(state) == "math_blocked"
 
     def test_final_verification_blocks_editor_regression(self):
@@ -123,6 +125,8 @@ class TestMathRetryRouting:
             ),
             math_verification_attempts=3,
         )
+        assert route_final_math(state) == "content_quality"
+        state.error_message = "Endelig fasitkontroll feilet: checker crashed"
         assert route_final_math(state) == "math_blocked"
 
     def test_editor_regression_is_repaired_before_delivery(self, monkeypatch):

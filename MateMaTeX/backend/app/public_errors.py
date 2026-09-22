@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 
+# The pipeline's own Norwegian diagnostics. Masking them as a model failure
+# ("KI-genereringen feilet midlertidig") hid which check actually stopped a job.
 _SAFE_PREFIXES = (
     "Avbrutt av bruker",
     "SymPy fant ",
     "Endelig fasitkontroll feilet",
     "Materialet leveres ikke",
+    "Sluttkontrollen ",
+    "Den verifiserte teksten ",
+    "Ny kompilering etter kvalitetskontroll ",
+    "PDF-en kunne ikke kompileres",
+    "Oppdelt generering ",
 )
 
 RELEASE_VERIFICATION_ERROR = (
