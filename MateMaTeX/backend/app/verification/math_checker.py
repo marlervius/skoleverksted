@@ -9,9 +9,10 @@ arithmetic errors, incorrect solutions, and invalid equations.
 from __future__ import annotations
 
 import random
+import threading
 import re
 import structlog
-from sympy import Eq, Symbol, Lambda, Rational, S, FiniteSet, log, solveset, simplify, solve, sqrt, sympify, expand, cancel
+from sympy import E, Eq, Symbol, Lambda, Rational, S, FiniteSet, diff, log, solveset, simplify, solve, sqrt, sympify, expand, cancel
 from sympy.core.function import AppliedUndef
 from app.models.state import MathClaim, VerificationResult
 from m1.scorer import looks_like_prose, numeric_agreement
@@ -23,6 +24,8 @@ logger = structlog.get_logger()
 _TOTAL_TIMEOUT = 90
 # Max time per individual claim (seconds) — avoids SymPy simplify hangs
 _CLAIM_TIMEOUT = 8
+# A claim still running after this is abandoned and stays unverified.
+_CLAIM_HARD_TIMEOUT = 30
 
 # Macros ``_manual_parse`` knows how to rewrite into SymPy input. A claim that
 # only uses these is worth handing to the parser even when it contains braces;
@@ -34,6 +37,85 @@ _VERIFIABLE_MACROS = frozenset({
     "le", "leq", "ge", "geq",
     "lg", "log", "ln", "dfrac", "tfrac",
 })
+
+
+# Names that the product and quotient rules conventionally define without an
+# argument: u = x^2, v = e^x.
+_BARE_FUNCTIONS = frozenset({"u", "v", "w"})
+
+# Marks a derivative that has no formula in scope: a rule such as
+# (uv)' = u'v + uv', or implicit differentiation with y'. Never evaluated.
+_DERIVATIVE_MARKER = re.compile(r"_dI+$")
+
+
+def _matching(text: str, start: int) -> int:
+    """Index of the bracket closing the one at `start`, or -1."""
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] in "([":
+            depth += 1
+        elif text[index] in ")]":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _opening(text: str, end: int) -> int:
+    """Index of the bracket opening the one closing at `end`, or -1."""
+    depth = 0
+    for index in range(end, -1, -1):
+        if text[index] in ")]":
+            depth += 1
+        elif text[index] in "([":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _rewrite_derivatives(s: str) -> str:
+    """Turn derivative notation into calls SymPy can evaluate or mark.
+
+    d/dx[...] becomes DIFF(...), (expr)' becomes PRIME(expr), f'(x) becomes
+    the function f_dI(x) and a bare u' the symbol u_dI (no digit, which the
+    parser would read as a factor). The checker resolves f_dI and u_dI from
+    the definitions in scope and otherwise treats the line as a rule, never
+    as a false statement.
+    """
+    operator = re.compile(r"\(\(d\)/\(d([a-z])\)\)\s*\*?\s*(?=[(\[])")
+    while (match := operator.search(s)) is not None:
+        close = _matching(s, match.end())
+        if close < 0:
+            break
+        inner = s[match.end() + 1:close]
+        s = f"{s[:match.start()]}DIFF(({inner}),{match[1]}){s[close + 1:]}"
+    while (index := s.find(")'")) >= 0:
+        open_ = _opening(s, index)
+        if open_ < 0:
+            break
+        s = f"{s[:open_]}PRIME({s[open_:index + 1]}){s[index + 2:]}"
+    # f'(x) is a call; a bare u' is closed in parentheses so that u'v and
+    # uv' read as products.
+    s = re.sub(r"([A-Za-z](?:_[A-Za-z\d]+)?)('+)(?=\()",
+               lambda m: f"{m[1]}_d{'I' * len(m[2])}", s)
+    s = re.sub(r"([A-Za-z](?:_[A-Za-z\d]+)?)('+)",
+               lambda m: f"({m[1]}_d{'I' * len(m[2])})", s)
+    return s
+
+
+def _derivative(expression, variable):
+    others = getattr(expression, "free_symbols", set()) - {variable}
+    if others:
+        return Symbol("implicit_dI")
+    return diff(expression, variable)
+
+
+def _prime(expression):
+    symbols = getattr(expression, "free_symbols", set())
+    if len(symbols) != 1:
+        return Symbol("rule_dI")
+    return diff(expression, next(iter(symbols)))
 
 
 class MathChecker:
@@ -63,9 +145,9 @@ class MathChecker:
         Run full mathematical verification on the LaTeX content.
 
         Returns a VerificationResult with details on every claim checked.
-        The whole pass is bounded by ``_TOTAL_TIMEOUT``; claims run in-process
-        (SymPy is already loaded in this interpreter — a thread pool caused
-        spurious timeouts on Windows when workers first touched SymPy).
+        The whole pass is bounded by ``_TOTAL_TIMEOUT``. Each claim runs in its
+        own worker thread with a generous hard limit, ``_CLAIM_HARD_TIMEOUT``;
+        a claim that exceeds it is abandoned and stays unverified.
         """
         self._function_definitions = {}
         self._scope_problem_cache = {}
@@ -99,8 +181,12 @@ class MathChecker:
 
             claim_start = time.monotonic()
             try:
-                self._verify_claim(claim)
-                if time.monotonic() - claim_start > _CLAIM_TIMEOUT:
+                if not self._verify_within_hard_limit(claim):
+                    claim.is_correct = None
+                    claim.error_message = "Claim verification timed out"
+                    logger.warning("claim_verification_abandoned",
+                                   claim=claim.latex_expression[:80], seconds=_CLAIM_HARD_TIMEOUT)
+                elif time.monotonic() - claim_start > _CLAIM_TIMEOUT:
                     claim.is_correct = None
                     claim.error_message = "Claim verification timed out"
                     logger.warning(
@@ -142,6 +228,30 @@ class MathChecker:
 
         return result
 
+    def _verify_within_hard_limit(self, claim: MathClaim) -> bool:
+        """Verify a copy of the claim; give up on it after a hard deadline.
+
+        A SymPy call cannot be interrupted, and one pathological expression
+        once held a whole release check for twenty minutes. The worker is
+        abandoned instead: the claim stays unverified (never approved), and
+        its late result can no longer change this verification.
+        """
+        work = claim.model_copy()
+        done = threading.Event()
+
+        def run() -> None:
+            try:
+                self._verify_claim(work)
+            finally:
+                done.set()
+
+        threading.Thread(target=run, name="math-claim", daemon=True).start()
+        if not done.wait(_CLAIM_HARD_TIMEOUT):
+            return False
+        for field in type(claim).model_fields:
+            setattr(claim, field, getattr(work, field))
+        return True
+
     # ------------------------------------------------------------------
     # Extraction
     # ------------------------------------------------------------------
@@ -178,6 +288,18 @@ class MathChecker:
                 if segment.count("=") != 1:
                     continue
                 lhs, rhs = segment.split("=")
+                if lhs.strip() in _BARE_FUNCTIONS and rhs.strip():
+                    # u = x^2 in a product-rule solution: a function of its
+                    # single variable. Anything else is not a definition.
+                    try:
+                        expression = self._manual_parse(rhs.strip().rstrip(","))
+                    except Exception:
+                        expression = None
+                    symbols = getattr(expression, "free_symbols", set())
+                    if (len(symbols) == 1 and str(next(iter(symbols))) != lhs.strip()
+                            and not expression.has(AppliedUndef)):
+                        yield lhs.strip(), next(iter(symbols)), expression
+                    continue
                 signature = re.fullmatch(r"([a-zA-Z](?:_\{?\w+\}?)?)\(([a-zA-Z])\)", lhs.strip())
                 if not signature or not rhs.strip().rstrip(","):
                     continue
@@ -500,6 +622,13 @@ class MathChecker:
             claim.error_message = "Could not parse one or both sides"
             return
 
+        if any(_DERIVATIVE_MARKER.search(str(symbol)) for side in (lhs, rhs)
+               for symbol in getattr(side, "free_symbols", ())):
+            # (uv)' = u'v + uv' or 2x + 2y y' = 0: a rule or implicit
+            # differentiation with no formula to differentiate.
+            self._not_an_assertion(claim, "Derivative rule without a formula in this exercise")
+            return
+
         undefined = [call for side in (lhs, rhs) if hasattr(side, "atoms")
                      for call in side.atoms(AppliedUndef)]
         if undefined:
@@ -622,7 +751,12 @@ class MathChecker:
             if getattr(diff, "free_symbols", None):
                 # A rule box also states formulas such as y - y_1 = a(x - x_1);
                 # its identities are caught as rewrites with the same unknowns.
-                identity = self._context_claims_identity(claim.context)
+                # f'(x) = 2x e^x states a derivative for every x; f'(x) = 0,
+                # with a constant side, is an equation to solve.
+                states_derivative = bool(
+                    re.search(r"'|\\frac\{d\}\{d[a-z]\}", expr_str)
+                    and getattr(lhs, "free_symbols", None) and getattr(rhs, "free_symbols", None))
+                identity = states_derivative or self._context_claims_identity(claim.context)
                 if not identity and self._verify_equation_solution_set(claim, lhs, rhs):
                     return
                 symbols = lhs.free_symbols | rhs.free_symbols
@@ -1050,11 +1184,32 @@ class MathChecker:
         # Manual parse only for reliability: parse_latex can hang without full antlr.
         manual = self._manual_parse(expr)
         if manual is not None and hasattr(manual, "atoms"):
+            definitions = getattr(self, "_function_definitions", {})
             for call in manual.atoms(AppliedUndef):
-                definition = getattr(self, "_function_definitions", {}).get(str(call.func))
-                if definition is not None and len(call.args) == 1:
-                    manual = manual.subs(call, definition(*call.args))
+                name, order = self._derivative_name(str(call.func))
+                definition = definitions.get(name)
+                if definition is not None and len(call.args) == 1 and (order or name not in _BARE_FUNCTIONS):
+                    manual = manual.subs(call, self._differentiated(definition, order)(*call.args))
+            # u' and u in a product-rule line refer to u = ... in the same
+            # exercise. Plain u is only replaced where a derivative is taken,
+            # so a substitution u = 3^x in an exponential equation is untouched.
+            if "'" in latex_expr or re.search(r"\\frac\{d\}\{d[a-z]\}", latex_expr):
+                for symbol in list(manual.free_symbols):
+                    name, order = self._derivative_name(str(symbol))
+                    definition = definitions.get(name)
+                    if definition is not None and (order or name in _BARE_FUNCTIONS):
+                        manual = manual.subs(symbol, self._differentiated(definition, order).expr)
         return manual
+
+    @staticmethod
+    def _derivative_name(name: str) -> tuple[str, int]:
+        match = re.fullmatch(r"(.+)_d(I+)", name)
+        return (match[1], len(match[2])) if match else (name, 0)
+
+    @staticmethod
+    def _differentiated(definition, order: int):
+        variable = definition.variables[0]
+        return Lambda(variable, diff(definition.expr, variable, order) if order else definition.expr)
 
     def _manual_parse(self, expr: str):
         """Manual fallback parser for common LaTeX math patterns."""
@@ -1092,7 +1247,12 @@ class MathChecker:
                 s_new,
             )
 
-            # 4. Convert \sqrt{x} -> sqrt(x)
+            # 4. Convert \sqrt[n]{x} -> ((x)**(1/(n))) and \sqrt{x} -> sqrt(x)
+            s_new = re.sub(
+                r'\\sqrt\[([^\[\]{}]+)\]\{([^{}]+)\}',
+                r'((\2)**(1/(\1)))',
+                s_new,
+            )
             s_new = re.sub(
                 r'\\sqrt\{([^{}]+)\}',
                 r'sqrt(\1)',
@@ -1135,19 +1295,34 @@ class MathChecker:
         # 3\lg(x), (3+5-2)\lg(x) and x \lg 5 multiply by the logarithm.
         s = re.sub(r"(?<=[\w)}.])\s*\\(lg|ln|log)\b", r"*\\\1", s)
         s = s.replace('\\', '')
+        s = _rewrite_derivatives(s)
         # School notation commonly omits multiplication in 2x and 3(x+1).
         s = re.sub(r"(?<=\d)(?=[a-df-zA-DF-Z(]|[eE](?![+-]?\d))", "*", s)
         s = re.sub(r"\)(?=\()", ")*", s)
+        # (x + 1)^2 e^x and 2x e^{-2x}: a space or a closing parenthesis
+        # before the next factor is multiplication. A space between two
+        # digits (4 340) stays ambiguous and unparsed.
+        s = re.sub(r"\)(?=[A-Za-z\d])", ")*", s)
+        s = re.sub(r"(?<=[\w)])\s+(?=[A-Za-z(]|\d)",
+                   lambda m: m[0] if (s[m.start() - 1].isdigit() and s[m.end()].isdigit())
+                   or re.search(r"(?:^|\W)(?:sqrt|lg|ln|log|exp|DIFF|PRIME)$", s[:m.start()])
+                   else "*", s)
         s = re.sub(r"\b([abcd])([xyz])\b", r"\1*\2", s)
         s = re.sub(r"\b([abcd])\s*\(", r"\1*(", s)
         # x(x^2 - 3) is a product unless x is a defined function.
-        functions = set(getattr(self, "_function_definitions", {}))
+        definitions = getattr(self, "_function_definitions", {})
+        functions = set(definitions) - _BARE_FUNCTIONS
+        # u(x) and v(x) name the functions of a product-rule solution.
+        s = re.sub(r"\b([uvw])\(([a-z])\)",
+                   lambda m: m[1] if m[1] in definitions
+                   and str(definitions[m[1]].variables[0]) == m[2] else m[0], s)
         s = re.sub(r"\b([xyztuvwkmn])\s*\(",
                    lambda m: m[0] if m[1] in functions else f"{m[1]}*(", s)
 
         try:
             return sympify(s, locals={"lg": lambda value: log(value, 10),
-                                      "log": lambda value: log(value, 10), "ln": log})
+                                      "log": lambda value: log(value, 10), "ln": log,
+                                      "e": E, "DIFF": _derivative, "PRIME": _prime})
         except Exception:
             return None
 
@@ -1274,6 +1449,12 @@ def format_errors_for_agent(result: VerificationResult, *, max_claims: int | Non
 
     if result.unparseable_claims:
         lines.append(f"=== KUNNE IKKE VERIFISERE ({len(result.unparseable_claims)}) ===\n")
+        lines.append(
+            "Disse uttrykkene er ikke nødvendigvis feil, men kontrollen kan ikke lese dem. "
+            "Et tomt svar løser ikke problemet: skriv hvert uttrykk om til enkel standardnotasjon "
+            r"(for eksempel 10^{1/3} i stedet for \sqrt[3]{10}), del lange kjeder i kortere "
+            "likheter og flytt tekst og enheter ut av formelen.\n"
+        )
         for i, c in enumerate(uncertain, 1):
             lines.append(f"UVISS {i}: {c.latex_expression}")
             if c.error_message:

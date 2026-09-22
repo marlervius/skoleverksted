@@ -19,7 +19,7 @@ from Skoleverksted.backend.platform.quality_runtime import run_bounded_sync
 logger = structlog.get_logger()
 
 _MAX_REPAIRS = 10
-_MAX_STALLED_REPAIRS = 2  # Model calls for one repair when a response is unusable.
+_MAX_STALLED_REPAIRS = 3  # Extra model calls for one repair when a response is unusable.
 _MAX_STALLED_ROUNDS = 3  # Verified rounds without improvement; the last ones escalate.
 _CLAIMS_PER_REPAIR = 6  # Leave space for language/source edits in the eight-edit response.
 # One whole-chapter round (fact audit, math proof, rubric) can take minutes.
@@ -29,6 +29,8 @@ _RELEASE_BUDGET_SECONDS = 540
 _MODEL_CALL_SECONDS = 150
 # A repair is pointless unless it and the re-verification of its result fit.
 _MIN_REPAIR_ROUND_SECONDS = 90
+# A proven document is not held back for long by pedagogical suggestions.
+_MAX_ADVISORY_REPAIRS = 2
 
 
 class _ReviewRequired(ValueError):
@@ -120,6 +122,7 @@ def prepare_release(state: PipelineState) -> bool:
     repair_error = ""
     best = None
     stalled = 0
+    advisory_rounds = 0
     state.teacher_approved_at = ""
     state.automatic_approved_revision = ""
     state.approved_digest = ""
@@ -186,12 +189,14 @@ def prepare_release(state: PipelineState) -> bool:
                     )
             budget_spent = (attempt == _MAX_REPAIRS or stalled >= _MAX_STALLED_ROUNDS
                             or deadline - time.monotonic() < _MIN_REPAIR_ROUND_SECONDS)
-            if not blocking and (not advisory or budget_spent):
+            if not blocking:
+                advisory_rounds += 1
+            if not blocking and (not advisory or budget_spent
+                                 or advisory_rounds > _MAX_ADVISORY_REPAIRS):
                 return _release(state, step, body, quality, attempt, advisory)
             if budget_spent:
                 break
             feedback = "\n".join([
-                _ESCALATION if stalled and blocking else "",
                 format_errors_for_agent(mv, max_claims=_CLAIMS_PER_REPAIR),
                 format_quality_report_for_author(state.content_quality),
                 *(f"SPRÅKFEIL SOM MÅ RETTES: {i.message}" for i in language_issues),
@@ -205,7 +210,10 @@ def prepare_release(state: PipelineState) -> bool:
             for _call in range(_MAX_STALLED_REPAIRS + 1):
                 if deadline - time.monotonic() < _MIN_REPAIR_ROUND_SECONDS:
                     break
-                prompt = edit_prompt(body, "\n".join([feedback, repair_error]))
+                # A stalled round, or an unusable first response, escalates to
+                # rewriting the affected exercise instead of asking again.
+                escalate = _ESCALATION if blocking and (stalled or _call) else ""
+                prompt = edit_prompt(body, "\n".join(filter(None, [escalate, feedback, repair_error])))
                 step.retries += 1
                 try:
                     response = run_bounded_sync(
