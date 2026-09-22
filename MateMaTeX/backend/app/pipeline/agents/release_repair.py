@@ -29,6 +29,8 @@ _RELEASE_BUDGET_SECONDS = 540
 _MODEL_CALL_SECONDS = 150
 # A repair is pointless unless it and the re-verification of its result fit.
 _MIN_REPAIR_ROUND_SECONDS = 90
+# A proven document is not held back for long by pedagogical suggestions.
+_MAX_ADVISORY_REPAIRS = 2
 
 
 class _ReviewRequired(ValueError):
@@ -120,6 +122,7 @@ def prepare_release(state: PipelineState) -> bool:
     repair_error = ""
     best = None
     stalled = 0
+    advisory_rounds = 0
     state.teacher_approved_at = ""
     state.automatic_approved_revision = ""
     state.approved_digest = ""
@@ -186,7 +189,10 @@ def prepare_release(state: PipelineState) -> bool:
                     )
             budget_spent = (attempt == _MAX_REPAIRS or stalled >= _MAX_STALLED_ROUNDS
                             or deadline - time.monotonic() < _MIN_REPAIR_ROUND_SECONDS)
-            if not blocking and (not advisory or budget_spent):
+            if not blocking:
+                advisory_rounds += 1
+            if not blocking and (not advisory or budget_spent
+                                 or advisory_rounds > _MAX_ADVISORY_REPAIRS):
                 return _release(state, step, body, quality, attempt, advisory)
             if budget_spent:
                 break

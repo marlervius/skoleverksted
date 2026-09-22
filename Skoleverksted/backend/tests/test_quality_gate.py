@@ -442,6 +442,25 @@ def test_fabricated_or_irrelevant_source_does_not_resolve_claim():
     assert len(result.quarantine) == 0
 
 
+@pytest.mark.parametrize("content", [
+    r"$2x - 4 = 0 \implies x = 2$",
+    r"\[ 4^x - 5 \cdot 2^x + 4 = 0 \]",
+    r"$u^2 - 10u + 9 = 0$",
+    r"$(x - 1)(x - 5) = 0$ og $(x + 1) - 4 = 0$",
+    r"$f''(2) = 18 > 0$ og $f''(-1) = -18 < 0$",
+    r"$f'(2) = 4(2) - 4 = 4$",
+    r"$V''(10) = -\frac{3}{2}(10) = -15$",
+])
+def test_math_gate_ignores_the_tail_of_an_equation_with_unknowns(content):
+    """Production regression: "2x - 4 = 0" was read as the false claim "- 4 = 0"."""
+    assert deterministic_math_failures(content) == []
+
+
+def test_math_gate_still_blocks_a_whole_false_statement_next_to_prose():
+    assert deterministic_math_failures("Altså er 3 + 4 = 8.")
+    assert deterministic_math_failures(r"$x = 2 + 2 = 5$")
+
+
 def test_math_is_checked_deterministically():
     assert deterministic_math_failures("2 + 2 = 5") == ["2 + 2 = 5"]
     assert deterministic_math_failures("2 + 2 = 4") == []

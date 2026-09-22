@@ -250,6 +250,15 @@ def deterministic_math_failures(content: str) -> list[str]:
         after = content[match.end():].lstrip()
         if before and before[-1] in "^*/+-{(}\\":
             continue
+        # f''(2) = 18 and V'(10) = -15 evaluate a function: the match starts
+        # inside its argument list.
+        if match.start() and content[match.start() - 1] in "')]}":
+            continue
+        # 2x - 4 = 0 or (x + 1) - 4 = 0: the left side continues with a
+        # variable or a bracket, so "- 4 = 0" is only its tail.
+        if (match.group(1).lstrip()[:1] in "+-" and before
+                and (before[-1].isalnum() or before[-1] in "')]}")):
+            continue
         if after and (after[0].isalnum() or after[0] in "^{)}*/+-"):
             continue
         left, right = (part.strip().rstrip(".").replace(",", ".") for part in match.groups())
