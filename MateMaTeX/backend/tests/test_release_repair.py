@@ -108,13 +108,46 @@ def test_provider_timeout_is_terminal(monkeypatch, state):
     assert not state.pdf_base64
 
 
-def test_two_stalled_repairs_stop_even_when_model_changes_text(monkeypatch, state):
+def test_stalled_repairs_stop_even_when_model_changes_text(monkeypatch, state):
     model = Mock()
-    model.invoke.side_effect = [json.dumps({"edits": [{"before": f"$2+2={before}$", "after": f"$2+2={after}$"}]}) for before, after in [(5, 6), (6, 7)]]
+    model.invoke.side_effect = [json.dumps({"edits": [{"before": f"$2+2={before}$", "after": f"$2+2={after}$"}]}) for before, after in [(5, 6), (6, 7), (7, 8)]]
     monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
     assert not release_repair.prepare_release(state)
-    assert model.invoke.call_count == 2
+    assert model.invoke.call_count == release_repair._MAX_STALLED_ROUNDS
     assert state.status == PipelineStatus.FAILED
+    # Rounds without progress escalate to rewriting the affected exercise.
+    assert "ESKALERING" not in model.invoke.call_args_list[0].args[1]
+    assert "ESKALERING" in model.invoke.call_args_list[1].args[1]
+
+
+def test_a_repair_that_adds_errors_is_reverted_to_the_best_revision(monkeypatch, state):
+    state.full_document = r"\begin{document}$2+2=5$ og $3+3=6$\end{document}"
+    model = Mock()
+    model.invoke.side_effect = [
+        json.dumps({"edits": [{"before": "$3+3=6$", "after": "$3+3=7$"}]}),
+        json.dumps({"edits": [{"before": "$2+2=5$", "after": "$2+2=4$"}]}),
+    ]
+    monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
+    assert release_repair.prepare_release(state)
+    # The second repair is made against the best revision, not the worse one.
+    second_prompt = model.invoke.call_args_list[1].args[1]
+    assert "ga flere feil og ble forkastet" in second_prompt
+    assert "$3+3=7$" not in second_prompt.split("DOKUMENT:")[1]
+    assert state.final_latex_body == "$2+2=4$ og $3+3=6$"
+
+
+def test_rubric_is_not_spent_while_mathematics_is_unproven(monkeypatch, state):
+    state.request = GenerationRequest(grade="VG1 1T", topic="Algebra", material_type="kapittel",
+                                      include_exercises=False, include_theory=False)
+    rubric = Mock(return_value=(95, []))
+    monkeypatch.setattr("app.verification.semantic_quality.evaluate_semantic_quality", rubric)
+    from app.models.state import ContentQualityReport
+    monkeypatch.setattr(release_repair, "evaluate_content_quality", lambda *a: ContentQualityReport(passed=True, score=95))
+    model = Mock()
+    model.invoke.return_value = json.dumps({"edits": [{"before": "$2+2=5$", "after": "$2+2=4$"}]})
+    monkeypatch.setattr(release_repair, "LLMInterface", lambda **kw: model)
+    assert release_repair.prepare_release(state)
+    assert rubric.call_count == 1  # Only the proven revision is reviewed.
 
 
 def test_finalize_compiles_the_repaired_revision(monkeypatch, state):

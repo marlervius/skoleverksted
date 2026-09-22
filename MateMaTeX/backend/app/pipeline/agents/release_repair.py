@@ -9,7 +9,7 @@ import structlog
 from app.models.llm import LLMInterface
 from app.models.state import AgentRole, AgentStep, PipelineState, PipelineStatus
 from app.pipeline.cancel import is_cancelled
-from app.pipeline.document_edits import apply_edits, edit_prompt
+from app.pipeline.document_edits import apply_edits_report, edit_prompt
 from app.public_errors import RELEASE_VERIFICATION_ERROR
 from app.verification.math_checker import MathChecker, format_errors_for_agent
 from app.verification.content_quality import evaluate_content_quality, format_quality_report_for_author
@@ -19,12 +19,13 @@ from Skoleverksted.backend.platform.quality_runtime import run_bounded_sync
 logger = structlog.get_logger()
 
 _MAX_REPAIRS = 10
-_MAX_STALLED_REPAIRS = 2
+_MAX_STALLED_REPAIRS = 2  # Model calls for one repair when a response is unusable.
+_MAX_STALLED_ROUNDS = 3  # Verified rounds without improvement; the last ones escalate.
 _CLAIMS_PER_REPAIR = 6  # Leave space for language/source edits in the eight-edit response.
 # One whole-chapter round (fact audit, math proof, rubric) can take minutes.
 # The budget bounds how long repairs may continue; it never cuts a started
 # verification short, because an unverified document cannot be released.
-_RELEASE_BUDGET_SECONDS = 360
+_RELEASE_BUDGET_SECONDS = 540
 _MODEL_CALL_SECONDS = 150
 # A repair is pointless unless it and the re-verification of its result fit.
 _MIN_REPAIR_ROUND_SECONDS = 90
@@ -32,6 +33,16 @@ _MIN_REPAIR_ROUND_SECONDS = 90
 
 class _ReviewRequired(ValueError):
     """A checked draft remains unresolved after the bounded repair budget."""
+
+
+_ESCALATION = (
+    "ESKALERING: Tidligere reparasjoner løste ikke problemene under. For hver oppgave eller "
+    "hvert eksempel som fortsatt har feil eller ukontrollerbar matematikk: erstatt hele "
+    "oppgaveteksten og hele løsningen med en ny oppgave av samme type og nivå, med enkle "
+    "tall, og regn den ut på nytt trinn for trinn. Skriv hvert svar på formen x = verdi og "
+    "hver utregning som en kjede av likheter i standard LaTeX (\\frac, \\cdot, \\sqrt). "
+    "Kopier before-teksten nøyaktig fra dokumentet."
+)
 
 
 def _release(state: PipelineState, step: AgentStep, body: str, quality, repairs: int,
@@ -55,12 +66,42 @@ def _release(state: PipelineState, step: AgentStep, body: str, quality, repairs:
     return True
 
 
+def _run_rubric(state: PipelineState, body: str) -> list:
+    """Advisory semantic review of a machine-proven chapter; never blocking."""
+    from app.verification.semantic_quality import evaluate_semantic_quality
+    try:
+        score, issues = run_bounded_sync(
+            lambda: evaluate_semantic_quality(body, state.request),
+            timeout_seconds=_MODEL_CALL_SECONDS,
+            cancel_check=lambda: is_cancelled(state.job_id),
+            operation_name="final content quality check",
+        )
+    except Exception as exc:
+        if is_cancelled(state.job_id):
+            raise
+        # The rubric is advisory. Its unavailability is reported
+        # honestly, but cannot fail a mathematically proven document.
+        logger.warning("release_rubric_unavailable", job_id=state.job_id,
+                       error=str(exc), error_type=type(exc).__name__)
+        state.content_quality.semantic_summary = (
+            "Den faglige KI-vurderingen kunne ikke fullføres denne gangen.")
+        return []
+    state.content_quality.semantic_score = score
+    state.content_quality.issues.extend(issues)
+    if score < 70:
+        state.content_quality.passed = False
+        state.content_quality.score = min(state.content_quality.score, score)
+    return issues
+
+
 def prepare_release(state: PipelineState) -> bool:
     """Repair in small batches after layout; every mutation gets a fresh audit.
 
     The earlier author budget may already be spent. This separate, bounded
     budget gives large chapters enough rounds while progress is being made.
-    Two stalled repairs, ten total repairs, or the deadline stop the loop.
+    Three rounds without improvement, ten total repairs, or the deadline stop
+    the loop. A repair that makes the verified result worse is reverted, and
+    stalled rounds escalate to rewriting the affected exercise.
     An unresolved draft never inherits an earlier PDF or approval.
 
     A document is released only when every machine-provable check passes.
@@ -77,7 +118,7 @@ def prepare_release(state: PipelineState) -> bool:
     deadline = time.monotonic() + _RELEASE_BUDGET_SECONDS
     seen = set()
     repair_error = ""
-    previous_problems = None
+    best = None
     stalled = 0
     state.teacher_approved_at = ""
     state.automatic_approved_revision = ""
@@ -100,40 +141,20 @@ def prepare_release(state: PipelineState) -> bool:
             state.math_verification = MathChecker().verify(body)
             state.content_quality = evaluate_content_quality(body, state.request)
             rules_passed = state.content_quality.passed
-            semantic_issues = []
-            if state.request.material_type == "kapittel":
-                from app.verification.semantic_quality import evaluate_semantic_quality
-                try:
-                    score, issues = run_bounded_sync(
-                        lambda: evaluate_semantic_quality(body, state.request),
-                        timeout_seconds=_MODEL_CALL_SECONDS,
-                        cancel_check=lambda: is_cancelled(state.job_id),
-                        operation_name="final content quality check",
-                    )
-                except Exception as exc:
-                    if is_cancelled(state.job_id):
-                        raise
-                    # The rubric is advisory. Its unavailability is reported
-                    # honestly, but cannot fail a mathematically proven document.
-                    logger.warning("release_rubric_unavailable", job_id=state.job_id,
-                                   error=str(exc), error_type=type(exc).__name__)
-                    state.content_quality.semantic_summary = (
-                        "Den faglige KI-vurderingen kunne ikke fullføres denne gangen.")
-                else:
-                    state.content_quality.semantic_score = score
-                    state.content_quality.issues.extend(issues)
-                    semantic_issues = issues
-                    if score < 70:
-                        state.content_quality.passed = False
-                        state.content_quality.score = min(state.content_quality.score, score)
             mv = state.math_verification
             language_issues = [i for i in state.content_quality.issues if i.code == "language"]
             # Only machine-provable defects withhold the document. The rubric's
             # pedagogical suggestions are opinions: they steer every remaining
             # repair round, but a proven document is never held back — and never
             # handed to a teacher for manual sign-off — because of them.
-            blocking = (not mv.all_correct or mv.claims_incorrect or mv.claims_unparseable
-                        or not quality.source_approved or not rules_passed or language_issues)
+            blocking = bool(not mv.all_correct or mv.claims_incorrect or mv.claims_unparseable
+                            or not quality.source_approved or not rules_passed or language_issues)
+            semantic_issues = []
+            # The advisory rubric is a slow model call. While mathematics is
+            # unproven it cannot change the outcome, so the budget goes to
+            # repairs instead; it runs once the machine checks pass.
+            if state.request.material_type == "kapittel" and not blocking:
+                semantic_issues = _run_rubric(state, body)
             advisory = bool(semantic_issues) or state.content_quality.semantic_score < 70
             # Compare verified problems, not merely whether the model changed
             # text. Rewording an unresolved claim cannot buy unlimited retries.
@@ -145,16 +166,32 @@ def prepare_release(state: PipelineState) -> bool:
                 len(state.content_quality.issues),
                 100 - state.content_quality.score,
             )
-            if previous_problems is not None:
-                stalled = 0 if problems < previous_problems else stalled + 1
-            previous_problems = problems
-            budget_spent = (attempt == _MAX_REPAIRS or stalled >= _MAX_STALLED_REPAIRS
+            if best is None or problems < best[0]:
+                best = (problems, body, quality, state.math_verification,
+                        state.content_quality, blocking, advisory, language_issues)
+                stalled = 0
+            else:
+                stalled += 1
+                if problems > best[0]:
+                    # A repair that makes the verified result worse is discarded:
+                    # the next repair starts again from the best revision.
+                    logger.info("release_repair_reverted", job_id=state.job_id,
+                                attempt=attempt, problems=problems, best=best[0])
+                    (_, body, quality, state.math_verification, state.content_quality,
+                     blocking, advisory, language_issues) = best
+                    mv = state.math_verification
+                    repair_error = (
+                        "Forrige reparasjon ga flere feil og ble forkastet. Dokumentet under "
+                        "er den beste kontrollerte versjonen; rett problemene på en annen måte."
+                    )
+            budget_spent = (attempt == _MAX_REPAIRS or stalled >= _MAX_STALLED_ROUNDS
                             or deadline - time.monotonic() < _MIN_REPAIR_ROUND_SECONDS)
             if not blocking and (not advisory or budget_spent):
                 return _release(state, step, body, quality, attempt, advisory)
             if budget_spent:
                 break
             feedback = "\n".join([
+                _ESCALATION if stalled and blocking else "",
                 format_errors_for_agent(mv, max_claims=_CLAIMS_PER_REPAIR),
                 format_quality_report_for_author(state.content_quality),
                 *(f"SPRÅKFEIL SOM MÅ RETTES: {i.message}" for i in language_issues),
@@ -180,9 +217,12 @@ def prepare_release(state: PipelineState) -> bool:
                         cancel_check=lambda: is_cancelled(state.job_id),
                         operation_name="automatic mathematics release repair",
                     )
-                    candidate = apply_edits(body, response)
+                    candidate, rejected = apply_edits_report(body, response)
                     if candidate in seen:
                         raise ValueError("Reparasjonen ga ingen ny endring")
+                    if rejected:
+                        logger.info("release_repair_partial", job_id=state.job_id,
+                                    attempt=attempt + 1, rejected=rejected[:4])
                     break
                 except Exception as exc:
                     if is_cancelled(state.job_id):

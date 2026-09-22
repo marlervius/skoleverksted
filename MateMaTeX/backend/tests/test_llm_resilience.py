@@ -108,6 +108,17 @@ class PublicGenerationErrorTests(unittest.TestCase):
             "KI-genereringen feilet midlertidig. Prøv igjen.",
         )
 
+    def test_pipeline_check_failures_are_not_reported_as_model_failures(self):
+        for message in (
+            "Sluttkontrollen kunne ikke verifisere dokumentet. Eksport er stoppet.",
+            "PDF-en kunne ikke kompileres etter automatiske reparasjonsforsøk. "
+            "Materialet leveres ikke; prøv genereringen på nytt.",
+            "Den verifiserte teksten kunne ikke kompileres. Materialet leveres ikke.",
+            "Ny kompilering etter kvalitetskontroll feilet. Materialet leveres ikke.",
+            "Oppdelt generering nådde tidsgrensen eller ble avbrutt",
+        ):
+            self.assertEqual(public_generation_error(message), message)
+
     def test_math_safety_error_remains_actionable(self):
         message = "SymPy fant 2 feil i fasiten. Materialet leveres ikke."
         self.assertEqual(public_generation_error(message), message)

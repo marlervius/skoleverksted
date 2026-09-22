@@ -229,12 +229,18 @@ def should_retry_math(
 ) -> Literal["author", "editor", "content_quality", "math_blocked"]:
     """
     After math verification: retry author if errors found and retries remain.
-    SymPy-confirmed incorrect fasit blocks delivery (grunnlov §1) unless
-    verification_fail_open is enabled. Unparseable claims may proceed with
-    a «lærer kontroll anbefales» marker in finalize.
+
+    When the author budget is spent, the draft continues to the release gate
+    instead of stopping here. ``prepare_release`` has its own bounded repair
+    budget and re-verifies every revision; SymPy-confirmed incorrect fasit
+    still never leaves the pipeline (grunnlov §1). A crashed checker, where
+    nothing was verified at all, stops at ``math_blocked``.
     """
     config = get_config()
     incorrect = state.math_verification.claims_incorrect
+
+    if state.error_message.startswith("Endelig fasitkontroll feilet"):
+        return "math_blocked"
 
     if can_retry_math(state):
         logger.info(
@@ -250,11 +256,10 @@ def should_retry_math(
     if incorrect > 0 and not config.verification_fail_open:
         logger.warning(
             "math_retry_decision",
-            decision="blocked",
+            decision="release_repair",
             errors=incorrect,
             attempts=state.math_verification_attempts,
         )
-        return "math_blocked"
 
     if not state.math_verification.all_correct:
         logger.warning(
@@ -280,17 +285,15 @@ def should_retry_math(
 def route_final_math(
     state: PipelineState,
 ) -> Literal["author", "content_quality", "math_blocked"]:
-    """Fail closed if the editor introduced an incorrect or unverifiable fasit."""
-    config = get_config()
+    """Repair an editor regression; the release gate repairs whatever remains.
+
+    Incorrect fasit is never released: ``prepare_release`` re-verifies and
+    repairs the final candidate and fails closed when it cannot.
+    """
     if state.error_message.startswith("Endelig fasitkontroll feilet"):
         return "math_blocked"
     if can_retry_math(state):
         return "author"
-    if (
-        state.math_verification.claims_incorrect > 0
-        and not config.verification_fail_open
-    ):
-        return "math_blocked"
     return "content_quality"
 
 
