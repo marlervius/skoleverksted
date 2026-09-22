@@ -106,6 +106,21 @@ class TestEquationVerification:
         result = checker.verify(latex)
         assert result.claims_incorrect == 1
 
+    def test_equation_to_solve_for_all_variable_is_not_an_identity(self, checker: MathChecker):
+        latex = r"""
+        Løs likningen for alle $u$: $u^2 - 5u + 4 = 0$.
+        Faktorisering gir $(u - 1)(u - 4) = 0$.
+        Løsningen er $u = 1$ eller $u = 4$.
+        """
+        result = checker.verify(latex)
+        assert result.claims_incorrect == 0
+        assert result.claims_unparseable == 0
+
+    def test_gjelder_for_alle_still_marks_an_explicit_identity(self, checker: MathChecker):
+        latex = r"Likningen $x^2 = x$ gjelder for alle x."
+        result = checker.verify(latex)
+        assert result.claims_incorrect == 1
+
 
 class TestMultipleEquations:
     """Test documents with multiple equations."""

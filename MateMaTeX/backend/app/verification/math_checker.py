@@ -1227,16 +1227,22 @@ class MathChecker:
 
     @staticmethod
     def _context_claims_identity(context: str) -> bool:
-        """Return True only when prose explicitly presents a symbolic identity."""
-        normalized = context.lower()
-        return any(
-            marker in normalized
-            for marker in (
-                "identitet",
-                "for alle",
-                "uansett verdien",
-                "alltid lik",
-            )
+        """Return True only when nearby prose explicitly presents an identity.
+
+        ``for alle`` is also ordinary exercise language (for example, "løs
+        for alle ``u``"). Treating that phrase by itself as an identity made
+        finite-root equations fail before their solution set could be checked.
+        """
+        normalized = re.sub(r"\s+", " ", context.lower())
+        if (
+            "identitet" in normalized
+            or "uansett verdien" in normalized
+            or "alltid lik" in normalized
+        ):
+            return True
+        return bool(
+            re.search(r"\bgjelder\b[^.!?]{0,100}\bfor alle\b", normalized)
+            or re.search(r"\bfor alle\b[^.!?]{0,100}\bgjelder\b", normalized)
         )
 
 
