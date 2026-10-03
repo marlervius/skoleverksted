@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -118,6 +118,11 @@ export default function TeachingPackagePage({ params }: { params: { id: string }
     if (next && !editing) setDraft(next.content_markdown);
   }
 
+  // The polling timer below must not restart on every render, but it should
+  // still call the latest refresh so it sees the current selection and edit state.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
   useEffect(() => {
     getTeachingPackage(params.id)
       .then((loaded) => {
@@ -133,7 +138,7 @@ export default function TeachingPackagePage({ params }: { params: { id: string }
     if (!pkg) return;
     const active = pkg.status === "planning" || pkg.status === "generating" || pkg.artifacts.some((artifact) => artifact.status === "generating");
     if (!active) return;
-    const timer = window.setTimeout(() => { void refresh().catch(() => undefined); }, 1600);
+    const timer = window.setTimeout(() => { void refreshRef.current().catch(() => undefined); }, 1600);
     return () => window.clearTimeout(timer);
   }, [pkg]);
 

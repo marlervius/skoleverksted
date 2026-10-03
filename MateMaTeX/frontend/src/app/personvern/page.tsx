@@ -12,7 +12,7 @@ export default function PersonvernPage() {
     <div className="max-w-2xl mx-auto prose prose-invert prose-sm">
       <h1 className="font-display text-3xl mb-2">Personvern</h1>
       <p className="text-text-secondary text-base not-prose mb-8">
-        MateMaTeX er bygget etter{" "}
+        Skoleverksted er bygget etter{" "}
         <Link href="/" className="text-accent-blue hover:underline">
           produktets grunnlov
         </Link>

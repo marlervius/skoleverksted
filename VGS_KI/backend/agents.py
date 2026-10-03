@@ -2,7 +2,6 @@ import os
 import re
 import json
 import logging
-import google.generativeai as genai
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, Process, LLM
 
@@ -39,9 +38,6 @@ if not google_api_key:
 
 logger.info("Using model: %s", model_name)
 logger.info("google_api_key_configured source=GOOGLE_API_KEY")
-
-# Configure the genai library with API key
-genai.configure(api_key=google_api_key)
 
 # Use CrewAI's LLM with explicit lowercase model name
 llm = LLM(

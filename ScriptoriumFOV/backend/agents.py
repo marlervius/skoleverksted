@@ -5,7 +5,6 @@ import json
 import random
 import hashlib
 import time
-import google.generativeai as genai
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, Process, LLM
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt
@@ -581,9 +580,6 @@ def _init_agents() -> None:
         )
 
     print(f"INFO: Using model: {model_name}")
-
-    # Configure the genai library with API key
-    genai.configure(api_key=google_api_key)
 
     # Set environment variables for LiteLLM fallback
     os.environ["GEMINI_API_KEY"] = google_api_key
