@@ -228,7 +228,11 @@ export function GenerationWizard({ onGenerate }: { onGenerate: () => Promise<voi
         const source = typeof project.metadata?.source_text === "string" ? project.metadata.source_text : "";
         const sourceName = typeof project.metadata?.source_name === "string" ? project.metadata.source_name : "felles temakilde";
         const sharedContext = [project.description, source ? `Bruk ${sourceName} som felles datagrunnlag:\n${source.slice(0, 6000)}` : ""].filter(Boolean).join("\n\n");
-        setRequest({ competencyGoals: project.competency_goals, extraInstructions: sharedContext || request.extraInstructions });
+        // Read the store when the project arrives, so a prefill applied above is kept.
+        setRequest({
+          competencyGoals: project.competency_goals,
+          extraInstructions: sharedContext || useAppStore.getState().request.extraInstructions,
+        });
       }).catch(() => undefined);
     }
   }, [setRequest]);

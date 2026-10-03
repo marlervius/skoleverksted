@@ -158,7 +158,6 @@ def test_package_import_can_initialize_agents_in_superapp(monkeypatch):
     monkeypatch.setattr(package_agents, "GOOGLE_MODEL", "gemini-test")
     monkeypatch.setenv("GOOGLE_API_KEY", "package-test-key")
     monkeypatch.setenv("GEMINI_API_KEY", "package-test-key")
-    monkeypatch.setattr(package_agents.genai, "configure", lambda **_kwargs: None)
     monkeypatch.setattr(package_agents, "LLM", lambda **kwargs: {"llm": kwargs})
     monkeypatch.setattr(
         package_agents,

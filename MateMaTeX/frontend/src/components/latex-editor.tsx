@@ -11,7 +11,7 @@ import {
   AlertTriangle,
   Check,
   Wand2,
-  Image,
+  Image as ImageIcon,
   Copy,
   Lightbulb,
 } from "lucide-react";
@@ -39,6 +39,7 @@ export function LatexEditor({ initialContent, onSave, onClose }: LatexEditorProp
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const compileGenRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const initialContentRef = useRef(initialContent);
 
   const triggerCompile = useCallback((latexContent: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -79,12 +80,12 @@ export function LatexEditor({ initialContent, onSave, onClose }: LatexEditorProp
   }, [content, onSave, saving]);
 
   useEffect(() => {
-    triggerCompile(content);
+    triggerCompile(initialContentRef.current);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       compileGenRef.current += 1;
     };
-  }, []);
+  }, [triggerCompile]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -165,7 +166,7 @@ export function LatexEditor({ initialContent, onSave, onClose }: LatexEditorProp
 
         <ToolbarGroup label="AI">
           <ToolbarBtn icon={<Wand2 size={12} />} label="Forenkle" onClick={() => handleAiAction("simplify")} loading={aiLoading === "simplify"} />
-          <ToolbarBtn icon={<Image size={12} />} label="Illustrasjon" onClick={() => handleAiAction("add-illustration")} loading={aiLoading === "add-illustration"} />
+          <ToolbarBtn icon={<ImageIcon size={12} />} label="Illustrasjon" onClick={() => handleAiAction("add-illustration")} loading={aiLoading === "add-illustration"} />
           <ToolbarBtn icon={<Copy size={12} />} label="Variant" onClick={() => handleAiAction("variant")} loading={aiLoading === "variant"} />
           <ToolbarBtn icon={<Lightbulb size={12} />} label="Hint" onClick={() => handleAiAction("add-hint")} loading={aiLoading === "add-hint"} />
         </ToolbarGroup>

@@ -75,6 +75,8 @@ function formatRetrievedAt(value: string) {
 
 export function TruthPassport({ passport }: { passport: TruthPassportType }) {
   const verified = passport.status === "verified";
+  // With no factual claims there is nothing to cover; 100 % would imply a measurement.
+  const hasClaims = passport.total_claims > 0;
   return (
     <section
       className={`rounded-xl border p-4 sm:p-5 ${
@@ -101,8 +103,12 @@ export function TruthPassport({ passport }: { passport: TruthPassportType }) {
         </div>
         <div className="grid grid-cols-2 gap-2 text-center">
           <div className="rounded-lg border border-white/80 bg-white px-3 py-2">
-            <div className="text-xl font-semibold text-stone-900">{passport.coverage_percent}%</div>
-            <div className="text-[10px] uppercase tracking-wide text-stone-500">kildedekning</div>
+            <div className="text-xl font-semibold text-stone-900">
+              {hasClaims ? `${passport.coverage_percent}%` : "–"}
+            </div>
+            <div className="text-[10px] uppercase tracking-wide text-stone-500">
+              {hasClaims ? "kildedekning" : "ingen påstander"}
+            </div>
           </div>
           <div className="rounded-lg border border-white/80 bg-white px-3 py-2">
             <div className="text-xl font-semibold text-stone-900">
