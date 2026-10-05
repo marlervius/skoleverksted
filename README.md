@@ -37,6 +37,15 @@ kvalitetspass, drift og offentlig API-adresse er felles.
   dokumentet til alle maskinelt beviselige kontroller er bestått, og utsteder
   godkjenningen selv for den eksakte tekstrevisjonen. Ingen lærergodkjenning
   kreves, og klienten kan ikke påstå at noe er godkjent.
+- **Norsklæring følger FOV-rammeverket.** Nivåreglene for A1–B1 står i promptene
+  og måles på den ferdige teksten: setninger over grensen (A1 10, A2 14, B1 20
+  ord), tankestrek og relativsetninger på A1–A2 gir en rådgivende
+  språknivå-rapport i forhåndsvisningen. Setninger som bryter reglene deles
+  automatisk én gang før kildekontrollen, og bare hvis resultatet beholder alle
+  tall, kildemarkører og avsnitt (`FOV_READABILITY_REPAIR=0` slår det av).
+  PDF-ene er venstrejusterte, har en «Mitt språk»-linje per begrep på A1–B1, og
+  viser begrepene før teksten på A1–A2. Rapporten er veiledning og blokkerer
+  aldri forhåndsvisning eller nedlasting.
 - **TeachingPackage** har canonical pakke-/artefakttilstand, durable parent/child-
   jobber, innholdsrevisjoner, faktapass, kvalitetspass, lærerreview, atomisk
   årsplanprojeksjon og ZIP-eksport etter godkjenning. Ikke-godkjente artefakter

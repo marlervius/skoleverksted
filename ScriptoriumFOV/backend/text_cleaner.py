@@ -24,7 +24,13 @@ def clean_ai_artifacts(text: str) -> str:
     text = re.sub(r"Wait,?\s+I\s+need\s+to[^.]*\.", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Let me\s+(think|check|verify|make sure)[^.]*\.", "", text, flags=re.IGNORECASE)
     text = re.sub(r"I (need|should|must) to[^.]*\.", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"«[^»]*»", "", text)
+    # Only leaked agent/tool chatter in guillemets is removed. Norwegian uses
+    # «...» as ordinary quotation marks, so «demokrati» must survive.
+    text = re.sub(
+        r"«[^»]*\b(?:You ONLY|have access|these tools|Action Input|Action|Thought|Observation|Final Answer)\b[^»]*»",
+        "",
+        text,
+    )
     text = re.sub(r"Thought:\s*[^\n]*\n?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Action:\s*[^\n]*\n?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Action Input:\s*[^\n]*\n?", "", text, flags=re.IGNORECASE)
@@ -242,8 +248,18 @@ def sanitize_for_typst(text: str, is_section_content: bool = False) -> str:
 # ---------------------------------------------------------------------------
 
 
-def format_vocabulary_as_list(text: str) -> str:
-    """Format vocabulary text into a Typst bulleted list with bold terms."""
+#: Typst appended to a vocabulary bullet to give the learner a writing line for
+#: the term in their own language. ``my-lang`` is defined in the document
+#: preamble (``create_typst_template``).
+NATIVE_LANGUAGE_LINE = " #linebreak() #my-lang"
+
+
+def format_vocabulary_as_list(text: str, native_language: bool = False) -> str:
+    """Format vocabulary text into a Typst bulleted list with bold terms.
+
+    With ``native_language`` every term gets a "Mitt språk" writing line, so
+    the learner can note the equivalent in their first language.
+    """
     if not text:
         return ""
 
@@ -286,6 +302,12 @@ def format_vocabulary_as_list(text: str) -> str:
                 formatted_lines.append(f"- {clean_line}")
         else:
             formatted_lines.append(f"- {clean_line}")
+
+    if native_language:
+        formatted_lines = [
+            f"{line}{NATIVE_LANGUAGE_LINE}" if line.startswith("- ") else line
+            for line in formatted_lines
+        ]
 
     return "\n".join(formatted_lines)
 
