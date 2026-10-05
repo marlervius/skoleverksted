@@ -476,6 +476,7 @@ def _lesson_preview_payload(content: dict) -> dict:
         "quality_rounds": content.get("quality_rounds") or [],
         "quality_stop_reason": content.get("quality_stop_reason", ""),
         "prompt_version": content.get("prompt_version"),
+        "readability": content.get("readability"),
     }
 
 
@@ -908,6 +909,8 @@ class LessonResponse(BaseModel):
     quality_rounds: list[dict] = Field(default_factory=list)
     quality_stop_reason: str = ""
     prompt_version: Optional[str] = None
+    # Advisory CEFR readability report for the running text; never a release gate.
+    readability: Optional[dict] = None
 
 
 class PasswordVerifyBody(BaseModel):
@@ -1327,6 +1330,7 @@ def generate_lesson_json_background(
                 "quality_stop_reason": content.get("quality_stop_reason", ""),
                 "quality_status": content.get("quality_status", ""),
                 "prompt_version": content.get("prompt_version"),
+                "readability": content.get("readability"),
             },
             quality_documents=[_content_quality_document(content)],
             review_preview=_lesson_preview_payload(content),

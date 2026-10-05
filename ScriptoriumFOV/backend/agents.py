@@ -12,9 +12,11 @@ from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attem
 if __package__:
     from .config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
     from .errors import GeminiQuotaExceededError
+    from .level_readability import analyze_readability, enforce_level_readability
 else:
     from config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
     from errors import GeminiQuotaExceededError
+    from level_readability import analyze_readability, enforce_level_readability
 
 logger = logging.getLogger(__name__)
 
@@ -115,30 +117,79 @@ def _provided_truth_sources(source_text: str | None, source_name: str | None) ->
 # Injected into text-generation prompts for consistent difficulty targeting
 # =============================================================================
 
+# The rules below follow the FOV framework. They are deliberately concrete:
+# a model's own sense of "simple Norwegian" is calibrated on native speakers,
+# so each level names the constructions it must avoid and gives a model
+# sentence. ``level_readability`` then measures the finished text.
 LEVEL_CONSTRAINTS = {
     "A1": {
         "max_sentence_words": 8,
-        "tense": "presens og enkelt preteritum",
-        "vocabulary_note": "Bruk kun de 500 vanligste norske ordene. Unngå fagord. Gjenta nøkkelord.",
-        "structure": "Enkle hovedsetninger. Ingen undersetninger med 'som', 'fordi', 'hvis'.",
+        "tense": "presens og enkel preteritum av de vanligste verbene",
+        "vocabulary_note": (
+            "Bruk kun høyfrekvente hverdagsord. Gjenta nøkkelord. Forklar hvert fagord rett etter i "
+            "parentes: «evolusjon (= forandring over tid)»."
+        ),
+        "structure": (
+            "Kun enkle hovedsetninger i rekkefølgen subjekt–verb–objekt: «Jeg spiser i dag», ikke "
+            "«I dag spiser jeg». Ingen leddsetninger, ingen relativsetninger med «som», ingen passiv, "
+            "ingen tankestrek."
+        ),
+        "key_terms": "3–4",
+        "term_definition_words": 8,
+        "writing_frame": "Jeg liker ___. / Dette er en ___.",
+        "example_good": "Jorda er gammel. Den er 4,5 milliarder år gammel. De første dyrene levde i havet.",
+        "example_bad": "Jorda ble dannet for ca. 4,5 milliarder år siden, og de første levende organismene oppsto i havet.",
     },
     "A2": {
         "max_sentence_words": 12,
-        "tense": "presens, preteritum og enkel futurum (skal/vil)",
-        "vocabulary_note": "Bruk de 1500 vanligste norske ordene. Forklar nye ord rett etter at du introduserer dem.",
-        "structure": "Enkle og noen sammensatte setninger med 'og', 'men', 'fordi'.",
+        "tense": "presens, preteritum, perfektum og enkel futurum (skal/vil)",
+        "vocabulary_note": (
+            "Bruk de 1500 vanligste norske ordene. Forklar hvert fagord første gang det brukes, rett etter i "
+            "parentes. Bruk abstrakte substantiv (forandring, utvikling, prosess) sparsomt, og gi alltid et "
+            "konkret eksempel rett etter."
+        ),
+        "structure": (
+            "Én ny idé per setning, aldri to. Du kan bruke «og», «men», «eller» og enkle årsakssetninger med "
+            "«fordi». Ikke bruk relativsetninger med «som» (skriv «Et fossil er bevart i stein. Det er veldig "
+            "gammelt.»), ikke komma med leddsetning, ikke tankestrek, ikke nominalisering («Livet utviklet seg», "
+            "ikke «utviklingen av livet») og ikke lange ledd foran verbet. Korte tidsord foran verbet er greit: "
+            "«Da kom de første dyrene.»"
+        ),
+        "key_terms": "5–6",
+        "term_definition_words": 10,
+        "writing_frame": "Hovedårsaken til ___ er ___ fordi ___.",
+        "example_good": (
+            "Jorda ble dannet for 4,5 milliarder år siden. De første cellene kom mye senere. "
+            "De var veldig enkle. De var ikke som dyr eller planter."
+        ),
+        "example_bad": (
+            "De første levende cellene kom for ca. 3,8 milliarder år siden, og de var veldig enkle – "
+            "mye enklere enn en plantecelle eller en dyrecelle i dag."
+        ),
     },
     "B1": {
         "max_sentence_words": 18,
         "tense": "alle tider inkludert perfektum og passiv",
-        "vocabulary_note": "Fagord er tillatt, men forklar alltid vanskelige ord første gang de brukes.",
-        "structure": "Varierte setninger med undersetninger og relativsetninger.",
+        "vocabulary_note": (
+            "Fagord er tillatt, men forklar vanskelige ord kort første gang de brukes. Akademisk register kan "
+            "begynne å dukke opp."
+        ),
+        "structure": (
+            "Varierte setninger med relativsetninger («som») og underordning med «selv om», «mens», «når» og "
+            "«siden». Passiv kan brukes fritt der det er faglig naturlig. Begrenset nominalisering er greit."
+        ),
+        "key_terms": "5–7",
+        "term_definition_words": 14,
+        "writing_frame": "På den ene siden kan ___ føre til ___, men på den andre siden er det nødvendig for ___.",
     },
     "B2": {
         "max_sentence_words": 25,
         "tense": "alle tider, kondisjonalis, passiv og upersonlige konstruksjoner",
         "vocabulary_note": "Avansert fagvokabular og idiomatiske uttrykk er velkomne.",
         "structure": "Komplekse setningsstrukturer. Abstrakte begreper kan introduseres.",
+        "key_terms": "5–7",
+        "term_definition_words": 14,
+        "writing_frame": "Selv om ___ er et problem, viser kildene at ___.",
     },
 }
 
@@ -216,6 +267,16 @@ def format_level_constraints(level: str, is_english: bool, difficulty_modifier: 
             f"- Ordforråd: {c.get('vocabulary_note', '')}\n"
             f"- Struktur: {c.get('structure', '')}\n"
         )
+        if c.get("key_terms") and base_level in ("A1", "A2"):
+            block += f"- Maks {c['key_terms'].split('–')[-1]} nye fagord per side\n"
+        if c.get("example_good") and c.get("example_bad"):
+            block += (
+                f"- Riktig {base_level}: «{c['example_good']}»\n"
+                f"- Feil {base_level} (for lang eller for vanskelig): «{c['example_bad']}»\n"
+                "- Test: Kan en elev som bare kan si «Jeg heter X, jeg kommer fra Y, jeg liker å spille "
+                "fotball» lese setningen? Hvis ikke, skriv den om.\n"
+                "- Tell ordene i hver setning før du leverer. Del alle setninger som er for lange.\n"
+            )
     if "sublevel_note" in c:
         block += f"- Undernivå-notat: {c['sublevel_note']}\n"
 
@@ -610,6 +671,13 @@ def _init_agents() -> None:
     Introduce subject-specific terminology but always explain difficult terms simply.
     Include varied vocabulary and more abstract concepts.
 
+    Your learners are teenagers and young adults with limited Norwegian but full cognitive ability.
+    The language is the barrier, not their intelligence: never simplify away subject depth and never
+    write childishly. Your own sense of "simple Norwegian" is calibrated on native speakers and is
+    too hard for A1/A2 learners. A sentence that feels easy to you often holds a comparison, a dash
+    and two technical terms at once, which is B1 syntax. Count the words of every sentence and split
+    the long ones. One idea per sentence at A1/A2.
+
     IMPORTANT: Write in the language specified in the task description.
     For Norwegian subjects, write in Norwegian (Bokmål).
     For English subjects, write in English.
@@ -825,6 +893,37 @@ def extract_language_exercises(text: str) -> dict:
 
     logger.warning("Could not parse language exercises JSON from AI output (first 200 chars): %s", text[:200])
     return default_result
+
+
+def _model_rewrite(prompt: str) -> str:
+    """Single plain model call used to split overlong sentences."""
+    if _llm is None:
+        raise RuntimeError("Modellen er ikke initialisert")
+    return str(_llm.call(prompt))
+
+
+def _simplify_text_for_level(text: str, level: str, is_english: bool):
+    """Split sentences that break the CEFR rules, keeping the original on any doubt.
+
+    This runs before the truth gate, so every fact is still audited against the
+    final wording. ``FOV_READABILITY_REPAIR=0`` switches it off.
+    """
+    if is_english or os.getenv("FOV_READABILITY_REPAIR", "1").strip().lower() in {"0", "false", "off", "no"}:
+        return text, None
+    try:
+        outcome = enforce_level_readability(text, level, _model_rewrite, language="nb")
+    except Exception as exc:  # noqa: BLE001 - readability must never fail a generation
+        logger.warning("readability_rewrite_error level=%s error=%s", level, exc)
+        return text, None
+    logger.info(
+        "readability_rewrite level=%s applied=%s reason=%s issues_before=%s issues_after=%s",
+        level,
+        outcome.applied,
+        outcome.reason,
+        outcome.before.get("issue_count"),
+        (outcome.after or {}).get("issue_count"),
+    )
+    return outcome.text, outcome
 
 
 @retry(
@@ -1095,7 +1194,10 @@ def generate_lesson_content(
             - Lengde: {word_count}
             - Teksten skal være faktabasert og informativ
             - Tilpass språket nøye til {level}-nivå
-            - Bruk relevante eksempler fra norsk samfunn og kultur
+            - Bruk aldersadekvate eksempler fra norsk hverdag, skole og arbeidsliv. Ikke skriv barnslig
+            - Kulturell representasjon: ikke la menn dominere som helter eller eksperter, bruk ingen
+              utdaterte kjønnsroller, ikke ha «turistperspektiv» på norsk kultur, og vis elevenes egne
+              kulturer som likeverdige bidrag
             - Del teksten inn i 2-3 avsnitt med tydelig struktur (flere hvis det er en deep dive)
             - Ikke søk etter eller ta med en bilde-URL""",
             expected_output=f"""En velskrevet, pedagogisk tekst på norsk om {topic},
@@ -1113,7 +1215,12 @@ def generate_lesson_content(
     if has_basic_tasks or has_advanced_tasks:
         sections = []
         section_letter = ord('a')
-        
+        level_rules = get_level_constraints(level, False)
+        base_level_for_tasks = level.split(".")[0].upper()
+        key_terms_range = level_rules.get("key_terms", "5–7")
+        definition_words = level_rules.get("term_definition_words", 14)
+        frame_example = level_rules.get("writing_frame", "")
+
         if is_english_subject:
             # English worksheet sections
             if options["vocabulary_tasks"]:
@@ -1203,8 +1310,9 @@ def generate_lesson_content(
             # Norwegian worksheet sections (original)
             if options["vocabulary_tasks"]:
                 sections.append(f"""{chr(section_letter)}) VIKTIGE BEGREPER
-                - Velg 5-7 nøkkelord/begreper fra teksten
+                - Velg {key_terms_range} nøkkelord/begreper fra teksten
                 - Gi en enkel definisjon av hvert begrep på {level}-nivå
+                - Definisjonen er én kort setning på maks {definition_words} ord, og den bruker ikke andre fagord
                 - Format: "Begrep: definisjon" """)
                 section_letter += 1
             
@@ -1217,10 +1325,16 @@ def generate_lesson_content(
                 section_letter += 1
                 
             if options["discussion_tasks"]:
+                discussion_starter = (
+                    "\n                - Skriv en ferdig startsetning under hvert spørsmål, slik at eleven kan "
+                    "svare muntlig til en medelev. Format: Start slik: Jeg synes ..."
+                    if base_level_for_tasks in ("A1", "A2")
+                    else ""
+                )
                 sections.append(f"""{chr(section_letter)}) DISKUSJON
                 - Lag 2 åpne spørsmål som inviterer til diskusjon
                 - Spørsmålene skal koble temaet til elevenes egne erfaringer
-                - Tilpass kompleksiteten til {level}-nivå""")
+                - Tilpass kompleksiteten til {level}-nivå{discussion_starter}""")
                 section_letter += 1
             
             # Advanced modules in Norwegian
@@ -1258,7 +1372,9 @@ def generate_lesson_content(
                   "Det er viktig fordi..."
                   "I mitt hjemland..."
                   "I Norge..."
-                - Tilpass til {level}-nivå""")
+                - Tilpass vanskeligheten til {level}-nivå. Eksempel på en ramme for dette nivået: "{frame_example}"
+                - A1 har bare én blank per ramme. B1 kan ha underordnede setninger
+                - Eleven skal få bruke morsmålet til å planlegge før de skriver på norsk""")
                 section_letter += 1
             
             if options["cultural_comparison"]:
@@ -1335,6 +1451,8 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
 
                 Språknivå for hele arbeidsarket: {level}
                 Alt innhold skal være på norsk (bokmål).
+                Instruksjoner til eleven skal være korte imperativ: «Les avsnitt 2.» «Skriv svaret.»
+                Ikke skriv «Du skal nå lese teksten og deretter ...». Ett spørsmål om gangen.
                 {teacher_key_instruction}
                 
                 IKKE inkluder noen IMAGE_URL i ditt svar.""",
@@ -1553,6 +1671,12 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
     # Parse the text to extract the image URL
     text_output, image_url = extract_image_url(raw_text_output)
 
+    # Measure the finished text against the level rules and split offending
+    # sentences once, before the truth gate audits the final wording.
+    text_output, readability_rewrite = _simplify_text_for_level(
+        text_output, level, is_english_subject
+    )
+
     # Extract the teacher answer key from the worksheet output (#4)
     teacher_key_content = ""
     if options["teacher_key"] and worksheet_output:
@@ -1623,10 +1747,16 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
             f"{text_output}"
         )
 
+    readability_report = analyze_readability(
+        text_output, level, language="en" if is_english_subject else "nb"
+    )
+    readability_report["auto_simplified"] = bool(readability_rewrite and readability_rewrite.applied)
+
     result_content = {
         "topic": topic,
         "subject": subject,
         "level": level,
+        "readability": readability_report,
         "text": text_output,
         "worksheet": worksheet_output,
         "language_exercises": language_exercises,
@@ -1645,7 +1775,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
         "quality_rounds": [item.model_dump(mode="json") for item in quality_result.rounds],
         "quality_stop_reason": quality_result.stop_reason,
         "quality_status": quality_result.quality_status,
-        "prompt_version": os.getenv("PROMPT_VERSION", "norsk-v2-grounded"),
+        "prompt_version": os.getenv("PROMPT_VERSION", "norsk-v3-fov"),
     }
 
     # Save to cache

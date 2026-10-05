@@ -66,6 +66,32 @@ export interface CommonsImageCandidate {
   review_status: "recommended" | "teacher_review";
 }
 
+export interface ReadabilityIssue {
+  code: string;
+  sentence: string;
+  words: number;
+  limit: number;
+  message: string;
+}
+
+/** Advisory CEFR readability report for the running text (never a release gate). */
+export interface ReadabilityReport {
+  level: string;
+  base_level: string;
+  applicable: boolean;
+  sentence_count: number;
+  word_count: number;
+  average_sentence_words: number;
+  longest_sentence_words: number;
+  limit_words: number | null;
+  issue_count: number;
+  issues: ReadabilityIssue[];
+  truncated: number;
+  status: "ok" | "needs_attention" | "not_applicable";
+  summary: string;
+  auto_simplified?: boolean;
+}
+
 /** JSON lesson payload from /download-json (matches backend LessonResponse). */
 export interface LessonResponse {
   topic: string;
@@ -84,4 +110,5 @@ export interface LessonResponse {
   quarantine?: Array<Record<string, unknown>>;
   quality_rounds?: Array<Record<string, unknown>>;
   quality_stop_reason?: string;
+  readability?: ReadabilityReport | null;
 }

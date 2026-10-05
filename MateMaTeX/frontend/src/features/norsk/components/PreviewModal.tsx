@@ -14,7 +14,9 @@ import {
   Trash2,
 } from "lucide-react";
 import type { CommonsImageCandidate, LessonResponse } from "../lib/fovTypes";
+import { shouldShowReadability } from "../lib/readability";
 import { TruthPassport } from "@/components/truth-passport";
+import { ReadabilityPanel } from "./ReadabilityPanel";
 
 interface Props {
   previewData: LessonResponse;
@@ -92,6 +94,9 @@ export function PreviewModal({
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-8">
           {previewData.truth_passport && (
             <TruthPassport passport={previewData.truth_passport} />
+          )}
+          {shouldShowReadability(previewData.readability) && (
+            <ReadabilityPanel report={previewData.readability} />
           )}
           {(previewData.quarantine?.length ?? 0) > 0 && (
             <section className="rounded-xl border border-amber-300 bg-amber-50 p-4">

@@ -62,6 +62,13 @@ def test_clean_ai_artifacts_removes_guillemet_content():
     assert "Normal tekst." in result
 
 
+def test_clean_ai_artifacts_keeps_norwegian_quotation_marks():
+    text = "Ordet «demokrati» betyr folkestyre. Start slik: «Jeg synes at ...»"
+    result = clean_ai_artifacts(text)
+    assert "«demokrati»" in result
+    assert "«Jeg synes at ...»" in result
+
+
 # ---------------------------------------------------------------------------
 # clean_section_header
 # ---------------------------------------------------------------------------
