@@ -135,6 +135,7 @@ EXPORT_CONTRACTS: frozenset[str] = frozenset(
         "fag.docx",
         "norsk.pdf",
         "norsk.zip",
+        "norsk.trainer",
         "matematikk.pdf",
         "matematikk.docx",
         "matematikk.pptx",

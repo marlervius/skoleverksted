@@ -17,6 +17,7 @@ import {
   BookOpen,
   Languages,
   Image as ImageIcon,
+  GraduationCap,
 } from "lucide-react";
 
 import { GenerationStatus } from "../components/GenerationStatus";
@@ -55,6 +56,7 @@ import {
   progressErrorMessage,
   progressReviewMessage,
 } from "../lib/polling";
+import { canOfferTrainer, trainerUrl } from "../lib/trainer";
 import { serviceBackendUrl } from "@/lib/backend-url";
 
 // ---------------------------------------------------------------------------
@@ -112,6 +114,8 @@ export default function HomeContent() {
   // --- Generation state ---
   const [status, setStatus] = useState<Status>("idle");
   const [errorMessage, setErrorMessage] = useState("");
+  const [trainerError, setTrainerError] = useState("");
+  const [trainerBusy, setTrainerBusy] = useState(false);
   const [progress, setProgress] = useState<{ step: number; totalSteps: number; message: string } | null>(null);
   const [generationId, setGenerationId] = useState<string | null>(null);
   const [isDual, setIsDual] = useState(false);
@@ -669,6 +673,7 @@ export default function HomeContent() {
 
     setStatus("loading");
     setErrorMessage("");
+    setTrainerError("");
     setProgress({ step: 0, totalSteps: 4, message: "Starter generering..." });
     setGenerationId(null);
     setImageFallbackNeeded(false);
@@ -920,8 +925,10 @@ export default function HomeContent() {
     }
   }
 
-  async function downloadFile(url: string, defaultName: string) {
+  async function downloadFile(url: string, defaultName: string, readableErrors = false) {
     const res = await authFetch(url);
+    // The trainer answers 409/422 with a reason the teacher can act on.
+    if (!res.ok && readableErrors) await throwFromResponse(res);
     if (!res.ok) throw new Error(`Kunne ikke laste ned fil (${res.status})`);
     const blob = await res.blob();
     const objectUrl = window.URL.createObjectURL(blob);
@@ -984,6 +991,25 @@ export default function HomeContent() {
       setErrorMessage(
         error instanceof Error ? error.message : "Kunne ikke laste ned PDF. Prøv igjen."
       );
+    }
+  };
+
+  // The concept trainer follows the PDF's rules: the final file needs the same
+  // exact-revision approval, and a draft is a watermarked teacher preview.
+  const downloadTrainer = async (gId: string, draft: boolean) => {
+    setTrainerError("");
+    setTrainerBusy(true);
+    try {
+      if (!draft) await approveExactGeneration(gId);
+      await downloadFile(
+        trainerUrl(apiUrl, gId, draft),
+        draft ? "UTKAST_begrepstrener.html" : "begrepstrener.html",
+        true,
+      );
+    } catch (error) {
+      setTrainerError(error instanceof Error ? error.message : "Kunne ikke laste ned begrepstreneren.");
+    } finally {
+      setTrainerBusy(false);
     }
   };
 
@@ -1664,6 +1690,42 @@ export default function HomeContent() {
                 onDismissError={() => setStatus("idle")}
                 onDownloadDraft={status === "needs_teacher_review" ? downloadDraftPreview : undefined}
               />
+              {generationId && canOfferTrainer({ status, isDual, vocabularyTasks: options.vocabulary_tasks }) && (
+                <section className="mt-4 rounded-lg border border-stone-200 bg-white p-4" aria-labelledby="trainer-title">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 bg-accent-100 rounded-md shrink-0">
+                      <GraduationCap className="w-5 h-5 text-accent-700" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 id="trainer-title" className="font-medium text-stone-900">Begrepstrener</h3>
+                      <p className="mt-1 text-sm text-stone-600">
+                        En øvingsfil elevene åpner i nettleseren: lær begrepene, koble, fyll inn, quiz og skriv selv.
+                        Alt innhold er hentet fra det kontrollerte læringsarket, og filen fungerer uten nett.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => downloadTrainer(generationId, status === "needs_teacher_review")}
+                        disabled={trainerBusy}
+                        className="mt-3 inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-800 transition-colors hover:border-stone-400 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-accent-600/30 disabled:cursor-wait disabled:text-stone-400"
+                      >
+                        {trainerBusy ? (
+                          <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <GraduationCap className="w-4 h-4" aria-hidden="true" />
+                        )}
+                        <span>
+                          {status === "needs_teacher_review"
+                            ? "Last ned utkast av begrepstrener"
+                            : "Godkjenn og last ned begrepstrener"}
+                        </span>
+                      </button>
+                      {trainerError && (
+                        <p className="mt-2 text-sm text-red-700" role="alert">{trainerError}</p>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              )}
               {status === "success" && <div className="mt-4 space-y-3"><RevisionActions onSelect={(instruction) => { setSpecialInstructions((current) => [current, instruction].filter(Boolean).join("\n")); window.setTimeout(() => formRef.current?.requestSubmit(), 0); }} /><GenerationFeedback module="norsk" /></div>}
               {imageFallbackNeeded && (
                 <div className="mt-4 p-4 rounded-lg bg-amber-50 border border-amber-200">

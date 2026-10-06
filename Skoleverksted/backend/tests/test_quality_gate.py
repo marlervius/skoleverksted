@@ -738,7 +738,7 @@ def test_every_known_generator_and_export_family_has_a_contract():
         "platform.teaching_package.pdf", "platform.teaching_package.docx",
         "platform.teaching_package.pptx", "platform.teaching_package.zip",
         "platform.year_plan.material", "platform.theme_pack.teacher_guide",
-        "fag.pdf", "fag.docx", "norsk.pdf", "norsk.zip",
+        "fag.pdf", "fag.docx", "norsk.pdf", "norsk.zip", "norsk.trainer",
         "matematikk.pdf", "matematikk.docx", "matematikk.pptx", "matematikk.shared_pdf",
     } == EXPORT_CONTRACTS
 
