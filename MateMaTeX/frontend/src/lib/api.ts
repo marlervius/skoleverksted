@@ -11,6 +11,7 @@ import type {
   StreamStepPayload,
 } from "@/types/generation";
 import type { TruthPassport } from "@/lib/platform-api";
+import { withAccessToken } from "@/lib/access";
 import { internalServiceBackendUrl } from "@/lib/backend-url";
 
 function getApiBase(): string {
@@ -347,7 +348,7 @@ export function streamProgress(
       ? `/api/generate/${encodeURIComponent(jobId)}/stream`
       : apiUrl(`generate/${encodeURIComponent(jobId)}/stream`);
 
-  const eventSource = new EventSource(url);
+  const eventSource = new EventSource(withAccessToken(url));
   const signal = { cancelled: false };
   let finished = false;
 

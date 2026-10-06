@@ -38,7 +38,7 @@ export default function PersonvernPage() {
           <li>
             <strong className="text-text-primary">Lærerens input</strong> — emne, trinn, kompetansemål og
             eventuelle notater og kildetekster du skriver inn for å styre genereringen. Dette sendes
-            til konfigurert AI-leverandør når du starter generering.
+            til AI-leverandøren (Google Gemini) når du starter generering.
           </li>
           <li>
             <strong className="text-text-primary">Generert innhold</strong> — LaTeX/PDF lagres midlertidig
@@ -46,8 +46,29 @@ export default function PersonvernPage() {
           </li>
           <li><strong className="text-text-primary">Prosjekter, årsplaner og kompendier</strong> — planer, kapitteltekster, kildelister og godkjente dokumentfiler lagres i plattformdatabasen og det vedvarende fillageret til de arkiveres eller slettes.</li>
           <li>
-            <strong className="text-text-primary">Kontodata</strong> (når aktivert) — e-post og betaling
-            for abonnement, behandles minimalt og hostes i EU/EØS der det er praktisk mulig.
+            <strong className="text-text-primary">Tilgangsnøkkel</strong> — en signert, midlertidig nøkkel i
+            nettleseren som viser at du har skrevet inn tilgangskoden. Piloten har ingen brukerkontoer og
+            tar ikke imot betaling.
+          </li>
+        </ul>
+      </section>
+
+      <section className="card mb-6 not-prose">
+        <h2 className="text-lg font-semibold mb-2">Tilgang i pilotfasen</h2>
+        <ul className="text-sm text-text-secondary space-y-2 list-disc pl-5">
+          <li>
+            Skoleverksted er i lukket pilot. Alle som har tilgangskoden bruker{" "}
+            <strong className="text-text-primary">samme arbeidsområde</strong>: prosjekter, årsplaner,
+            kompendier og jobbhistorikk er synlige for alle pilotbrukere. Legg derfor ikke inn noe du ikke vil
+            dele med de andre i piloten.
+          </li>
+          <li>
+            Når du logger inn, lagrer nettleseren en midlertidig tilgangsnøkkel (ikke selve koden) i opptil
+            12 timer. På delte maskiner kan du bruke «Logg ut» under Innstillinger eller slå på privat økt.
+          </li>
+          <li>
+            Personlige kontoer og skoleinnlogging kommer etter piloten. Generert innhold er et utkast som du
+            alltid må kontrollere før det deles med elever.
           </li>
         </ul>
       </section>
@@ -73,7 +94,7 @@ export default function PersonvernPage() {
       </section>
 
       <p className="text-xs text-text-muted not-prose">
-        Spørsmål? Kontakt Apexlab (Lervik KI-Tech ENK). Sist oppdatert juli 2026.
+        Spørsmål? Kontakt Apexlab (Lervik KI-Tech ENK). Sist oppdatert oktober 2026.
       </p>
     </div>
   );

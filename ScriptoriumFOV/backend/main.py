@@ -49,7 +49,7 @@ if __package__:
     from .concept_trainer import TrainerUnavailable, build_trainer, render_trainer_html
     from .config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from .errors import GeminiQuotaExceededError
-    from .auth import app_password_configured, require_app_password, verify_password_plain
+    from .auth import app_password_configured, platform_access_granted, require_app_password, verify_password_plain
     from .pdf_service import create_lesson_pdf
     from .media_manager import image_processor
     from .progress_store import (
@@ -69,7 +69,7 @@ else:
     from concept_trainer import TrainerUnavailable, build_trainer, render_trainer_html
     from config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from errors import GeminiQuotaExceededError
-    from auth import app_password_configured, require_app_password, verify_password_plain
+    from auth import app_password_configured, platform_access_granted, require_app_password, verify_password_plain
     from pdf_service import create_lesson_pdf
     from media_manager import image_processor
     from progress_store import (
@@ -947,9 +947,13 @@ async def health_check():
 
 
 @app.get("/auth/config")
-async def auth_config():
-    """Tell the frontend whether a password is required (without revealing it)."""
-    return {"password_required": app_password_configured()}
+async def auth_config(request: Request):
+    """Tell the frontend whether a password is required (without revealing it).
+
+    Behind the combined backend's access gate the teacher has already signed
+    in, so the module must not ask for the same code a second time.
+    """
+    return {"password_required": app_password_configured() and not platform_access_granted(request)}
 
 
 @app.post("/auth/verify")

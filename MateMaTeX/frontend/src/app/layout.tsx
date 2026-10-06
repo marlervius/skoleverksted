@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AccessGate } from "@/components/access-gate";
 import { ConditionalShell } from "@/components/conditional-shell";
 
 export const metadata: Metadata = {
@@ -19,7 +20,9 @@ export default function RootLayout({
   return (
     <html lang="no">
       <body className="font-sans antialiased bg-bg text-text-primary">
-        <ConditionalShell>{children}</ConditionalShell>
+        <AccessGate>
+          <ConditionalShell>{children}</ConditionalShell>
+        </AccessGate>
       </body>
     </html>
   );

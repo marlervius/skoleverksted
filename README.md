@@ -60,8 +60,16 @@ kvalitetspass, drift og offentlig API-adresse er felles.
   årsplanprojeksjon og ZIP-eksport etter godkjenning. Ikke-godkjente artefakter
   blir aldri vist som ferdige læremidler i årsplanen.
 - Skjemaene autosaves lokalt slik at læreren kan bytte arbeidsflate uten å miste utkast.
-- Skolepålogging og organisasjonstilknytning er bevisst utsatt til produktet er
-  ferdig validert. Dagens modulspesifikke sikkerhet er beholdt.
+- **Lukket pilot med felles tilgangskode.** `APP_PASSWORD` er én kode foran hele
+  API-et (Fag, Norsk, Matematikk og plattformen). Læreren bytter koden mot et
+  signert token som utløper (`ACCESS_TOKEN_TTL_HOURS`, standard 12), og
+  nettleseren sender det automatisk. Nedlastinger og hendelsesstrømmer som ikke
+  kan sende headere bruker `?access_token=` på lesekall. Bare helsesjekker,
+  innlogging og matematikkens delelenker er åpne uten kode. I produksjon feiler
+  en manglende kode lukket, og `/health/ready` rapporterer `access_gate`. Alle
+  med koden deler samme arbeidsområde. Skolepålogging, kontoer per lærer og
+  organisasjonstilknytning er bevisst utsatt til etter piloten. Se
+  [research/PILOT_LAUNCH_CHECKLIST.md](research/PILOT_LAUNCH_CHECKLIST.md).
 
 ## Arkitektur
 
@@ -137,8 +145,8 @@ npm run dev
 
 - Bygg frontend fra `MateMaTeX/frontend`.
 - Start backend med `uvicorn Skoleverksted.backend.main:app` fra repoets rot.
-- Sett `GOOGLE_API_KEY`, `FRONTEND_URL` og eventuelt `REDIS_URL`, `DATABASE_URL`,
-  `APP_PASSWORD` og `MATE_API_KEY`.
+- Sett `GOOGLE_API_KEY`, `FRONTEND_URL`, `APP_PASSWORD` (tilgangskoden, påkrevd
+  i produksjon) og `MATE_API_KEY`, og eventuelt `REDIS_URL` og `DATABASE_URL`.
 - KI-bilder bruker som standard samme Google-nøkkel. `GOOGLE_IMAGE_API_KEY` kan
   settes hvis bildekall skal ha en separat nøkkel, og `GOOGLE_IMAGE_MODEL`
   overstyrer standardmodellen `gemini-3.1-flash-image`.
@@ -158,7 +166,9 @@ docker compose up --build
 SQLite-filen, årsplanenes godkjente læremidler og genererte dokumenter ligger i
 volumet `skoleverksted_data`.
 `/health/ready` returnerer HTTP 503 hvis plattformlager, Gemini, Typst eller
-pdfLaTeX mangler. Redis vises som en valgfri driftsstatus.
+pdfLaTeX mangler. Redis vises som en valgfri driftsstatus. API-dokumentasjonen
+(`/docs`, `/api/*/docs`) krever også tilgangskode når den er satt; bruk et
+token som `Authorization: Bearer`-header fra for eksempel `curl`.
 
 ### Render
 

@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { forwardedAuthorization } from "@/lib/access-forward";
 import { internalServiceBackendUrl } from "@/lib/backend-url";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +12,7 @@ export const maxDuration = 300;
  * Set BACKEND_INTERNAL_URL on Vercel if the API URL must differ from NEXT_PUBLIC_API_URL.
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ jobId: string }> | { jobId: string } },
 ) {
   const params = await Promise.resolve(context.params);
@@ -28,6 +29,8 @@ export async function GET(
   if (key) {
     headers["X-API-Key"] = key;
   }
+  const authorization = forwardedAuthorization(req);
+  if (authorization) headers.Authorization = authorization;
 
   const url = `${backend}/generate/${encodeURIComponent(jobId)}/stream`;
   let upstream: Response;

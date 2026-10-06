@@ -12,16 +12,26 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
 
+# Set on the ASGI scope by the combined Skoleverksted backend's access gate
+# (Skoleverksted/backend/platform/access.py). Standalone Norsk deployments never
+# see it and keep checking the password themselves.
+PLATFORM_ACCESS_SCOPE_KEY = "skoleverksted.access_granted"
+
 
 def app_password_configured() -> bool:
     return bool(os.getenv("APP_PASSWORD", "").strip())
+
+
+def platform_access_granted(request: Request) -> bool:
+    """True when the shared platform gate already authorised this request."""
+    return bool(request.scope.get(PLATFORM_ACCESS_SCOPE_KEY))
 
 
 def password_matches(given: str, expected: str) -> bool:
@@ -39,11 +49,14 @@ def verify_password_plain(given: str) -> bool:
 
 
 async def require_app_password(
+    request: Request,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> None:
     """Dependency: enforce Bearer password when APP_PASSWORD is set."""
     expected = os.getenv("APP_PASSWORD", "").strip()
     if not expected:
+        return
+    if platform_access_granted(request):
         return
     if creds is None or creds.scheme.lower() != "bearer":
         raise HTTPException(

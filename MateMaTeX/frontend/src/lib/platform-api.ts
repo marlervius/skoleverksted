@@ -1,3 +1,4 @@
+import { withAccessToken } from "./access";
 import { serviceBackendUrl } from "./backend-url";
 
 export type ProjectStatus = "draft" | "ready" | "generating" | "completed" | "archived";
@@ -867,7 +868,7 @@ export const updateYearPlanMaterial = (
   );
 
 export const yearPlanMaterialDownloadUrl = (planId: string, materialId: string) =>
-  `${baseUrl()}/year-plans/${encodeURIComponent(planId)}/materials/${encodeURIComponent(materialId)}/download`;
+  withAccessToken(`${baseUrl()}/year-plans/${encodeURIComponent(planId)}/materials/${encodeURIComponent(materialId)}/download`);
 
 export const listTeachingPackages = (input: { yearPlanId?: string; periodId?: string; projectId?: string; limit?: number } = {}) => {
   const query = new URLSearchParams({ limit: String(input.limit ?? 50) });
@@ -949,10 +950,10 @@ export const approveTeachingPackageWithOmissions = (packageId: string, teacher =
   );
 
 export const teachingArtifactDownloadUrl = (packageId: string, artifactId: string, format: "pdf" | "docx" | "pptx") =>
-  `${baseUrl()}/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}/download/${format}`;
+  withAccessToken(`${baseUrl()}/teaching-packages/${encodeURIComponent(packageId)}/artifacts/${encodeURIComponent(artifactId)}/download/${format}`);
 
 export const teachingPackageZipDownloadUrl = (packageId: string) =>
-  `${baseUrl()}/teaching-packages/${encodeURIComponent(packageId)}/download/zip`;
+  withAccessToken(`${baseUrl()}/teaching-packages/${encodeURIComponent(packageId)}/download/zip`);
 
 export const listCompendia = (limit = 50) =>
   requestJson<Compendium[]>(`/compendia?limit=${limit}`);
@@ -1055,7 +1056,7 @@ export const approveCompendium = (compendiumId: string) =>
     method: "POST",
   });
 export const compendiumDownloadUrl = (compendiumId: string, artifactType: "pdf" | "docx") =>
-  `${baseUrl()}/compendia/${encodeURIComponent(compendiumId)}/download/${artifactType}`;
+  withAccessToken(`${baseUrl()}/compendia/${encodeURIComponent(compendiumId)}/download/${artifactType}`);
 
 export async function downloadThemePackGuide(projectId: string): Promise<void> {
   const approval = await fetch(`${baseUrl()}/theme-packs/${encodeURIComponent(projectId)}/teacher-guide/approve`, { method: "POST" });
