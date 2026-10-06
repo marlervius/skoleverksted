@@ -6,6 +6,8 @@ import hashlib
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .access import access_code, access_enforced
+
 
 WhichCommand = Callable[[str], str | None]
 
@@ -54,6 +56,12 @@ def build_readiness(
         "checks": checks,
         "missing": missing,
         "storage": dict(storage),
+        # Presence only, never the code. The production smoke test asserts this
+        # so an API that silently lost its gate cannot pass as healthy.
+        "access_gate": {
+            "enforced": access_enforced(env),
+            "code_configured": bool(access_code(env)),
+        },
         "redis_configured": bool(env.get("REDIS_URL", "").strip()),
         "job_queue_backend": "redis+sqlite" if env.get("REDIS_URL", "").strip() else "sqlite-local",
         "release": release[:12],

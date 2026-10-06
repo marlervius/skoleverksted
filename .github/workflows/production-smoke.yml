@@ -22,3 +22,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/production_smoke.py
+        env:
+          # Optional repository secret. Without it the smoke test still proves
+          # that anonymous callers are refused, but skips the signed-in path.
+          SMOKE_ACCESS_CODE: ${{ secrets.SMOKE_ACCESS_CODE }}

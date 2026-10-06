@@ -1,5 +1,6 @@
 import type { LessonOptions } from "./constants";
 import type { ImageMode } from "@/components/image-mode-picker";
+import { withAccessToken } from "@/lib/access";
 import { serviceBackendUrl } from "@/lib/backend-url";
 import type { TeachingArtifact, TruthPassport } from "@/lib/platform-api";
 
@@ -179,7 +180,7 @@ async function runSseJob(
   let capturedQualityStatus: GenerateLessonResult["qualityStatus"];
 
   await new Promise<void>((resolve, reject) => {
-    const eventSource = new EventSource(streamUrl(job_id));
+    const eventSource = new EventSource(withAccessToken(streamUrl(job_id)));
     const abortHandler = () => {
       eventSource.close();
       // AbortSignal cancellation must also reach the backend. The request is

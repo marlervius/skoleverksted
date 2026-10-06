@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { forwardedAuthorization } from "@/lib/access-forward";
 import { internalServiceBackendUrl } from "@/lib/backend-url";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +24,8 @@ export async function GET(
   if (key) {
     headers["X-API-Key"] = key;
   }
+  const authorization = forwardedAuthorization(req);
+  if (authorization) headers.Authorization = authorization;
 
   const preview = req.nextUrl.searchParams.get("preview") === "true";
   const url = `${backend}/generate/${encodeURIComponent(jobId)}/pdf${preview ? "?preview=true" : ""}`;
@@ -58,7 +61,7 @@ export async function GET(
 
 /** Records the teacher's explicit approval of the exact verified revision. */
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ jobId: string }> | { jobId: string } },
 ) {
   const { jobId } = await Promise.resolve(context.params);
@@ -69,6 +72,8 @@ export async function POST(
   const headers: Record<string, string> = {};
   const key = process.env.MATE_API_KEY?.trim();
   if (key) headers["X-API-Key"] = key;
+  const authorization = forwardedAuthorization(req);
+  if (authorization) headers.Authorization = authorization;
 
   let upstream: Response;
   try {

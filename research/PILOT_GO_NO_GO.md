@@ -184,3 +184,39 @@ Konsekvens: ingen ekstern pilot. Neste port er en deploy av
 durable-repair-kandidaten fulgt av det identiske Historie VG2-scenarioet, der
 kravet er at reparasjonen er varig, observerbar, gjenopprettbar og ikke-
 destruktiv — ikke at modellen alltid løfter kapitlet over kvalitetsporten.
+
+---
+
+## Oppdatering 6. oktober 2026 — tilgangslås foran hele API-et
+
+**Dom: uendret `REJECTED`.** Denne endringen gjelder tilgang, ikke innholdskvalitet.
+Den erstatter verken den manuelle lærervurderingen eller en ny identisk
+produksjonskjøring, og ingen av dem er gjennomført i dette dokumentet.
+
+### Funn før endringen
+
+Bare Norsk-modulen sjekket `APP_PASSWORD`. En lesende kontroll av produksjon
+6. oktober 2026 viste at `GET /api/platform/jobs`, `/projects`, `/compendia` og
+`/year-plans` svarte HTTP 200 uten innlogging (100 jobber, 5 kompendier, 1 prosjekt
+og 1 årsplan), at Fag-API-et ikke hadde noen passordsjekk, og at matematikk-
+proxyen på Vercel la den server-side nøkkelen på alle anonyme kall. Hvem som helst
+med den offentlige adressen kunne lese lærernes arbeid og starte Gemini-kall.
+
+### Hva som er gjort
+
+* Én felles tilgangskode (`APP_PASSWORD`) foran alle API-ruter. Koden byttes mot et
+  signert token som utløper; endring av koden opphever alle token.
+* Bare helsesjekker, innlogging og matematikkens delelenker er åpne uten kode.
+* I produksjon feiler en manglende kode lukket. `/health/ready` rapporterer
+  `access_gate`, og produksjonssmoken feiler hvis API-et slipper anonyme kall
+  gjennom eller hvis låsen mangler.
+* Innlogging er begrenset mot gjetting (per klient og globalt).
+* Avviste kall når aldri jobbtelemetrien og kan ikke opprette eller endre jobber.
+
+### Det som fortsatt blokkerer
+
+* Manuell vurdering av en navngitt lærer av den eksakte sluttversjonen (se over).
+* Ingen kontoer per lærer: alle med koden deler ett arbeidsområde og ser hverandres
+  prosjekter, kompendier og jobber. Ingen revisjonslogg per bruker.
+* Ingen dokumentert backup-/gjenopprettingsprosedyre, ingen kostnadsgrense hos
+  Google og ingen ekstern overvåking. Se `PILOT_LAUNCH_CHECKLIST.md`.

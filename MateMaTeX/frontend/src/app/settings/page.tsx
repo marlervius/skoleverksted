@@ -8,6 +8,7 @@ import {
   DEFAULT_PREFERENCES,
 } from "@/lib/user-preferences";
 import { clearSkoleverkstedStorage, isPrivateSession, setPrivateSession } from "@/lib/private-storage";
+import { logout } from "@/lib/access";
 
 const GRADES = [
   "8. trinn",
@@ -60,7 +61,10 @@ export default function SettingsPage() {
             <input type="checkbox" className="mt-1" checked={privateSession} onChange={(event) => { const enabled = event.target.checked; setPrivateSession(enabled); setPrivateSessionState(enabled); setDataMessage(enabled ? "Privat økt er slått på. Nye utkast og historikk lagres ikke lokalt." : "Privat økt er slått av."); }} />
             <span><span className="block font-medium">Privat økt</span><span className="text-xs text-text-secondary">Ikke lagre nye utkast eller historikk i nettleseren. Gjelder til fanen lukkes.</span></span>
           </label>
-          <button type="button" className="btn-secondary mt-4" onClick={() => { const count = clearSkoleverkstedStorage(); setDataMessage(`${count} lokale dataposter ble slettet.`); }}>Slett lokale utkast og historikk</button>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" className="btn-secondary" onClick={() => { const count = clearSkoleverkstedStorage(); setDataMessage(`${count} lokale dataposter ble slettet. Du må logge inn på nytt.`); }}>Slett lokale utkast og historikk</button>
+            <button type="button" className="btn-secondary" onClick={logout}>Logg ut</button>
+          </div>
           {dataMessage && <p role="status" className="mt-3 text-xs text-text-secondary">{dataMessage}</p>}
         </div>
 

@@ -11,7 +11,11 @@ must survive restarts and deploys.
 2. Connect `marlervius/skoleverksted` and select `render.yaml`.
 3. Enter the requested secrets:
    - `GOOGLE_API_KEY`: Gemini API key used by all generation workflows.
-   - `APP_PASSWORD`: temporary shared application password until school login exists.
+   - `APP_PASSWORD`: the shared access code that protects every API route during the
+     closed pilot. Use a long random value. Changing it signs every teacher out
+     (all outstanding tokens stop working), so it is also the revocation switch.
+     Without it a production backend refuses all requests and `/health/ready`
+     reports `norsk_access` as missing.
    - `FRONTEND_URL`: exact public frontend origin, for example `https://skoleverksted.no`.
    - `ALLOWED_ORIGINS`: same origin. Multiple origins can be comma-separated.
 4. Create the Blueprint and wait for `/health/ready` to pass.
@@ -36,6 +40,12 @@ public hostname.
 
 ## Verify the deployment
 
+The production smoke workflow does this after every merge and daily. It needs no
+setup to prove that anonymous callers are refused. To also exercise the
+signed-in path, add the access code as the GitHub Actions repository secret
+`SMOKE_ACCESS_CODE` and update it whenever `APP_PASSWORD` changes. A stale value
+fails the smoke test once and is never retried, so it cannot lock teachers out.
+
 Open these URLs after the first deploy:
 
 - `/health` — liveness and SQLite access
@@ -43,8 +53,14 @@ Open these URLs after the first deploy:
 - `/docs` — shared platform API
 - `/api/fag/docs`, `/api/norsk/docs`, `/api/matematikk/docs` — domain APIs
 
+Only `/`, `/health`, `/health/ready` and the login/status endpoints answer
+without the access code, so the documentation pages need a token too: sign in
+with `POST /api/platform/access/login` (`{"code": "..."}`) and send the returned
+token as `Authorization: Bearer <token>`.
+
 `/health/ready` returns HTTP 503 and a `missing` list if a required dependency is
-unavailable. It never returns API keys or Redis credentials.
+unavailable. It never returns API keys, the access code or Redis credentials; the
+`access_gate` field only says whether the gate is enforced and a code exists.
 
 ## Operational notes
 

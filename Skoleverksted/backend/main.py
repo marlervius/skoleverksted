@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .platform.access import AccessGateMiddleware, router as access_router
 from .platform.readiness import build_readiness
 from .platform.cors import allowed_origins
 from .platform.router import router as platform_router
@@ -56,6 +57,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Later middleware is outer. Telemetry stays innermost so a request the access
+# gate rejects can never create or change a job record; CORS stays outside the
+# gate so a browser can read the 401 instead of seeing an opaque CORS failure.
+app.add_middleware(JobTelemetryMiddleware)
+app.add_middleware(AccessGateMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins(),
@@ -63,7 +69,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(JobTelemetryMiddleware)
+app.include_router(access_router, prefix="/api/platform/access")
 app.include_router(platform_router, prefix="/api/platform")
 
 

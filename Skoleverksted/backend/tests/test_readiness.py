@@ -34,6 +34,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(report["release"], "abcdef123456")
         self.assertEqual(report["runtime"]["prompt_version"], "school-v3")
         self.assertEqual(report["runtime"]["latex_engine"], "pdflatex")
+        self.assertEqual(report["access_gate"], {"enforced": True, "code_configured": True})
         self.assertNotIn("super-secret", str(report))
         self.assertNotIn("math-secret", str(report))
         self.assertNotIn("norsk-secret", str(report))
@@ -53,6 +54,17 @@ class ReadinessTests(unittest.TestCase):
             {"storage", "google_ai", "matematikk_access", "norsk_access", "typst", "pdflatex"},
         )
         self.assertEqual(report["runtime"]["latex_engine"], "auto")
+        self.assertEqual(report["access_gate"], {"enforced": False, "code_configured": False})
+
+    def test_production_without_a_code_reports_a_closed_but_unconfigured_gate(self):
+        _, report = build_readiness(
+            {"status": "healthy"},
+            environ={"ENVIRONMENT": "production"},
+            which=lambda _: None,
+        )
+
+        self.assertEqual(report["access_gate"], {"enforced": True, "code_configured": False})
+        self.assertIn("norsk_access", report["missing"])
 
 
 if __name__ == "__main__":
