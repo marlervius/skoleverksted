@@ -38,13 +38,15 @@ from Skoleverksted.backend.platform.quality_gate import (
     source_approval_reasons,
 )
 if __package__:
-    from .agents import generate_lesson_content
+    from .agents import generate_lesson_content, get_level_constraints
     from .artifact import (
         ArtifactValidationError,
         ValidatedArtifact,
         validate_pdf_artifact,
+        validate_trainer_artifact,
         validate_zip_artifact,
     )
+    from .concept_trainer import TrainerUnavailable, build_trainer, render_trainer_html
     from .config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from .errors import GeminiQuotaExceededError
     from .auth import app_password_configured, require_app_password, verify_password_plain
@@ -56,13 +58,15 @@ if __package__:
         merge_progress, progress_backend_label, publish_event, update_progress,
     )
 else:
-    from agents import generate_lesson_content
+    from agents import generate_lesson_content, get_level_constraints
     from artifact import (
         ArtifactValidationError,
         ValidatedArtifact,
         validate_pdf_artifact,
+        validate_trainer_artifact,
         validate_zip_artifact,
     )
+    from concept_trainer import TrainerUnavailable, build_trainer, render_trainer_html
     from config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from errors import GeminiQuotaExceededError
     from auth import app_password_configured, require_app_password, verify_password_plain
@@ -223,6 +227,7 @@ def _publish_validated_artifact(
     terminal_status: str = "completed",
     draft: bool = False,
     review_preview: dict | None = None,
+    lesson_meta: dict | None = None,
 ) -> dict:
     """Store, verify and publish one idempotent terminal artefact transition.
 
@@ -258,6 +263,9 @@ def _publish_validated_artifact(
             "quality_documents": quality_documents,
             "quality_review": _quality_review_payload(quality_documents, artifact=metadata),
             "review_preview": review_preview,
+            # Topic, subject and level for artefacts derived from the verified
+            # content later (the concept trainer). Never overwritten with nothing.
+            **({"lesson_meta": lesson_meta} if lesson_meta else {}),
         },
     )
     stored = get_progress(generation_id) or {}
@@ -683,6 +691,7 @@ def generate_lesson_background(
             terminal_status="completed" if source_approved else "needs_teacher_review",
             draft=not source_approved,
             review_preview=None if source_approved else _lesson_preview_payload(content),
+            lesson_meta={"topic": request.topic, "subject": request.subject, "level": request.level},
         )
 
         logger.info("PDF generated successfully: %s (%s bytes)", validated.filename, validated.size_bytes)
@@ -1068,6 +1077,95 @@ def download_pdf(generation_id: str, _auth: AuthPasswordDep, preview: bool = Fal
         media_type="application/pdf",
         headers=headers,
     )
+
+
+@app.get("/download-trainer/{generation_id}")
+def download_trainer(generation_id: str, _auth: AuthPasswordDep, preview: bool = False):
+    """
+    Download the concept trainer (an offline HTML practice app) for a generation.
+
+    The trainer is built only from the exact content revision the quality gate
+    verified (``quality_documents``), never from request fields, so it cannot
+    carry a fact the gate has not audited. It is released under the same rules
+    as the PDF: a final download needs source approval and the teacher's
+    approval of that exact revision; a draft job only yields a watermarked
+    teacher preview.
+    """
+    progress = get_progress(generation_id)
+    if progress is None:
+        _log_download_failure(generation_id, "generation_not_found")
+        raise HTTPException(status_code=404, detail="Generation task not found")
+
+    status = progress.get("job_status")
+    if progress.get("step") == -1 or status not in {"completed", "needs_teacher_review"}:
+        _log_download_failure(generation_id, "trainer_not_ready")
+        raise HTTPException(status_code=202, detail="Begrepstreneren er ikke klar ennå")
+
+    is_draft = status == "needs_teacher_review"
+    if is_draft and not preview:
+        _log_download_failure(generation_id, "quality_review_required")
+        raise HTTPException(
+            status_code=409,
+            detail="Eksportporten er lukket: lærergjennomgang kreves før endelig begrepstrener kan lastes ned.",
+        )
+    if not is_draft:
+        try:
+            _require_norsk_documents(progress, "norsk.trainer", teacher=not preview)
+        except HTTPException:
+            _log_download_failure(generation_id, "quality_gate_blocked")
+            raise
+
+    documents = progress.get("quality_documents") or []
+    meta = progress.get("lesson_meta") or {}
+    if len(documents) != 1 or not meta:
+        _log_download_failure(generation_id, "trainer_unsupported")
+        raise HTTPException(
+            status_code=409,
+            detail="Begrepstrener lages for ett nivå om gangen, fra et ferdig læringsark.",
+        )
+
+    topic = str(meta.get("topic") or "")
+    level = str(meta.get("level") or "")
+    try:
+        model = build_trainer(
+            content=str(documents[0].get("content") or ""),
+            topic=topic,
+            subject=str(meta.get("subject") or ""),
+            level=level,
+            frame=str(get_level_constraints(level, False).get("writing_frame") or ""),
+        )
+        artifact = validate_trainer_artifact(
+            render_trainer_html(model, draft=is_draft),
+            (_safe_filename(topic) or "begrepstrener") + "_begrepstrener.html",
+        )
+    except TrainerUnavailable as exc:
+        _log_download_failure(generation_id, "trainer_unavailable")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ArtifactValidationError as exc:
+        _log_download_failure(generation_id, "trainer_validation_failed")
+        logger.error("Concept trainer failed validation reason=%s", exc)
+        raise HTTPException(status_code=500, detail="Begrepstreneren kunne ikke valideres.") from exc
+
+    filename = ("UTKAST_" if is_draft else "") + artifact.filename
+    _log_generation_event(
+        "artifact_download_completed",
+        generation_id,
+        artifact_id="concept_trainer",
+        size_bytes=artifact.size_bytes,
+        terminal_status=str(status),
+    )
+    headers = {
+        "Content-Disposition": f"{'inline' if preview else 'attachment'}; filename*=UTF-8''{quote(filename)}",
+        "Content-Length": str(artifact.size_bytes),
+        "X-Content-Type-Options": "nosniff",
+        "X-Job-ID": generation_id,
+    }
+    if preview:
+        headers.update({
+            "Cache-Control": "no-store",
+            "X-Preview-Draft": "true" if is_draft else "false",
+        })
+    return Response(content=artifact.content, media_type="text/html", headers=headers)
 
 
 @app.get("/download-zip/{generation_id}")
@@ -1565,6 +1663,7 @@ def generate_pdf_from_json_background(
                     quality_document.get("truth_passport") or {}
                 ).get("sources", []),
             },
+            lesson_meta={"topic": request.topic, "subject": request.subject, "level": request.level},
         )
 
     except Exception as e:

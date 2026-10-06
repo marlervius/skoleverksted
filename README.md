@@ -46,6 +46,15 @@ kvalitetspass, drift og offentlig API-adresse er felles.
   PDF-ene er venstrejusterte, har en «Mitt språk»-linje per begrep på A1–B1, og
   viser begrepene før teksten på A1–A2. Rapporten er veiledning og blokkerer
   aldri forhåndsvisning eller nedlasting.
+- **Begrepstrener** (Norsklæring) er en øvingsfil i HTML som elevene åpner uten
+  nett: lær begrepene med «Mitt språk»-felt, koble, fyll inn, quiz og skriv selv.
+  Den bygges deterministisk, uten modellkall, av begrepene og eksempelsetningene
+  i det kontrollerte læringsarket, så den kan ikke inneholde noe kontrollen ikke
+  har sett. Eksporten `norsk.trainer` følger PDF-ens regler: den endelige filen
+  krever kildegodkjenning og lærergodkjenning av nøyaktig samme revisjon, og et
+  utkast gir bare en vannmerket lærerforhåndsvisning (`GET
+  /api/norsk/download-trainer/{id}`, `?preview=true` for utkast). Den lages for
+  ett nivå om gangen, ikke for ZIP-kjøringer.
 - **TeachingPackage** har canonical pakke-/artefakttilstand, durable parent/child-
   jobber, innholdsrevisjoner, faktapass, kvalitetspass, lærerreview, atomisk
   årsplanprojeksjon og ZIP-eksport etter godkjenning. Ikke-godkjente artefakter

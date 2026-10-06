@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 from dataclasses import dataclass
 
@@ -67,6 +68,50 @@ def validate_pdf_artifact(pdf_bytes: bytes, filename: str) -> ValidatedArtifact:
         content_type="application/pdf",
         filename=safe_filename,
         kind="student_pdf",
+    )
+
+
+MAX_TRAINER_BYTES = 2 * 1024 * 1024
+# Anything that would make a downloaded trainer reach out to another host.
+_EXTERNAL_REFERENCE_RE = re.compile(
+    r"""(?ix)
+    (?:\b(?:src|href|action|poster|data)\s*=\s*["']?\s*(?:https?:)?//)
+    | url\(\s*["']?\s*(?:https?:)?//
+    | @import
+    | <\s*(?:link|iframe|object|embed|form)\b
+    """
+)
+
+
+def validate_trainer_html(html: str) -> bytes:
+    """Fail closed unless the trainer is one self-contained, offline document."""
+
+    if not isinstance(html, str) or not html.strip():
+        raise ArtifactValidationError("trainer_empty")
+    payload = html.encode("utf-8")
+    if len(payload) > MAX_TRAINER_BYTES:
+        raise ArtifactValidationError("trainer_too_large")
+    if not html.lstrip().lower().startswith("<!doctype html>"):
+        raise ArtifactValidationError("trainer_not_html")
+    if 'id="trainer-data"' not in html:
+        raise ArtifactValidationError("trainer_data_missing")
+    if 'http-equiv="Content-Security-Policy"' not in html or "default-src 'none'" not in html:
+        raise ArtifactValidationError("trainer_csp_missing")
+    if _EXTERNAL_REFERENCE_RE.search(html):
+        raise ArtifactValidationError("trainer_external_reference")
+    return payload
+
+
+def validate_trainer_artifact(html: str, filename: str) -> ValidatedArtifact:
+    """Validate a concept trainer and return normalized metadata inputs."""
+
+    payload = validate_trainer_html(html)
+    safe_filename = filename if filename.lower().endswith(".html") else f"{filename}.html"
+    return ValidatedArtifact(
+        content=payload,
+        content_type="text/html; charset=utf-8",
+        filename=safe_filename,
+        kind="concept_trainer",
     )
 
 
