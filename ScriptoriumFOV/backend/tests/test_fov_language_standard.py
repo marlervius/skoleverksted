@@ -186,7 +186,7 @@ def test_overlong_sentences_are_split_before_the_truth_gate_sees_the_text(harnes
     assert result["text"] == SIMPLIFIED
     assert result["readability"]["status"] == "ok"
     assert result["readability"]["auto_simplified"] is True
-    assert result["prompt_version"] == "norsk-v3-fov"
+    assert result["prompt_version"] == "norsk-v4-forskning"
 
 
 def test_the_rewrite_can_be_switched_off(harness, monkeypatch):
@@ -228,3 +228,75 @@ def test_a_level_without_a_sentence_limit_is_reported_as_not_applicable(harness)
 
     assert harness["llm"].prompts == []
     assert result["readability"]["status"] == "not_applicable"
+
+
+# ---------------------------------------------------------------------------
+# Research-based design (processability stages, involvement, feedback)
+# ---------------------------------------------------------------------------
+
+
+def test_text_task_names_the_stage_target_length_and_coverage(harness):
+    agents.generate_lesson_content(topic="Lønnsslipp", subject="Samfunnsfag", level="A2.1")
+
+    text_task = _description(harness, "Skriv en pedagogisk tekst")
+    assert "PT-trinn 3–4" in text_task
+    assert "verbet på plass 2" in text_task
+    assert "180-280 ord" in text_task
+    assert "95 %" in text_task
+    assert "Ikke hakk teksten opp" in text_task
+
+
+def test_comprehension_forbids_copying_and_ends_with_open_questions(harness):
+    agents.generate_lesson_content(topic="Lønnsslipp", subject="Samfunnsfag", level="A2.1")
+
+    worksheet = _description(harness, "lag et arbeidsark")
+    assert "Lag 3 flervalgsspørsmål" not in worksheet
+    assert "Lag 4 spørsmål" in worksheet
+    assert "kopiere en setning fra teksten" in worksheet
+    assert "Svar med egne ord." in worksheet
+
+
+def test_language_tasks_follow_the_stage_and_ask_for_new_sentences(harness):
+    agents.generate_lesson_content(topic="Lønnsslipp", subject="Samfunnsfag", level="A1.2")
+
+    exercises = _description(harness, "Analyser teksten grundig")
+    assert '"bestemt_form"' in exercises
+    assert '"pronomen_subjekt"' in exercises
+    assert '"setningsbygging"' in exercises
+    assert '"lyd_og_skrift"' in exercises
+    assert "relativsetninger" not in exercises.lower().split("forskningsbaserte")[0]
+
+
+def test_b1_tasks_train_subordinate_clauses_without_sound_pairs(harness):
+    agents.generate_lesson_content(topic="Deltidsjobb", subject="Samfunnsfag", level="B1.1")
+
+    exercises = _description(harness, "Analyser teksten grundig")
+    assert '"kombiner_leddsetning"' in exercises
+    assert '"setningsbygging"' in exercises
+    assert '"lyd_og_skrift"' not in exercises
+    assert '"bestemt_form"' not in exercises
+
+
+def test_writing_tasks_have_three_tracks_and_a_self_check(harness):
+    options = {"real_case": True, "writing_frame": True}
+    agents.generate_lesson_content(topic="Vaktbytte", subject="Samfunnsfag", level="A2.2", options=options)
+
+    worksheet = _description(harness, "lag et arbeidsark")
+    for expected in ("Basis:", "Standard:", "Utfordring:", "Sjekk før du leverer:", "minst 4 av nøkkelordene"):
+        assert expected in worksheet
+
+
+def test_answer_key_explains_the_rule(harness):
+    agents.generate_lesson_content(
+        topic="Vaktbytte", subject="Samfunnsfag", level="A2.2", options={"teacher_key": True}
+    )
+
+    assert "prosessnivå" in _description(harness, "lag et arbeidsark")
+
+
+def test_english_sheets_keep_their_own_design(harness):
+    agents.generate_lesson_content(topic="Jobs", subject="Engelsk", level="A2.1")
+
+    worksheet = _description(harness, "create a worksheet")
+    assert "Create 3 multiple choice questions" in worksheet
+    assert "PT-trinn" not in _description(harness, "Write an educational text")
