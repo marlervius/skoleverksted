@@ -16,7 +16,7 @@ export function NorskHome() {
           <h1 id="norsk-title" className="max-w-xl font-display text-5xl leading-[1.08] tracking-tight text-accent-900 sm:text-6xl">God undervisning begynner med et språk alle forstår.</h1>
           <p className="mt-6 max-w-lg text-lg leading-relaxed text-stone-600">Lag læringsark som møter deltakerne der de er. Du velger tema, fag og språknivå. Norskverksted hjelper deg med teksten, oppgavene og begrepene.</p>
           <Link href="/verksted" className="mt-8 inline-flex items-center gap-3 rounded-xl bg-accent-700 px-6 py-3.5 font-medium text-white transition hover:bg-accent-800">Åpne Norskverksted <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link>
-          <p className="mt-3 text-xs text-stone-500">Lukket pilot · Tilgangskode kreves i verkstedet</p>
+          <p className="mt-3 text-xs text-stone-500">Åpen utprøving · Tilgangskoden er midlertidig fjernet</p>
         </div>
         <div className="relative rounded-3xl bg-accent-100 p-5 sm:p-8">
           <div className="mb-4 flex items-center justify-between text-xs font-medium text-accent-800"><span>Slik kan et læringsark se ut</span><span className="rounded-full border border-accent-300 px-2.5 py-1">A2</span></div>

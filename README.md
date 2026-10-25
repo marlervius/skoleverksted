@@ -152,9 +152,11 @@ personvernside og arbeidsflate på `/verksted`. Andre moduler og felles
 historikksider er utilgjengelige på språknettsiden. Skoleverksted beholder alle
 tre moduler på sin eksisterende nettadresse.
 
-Norskverksted deler foreløpig Render-backend og pilotarbeidsområde med
-Skoleverksted. Tilgangskode, kildekontroll, lærergodkjenning og eksportporter
-gjelder fortsatt. Eget domene betyr ikke egne kundekontoer eller dataseparasjon.
+Norskverksted deler foreløpig Render-backend med Skoleverksted. Språkverktøyet
+er midlertidig åpent uten kode; nye åpne jobber har egne tilfeldige tilgangslenker.
+Tidligere pilotjobber og de andre modulene krever fortsatt kode. Kildekontroll,
+lærergodkjenning og eksportporter gjelder fortsatt. `NORSK_OPEN_ACCESS=0` på
+backenden gjeninnfører kodekravet. Eget domene betyr ikke egne kundekontoer.
 Se [NORSKVERKSTED_DEPLOYMENT.md](NORSKVERKSTED_DEPLOYMENT.md) for oppsett og kontroll.
 
 - Bygg frontend fra `MateMaTeX/frontend`.

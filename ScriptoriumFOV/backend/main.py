@@ -49,7 +49,7 @@ if __package__:
     from .concept_trainer import TrainerUnavailable, build_trainer, render_trainer_html
     from .config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from .errors import GeminiQuotaExceededError
-    from .auth import app_password_configured, platform_access_granted, require_app_password, verify_password_plain
+    from .auth import app_password_configured, new_generation_id, platform_access_granted, require_app_password, verify_password_plain
     from .pdf_service import create_lesson_pdf
     from .media_manager import image_processor
     from .progress_store import (
@@ -69,7 +69,7 @@ else:
     from concept_trainer import TrainerUnavailable, build_trainer, render_trainer_html
     from config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from errors import GeminiQuotaExceededError
-    from auth import app_password_configured, platform_access_granted, require_app_password, verify_password_plain
+    from auth import app_password_configured, new_generation_id, platform_access_granted, require_app_password, verify_password_plain
     from pdf_service import create_lesson_pdf
     from media_manager import image_processor
     from progress_store import (
@@ -1338,7 +1338,7 @@ async def generate_lesson(
     Returns:
         JSON with generation_id for tracking progress via /generation-status/{id}
     """
-    generation_id = str(uuid.uuid4())
+    generation_id = new_generation_id(request)
     initialize_progress(
         generation_id,
         4,
@@ -1481,7 +1481,7 @@ async def generate_lesson_json(
     Returns:
         JSON with generation_id for tracking progress via /generation-status/{id}
     """
-    generation_id = str(uuid.uuid4())
+    generation_id = new_generation_id(request)
     initialize_progress(
         generation_id,
         3,
@@ -1684,7 +1684,7 @@ async def generate_pdf_from_json(
     _auth: AuthPasswordDep,
 ):
     """Generate PDF directly from preview content."""
-    generation_id = str(uuid.uuid4())
+    generation_id = new_generation_id(request)
     initialize_progress(
         generation_id,
         3,
@@ -1860,7 +1860,7 @@ async def generate_dual_lesson(
 
     Returns a generation_id; poll /generation-status/{id} then download the ZIP from /download-zip/{id}.
     """
-    generation_id = str(uuid.uuid4())
+    generation_id = new_generation_id(request)
     initialize_progress(
         generation_id,
         4,
@@ -1964,7 +1964,7 @@ async def generate_multi_lesson(
 
     Returns generation_id; poll /generation-status/{id} then download ZIP from /download-zip/{id}.
     """
-    generation_id = str(uuid.uuid4())
+    generation_id = new_generation_id(request)
     initialize_progress(
         generation_id,
         4,
@@ -2102,7 +2102,7 @@ async def generate_lesson_with_image(
         source_name=source_name,
     )
 
-    generation_id = str(uuid.uuid4())
+    generation_id = new_generation_id(request)
     initialize_progress(
         generation_id,
         4,

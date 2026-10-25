@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowUpRight, Languages, LogOut } from "lucide-react";
-import { logout } from "@/lib/access";
+import { ArrowUpRight, Languages } from "lucide-react";
 
 export function NorskShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -21,7 +20,6 @@ export function NorskShell({ children }: { children: React.ReactNode }) {
             <Link href="/verksted" aria-current={pathname === "/verksted" ? "page" : undefined} className="inline-flex items-center gap-1.5 rounded-lg bg-accent-700 px-4 py-2.5 font-medium text-white hover:bg-accent-800">
               Lag læringsark <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
             </Link>
-            {pathname === "/verksted" && <button type="button" onClick={logout} className="inline-flex items-center gap-1.5 text-stone-600 hover:text-accent-800"><LogOut className="h-4 w-4" aria-hidden="true" /><span>Logg ut</span></button>}
           </nav>
         </div>
       </header>

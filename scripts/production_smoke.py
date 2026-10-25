@@ -99,6 +99,20 @@ def run_once(call: Call = request) -> list[str]:
         if page_status != 404:
             errors.append(f"language frontend {path}: HTTP {page_status} (expected 404)")
 
+    status, trial = call(f"{BACKEND}/api/platform/access/status?module=norsk")
+    if status != 200 or not isinstance(trial, dict) or trial.get("required") is not False or trial.get("configured") is not True:
+        errors.append(f"language trial still requires a code: HTTP {status} {trial}")
+    status, config = call(f"{BACKEND}/api/norsk/auth/config")
+    if status != 200 or not isinstance(config, dict) or config.get("password_required") is not False:
+        errors.append(f"language module still requires a code: HTTP {status} {config}")
+    # Empty input must reach validation, never enqueue paid generation work.
+    status, _ = call(f"{BACKEND}/api/norsk/generate-lesson-json", payload={})
+    if status != 422:
+        errors.append(f"open language generation validation: HTTP {status} (expected 422)")
+    status, _ = call(f"{BACKEND}/api/norsk/download-json/private-pilot-job")
+    if status != 401:
+        errors.append(f"private language job without a code: HTTP {status} (expected 401)")
+
     # Anonymous callers must be refused, never served and never a 5xx.
     for label, url, payload in (
         ("platform API", f"{BACKEND}/api/platform/jobs", None),

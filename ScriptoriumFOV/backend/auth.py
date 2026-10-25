@@ -10,6 +10,8 @@ import hashlib
 import hmac
 import logging
 import os
+import uuid
+from collections.abc import Mapping
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request
@@ -23,6 +25,19 @@ security = HTTPBearer(auto_error=False)
 # (Skoleverksted/backend/platform/access.py). Standalone Norsk deployments never
 # see it and keep checking the password themselves.
 PLATFORM_ACCESS_SCOPE_KEY = "skoleverksted.access_granted"
+PUBLIC_NORSK_SCOPE_KEY = "skoleverksted.norsk_public_access"
+
+
+def norsk_open_access_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """Temporary open trial. Set NORSK_OPEN_ACCESS=0 to require the code again."""
+    env = os.environ if environ is None else environ
+    return env.get("NORSK_OPEN_ACCESS", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def new_generation_id(request: Request) -> str:
+    """Keep public capability links separate from existing private pilot jobs."""
+    prefix = "open-" if request.scope.get(PUBLIC_NORSK_SCOPE_KEY) else ""
+    return f"{prefix}{uuid.uuid4()}"
 
 
 def app_password_configured() -> bool:

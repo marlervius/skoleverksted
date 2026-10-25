@@ -31,11 +31,20 @@ The shared backend's explicit production CORS allowlist includes
 Render service, access code, model configuration and export controls.
 Custom or preview domains need their own explicit CORS origin before use.
 
-The landing page and privacy notice are public. The workspace still requires
-the shared pilot access code. Each frontend origin has its own browser storage
-and login session. Server-side jobs and files still belong to the shared pilot
-workspace. This release does not introduce customer accounts, tenant isolation,
-billing, or a commercial hosting plan; the privacy page states that limitation.
+Norskverksted is temporarily open without a code. The standalone frontend asks
+for `/api/platform/access/status?module=norsk`, and only the explicitly listed
+language generation routes and new `open-<UUID>` job capability links are open.
+Existing pilot job IDs, private project bindings, the shared job index and all
+other modules still require the pilot code. Source checks, teacher approval,
+export gates and generation rate limits still apply. Do not publish job links
+containing private work: anyone with an open job link can read or approve it.
+
+To restore the code, set the non-secret backend setting `NORSK_OPEN_ACCESS=0`
+and redeploy Render. No secret needs to change; the frontend will ask for the
+code again from the server's status response. Also update the landing/privacy
+copy and change the smoke assertions for the deliberate closed-pilot state.
+Each frontend origin has its own browser storage. This release does not add
+customer accounts, billing or a commercial hosting plan.
 
 ## Verify and publish
 

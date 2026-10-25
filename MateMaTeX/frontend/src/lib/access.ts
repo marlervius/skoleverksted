@@ -218,7 +218,8 @@ const accessBase = () => `${publicBackendUrl()}/api/platform/access`;
 
 export async function fetchAccessStatus(): Promise<AccessStatus> {
   const token = getAccessToken();
-  const response = await fetch(`${accessBase()}/status`, {
+  const scope = isLanguageSite() ? "?module=norsk" : "";
+  const response = await fetch(`${accessBase()}/status${scope}`, {
     cache: "no-store",
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
