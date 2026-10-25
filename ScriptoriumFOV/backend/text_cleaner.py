@@ -320,6 +320,16 @@ def sanitize_comprehension_for_typst(text: str) -> str:
     return sanitize_for_typst(text, is_section_content=True)
 
 
+# Open questions ("Svar med egne ord.") get room to write a paraphrased answer.
+_OPEN_ANSWER_RE = re.compile(r"egne ord|own words", re.IGNORECASE)
+_ANSWER_LINES = [
+    "#v(0.6em)",
+    "#line(length: 100%, stroke: 0.5pt + luma(180))",
+    "#v(0.6em)",
+    "#line(length: 100%, stroke: 0.5pt + luma(180))",
+]
+
+
 def format_mcq_content(text: str) -> str:
     """Format multiple choice question content for proper layout."""
     if not text:
@@ -344,6 +354,13 @@ def format_mcq_content(text: str) -> str:
             formatted_lines.append(
                 f"#strong[{question_match.group(1)}.] {question_match.group(2)}"
             )
+            if _OPEN_ANSWER_RE.search(stripped):
+                formatted_lines.extend(_ANSWER_LINES)
+            continue
+
+        if _OPEN_ANSWER_RE.search(stripped):
+            formatted_lines.append(stripped)
+            formatted_lines.extend(_ANSWER_LINES)
             continue
 
         option_match = re.match(r"^([a-d])[.\)]\s*(.+)$", stripped, re.IGNORECASE)

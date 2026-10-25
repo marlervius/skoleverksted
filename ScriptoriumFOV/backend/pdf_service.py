@@ -91,6 +91,17 @@ def download_image_to_temp(image_url: str):
                 pass  # Ignore cleanup errors
 
 
+def keep_line_breaks(content: str) -> str:
+    """Turn single line breaks into Typst hard breaks; Typst would join them into one paragraph."""
+    lines = content.split("\n")
+    markup = ("- ", "+ ", "#", "=")
+    for i in range(len(lines) - 1):
+        current, following = lines[i].strip(), lines[i + 1].strip()
+        if current and following and not current.startswith(markup) and not following.startswith(markup):
+            lines[i] = lines[i].rstrip() + " \\"
+    return "\n".join(lines)
+
+
 def render_cloze_test(items: list) -> str:
     """
     Render cloze test (fill in the blank) exercises.
@@ -220,6 +231,10 @@ def render_scrambled_sentences(items: list, is_english: bool = False) -> str:
         # Extract words from brackets or split by space
         if '[' in text and ']' in text:
             words = re.findall(r'\[([^\]]+)\]', text)
+        elif '/' in text:
+            # Items are written "I går / fikk / Sara"; a block between slashes
+            # stays together, so a time phrase counts as one place.
+            words = [w.strip() for w in text.split('/') if w.strip()]
         else:
             words = [w.strip() for w in re.split(r'[,\s]+', text) if w.strip()]
         
@@ -752,6 +767,20 @@ def render_sentence_combination_exercise(items: list, is_english: bool = False) 
     return "\n".join(lines)
 
 
+def render_sentence_writing_exercise(items: list) -> str:
+    """One prompt per item (a word and a new situation, or a sound pair) and a writing line."""
+    if not items:
+        return ""
+    lines = []
+    for i, item in enumerate(items, 1):
+        text = re.sub(r'\s*\([^)]+\)\s*$', '', str(item).strip())
+        lines.append(f"{i}. {sanitize_for_typst(text)}")
+        lines.append("#v(0.3em)")
+        lines.append("#line(length: 100%, stroke: 0.5pt + line-color)")
+        lines.append("#v(0.5em)")
+    return "\n".join(lines)
+
+
 def render_error_correction_exercise(items: list, is_english: bool = False) -> str:
     """
     Render an error-correction exercise (#8).
@@ -900,6 +929,9 @@ def format_language_exercises(exercises: dict, options: dict = None, is_english:
                 elif "stav" in task_type or "spell" in task_type:
                     # Spelling exercise - strip answers in parentheses
                     vocab_content.append(render_spelling_exercise(items))
+                elif "setning" in task_type or "lyd" in task_type:
+                    # Sentence building and sound pairs: the learner writes a new sentence
+                    vocab_content.append(render_sentence_writing_exercise(items))
                 else:
                     # Default: simple list (but also check for hidden answers)
                     for j, item in enumerate(items, 1):
@@ -1069,8 +1101,9 @@ def create_typst_template(
     # Advanced modules
     safe_role_play = sanitize_for_typst(role_play, is_section_content=True)
     safe_image_description = sanitize_for_typst(image_description, is_section_content=True)
-    safe_writing_frame = sanitize_for_typst(writing_frame, is_section_content=True)
-    safe_real_case = sanitize_for_typst(real_case, is_section_content=True)
+    # Writing tasks list tracks and checklist points on their own lines.
+    safe_writing_frame = keep_line_breaks(sanitize_for_typst(writing_frame, is_section_content=True))
+    safe_real_case = keep_line_breaks(sanitize_for_typst(real_case, is_section_content=True))
     
     # Comprehension needs answer markers removed for student PDF
     safe_comprehension = sanitize_comprehension_for_typst(comprehension)

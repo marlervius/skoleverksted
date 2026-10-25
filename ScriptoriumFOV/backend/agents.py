@@ -13,10 +13,12 @@ if __package__:
     from .config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
     from .errors import GeminiQuotaExceededError
     from .level_readability import analyze_readability, enforce_level_readability
+    from . import research_design
 else:
     from config import CACHE_TTL_SECONDS, GOOGLE_API_KEY, GOOGLE_MODEL
     from errors import GeminiQuotaExceededError
     from level_readability import analyze_readability, enforce_level_readability
+    import research_design
 
 logger = logging.getLogger(__name__)
 
@@ -296,132 +298,7 @@ def format_level_constraints(level: str, is_english: bool, difficulty_modifier: 
     return block
 
 
-GRAMMAR_TASKS_NORWEGIAN = {
-    "A1_A2": [
-        {
-            "type": "ordklasser_sortering",
-            "name": "Ordklasser (Sortering)",
-            "instruction": "Sorter ordene i riktig kategori: Substantiv, Verb eller Adjektiv",
-            "format": "En blandet liste med ord eleven skal sortere",
-            "example": '["klimasone", "ligger", "kald", "vokser", "tropisk"]'
-        },
-        {
-            "type": "artikler",
-            "name": "Artikler (en/ei/et)",
-            "instruction": "Fyll inn riktig artikkel: en, ei eller et",
-            "format": "Setninger med ___ foran substantiv",
-            "example": '"___ hus", "___ bok", "___ bil"'
-        },
-        {
-            "type": "flertall",
-            "name": "Flertall av substantiv",
-            "instruction": "Skriv flertallsformen av substantivet",
-            "format": "Entallsord som skal bøyes til flertall",
-            "example": '"en bil → flere ___", "et hus → flere ___"'
-        },
-        {
-            "type": "pronomen",
-            "name": "Personlige pronomen",
-            "instruction": "Fyll inn riktig pronomen: jeg, du, han, hun, vi, de",
-            "format": "Setninger med ___ der pronomen mangler",
-            "example": '"___ bor i Norge.", "___ liker å lese."'
-        },
-        {
-            "type": "eiendomsord",
-            "name": "Eiendomsord (min, din, hans, etc.)",
-            "instruction": "Fyll inn riktig eiendomsord",
-            "format": "Setninger med ___ foran substantiv",
-            "example": '"Dette er ___ bok (jeg).", "Er dette ___ hus (du)?"'
-        },
-        {
-            "type": "spørreord",
-            "name": "Spørreord",
-            "instruction": "Fyll inn riktig spørreord: hva, hvem, hvor, når, hvorfor, hvordan",
-            "format": "Spørsmål med ___ der spørreordet mangler",
-            "example": '"___ bor du?", "___ heter du?"'
-        },
-        {
-            "type": "presens",
-            "name": "Verb i presens",
-            "instruction": "Bøy verbet til presens (nåtid)",
-            "format": "Setninger med verb i infinitiv som skal bøyes",
-            "example": '"Jeg (å spise) ___ middag.", "Hun (å jobbe) ___ på kontor."'
-        },
-    ],
-    "B1_B2": [
-        {
-            "type": "verbbøying",
-            "name": "Verbbøying (alle tider)",
-            "instruction": "Bøy verbene i alle tider: infinitiv → presens → preteritum → perfektum",
-            "format": "Verbtabell med infinitiv som skal bøyes",
-            "example": '"å jobbe → jobber → jobbet → har jobbet"'
-        },
-        {
-            "type": "sammensatte_ord",
-            "name": "Sammensatte ord",
-            "instruction": "Del opp de sammensatte ordene og forklar betydningen",
-            "format": "Sammensatte ord fra teksten",
-            "example": '"miljøvern = miljø + vern", "arbeidsliv = arbeid + liv"'
-        },
-        {
-            "type": "preposisjoner",
-            "name": "Preposisjoner",
-            "instruction": "Fyll inn riktig preposisjon: i, på, til, fra, med, om, for, ved",
-            "format": "Setninger med ___ der preposisjon mangler",
-            "example": '"Han jobber ___ et kontor.", "Vi reiser ___ Bergen."'
-        },
-        {
-            "type": "adjektivbøying",
-            "name": "Adjektivbøying",
-            "instruction": "Bøy adjektivene i riktig form (entall/flertall, bestemt/ubestemt)",
-            "format": "Setninger der adjektiv må tilpasses substantivet",
-            "example": '"en (stor) ___ bil", "det (fin) ___ huset", "de (god) ___ bøkene"'
-        },
-        {
-            "type": "passiv",
-            "name": "Passiv form",
-            "instruction": "Skriv setningene om til passiv form (-s eller bli + perfektum)",
-            "format": "Aktive setninger som skal omskrives",
-            "example": '"Læreren retter oppgaven." → "Oppgaven ___."'
-        },
-        {
-            "type": "konjunksjoner",
-            "name": "Konjunksjoner og bindeord",
-            "instruction": "Fyll inn riktig bindeord: og, men, fordi, hvis, når, som, at",
-            "format": "Setninger med ___ der bindeord mangler",
-            "example": '"Jeg lærer norsk ___ jeg bor i Norge."'
-        },
-        {
-            "type": "ordstilling",
-            "name": "Ordstilling (V2-regelen)",
-            "instruction": "Sett ordene i riktig rekkefølge. Husk at verbet skal stå på andreplass!",
-            "format": "Ord som skal settes i riktig rekkefølge",
-            "example": '"i / Norge / bor / jeg" → "Jeg bor i Norge." eller "I Norge bor jeg."'
-        },
-        {
-            "type": "relativsetninger",
-            "name": "Relativsetninger (som)",
-            "instruction": "Kombiner setningene ved å bruke 'som'",
-            "format": "To setninger som skal kombineres",
-            "example": '"Mannen bor her. Mannen er lærer." → "Mannen som bor her, er lærer."'
-        },
-        {
-            "type": "feilretting",
-            "name": "Feilretting – Finn og rett feilene",
-            "instruction": "Tre av disse fem setningene har grammatikkfeil. Finn feilene og skriv setningene riktig.",
-            "format": "5 nummererte setninger der nøyaktig 3 har én grammatikkfeil hver. 2 er korrekte. Marker IKKE hvilke som har feil.",
-            "example": '"1. Han gikk ikke til skole i går." (feil: mangler bestemt form), "2. Vi spiste middag klokka seks." (korrekt)'
-        },
-        {
-            "type": "modalverb",
-            "name": "Modalverb (kan, må, skal, bør, vil)",
-            "instruction": "Fyll inn riktig modalverb: kan, må, skal, bør eller vil",
-            "format": "Setninger med ___ der modalverb mangler",
-            "example": '"Du ___ vaske hendene før du spiser.", "Vi ___ reise til Bergen i morgen."'
-        },
-    ]
-}
-
+# Norwegian grammar tasks follow the processability stages in research_design.
 GRAMMAR_TASKS_ENGLISH = {
     "A1_A2": [
         {
@@ -554,7 +431,11 @@ def get_random_grammar_tasks(level: str, is_english: bool, num_tasks: int = 3) -
     Returns:
         List of randomly selected task type definitions
     """
-    task_pool = GRAMMAR_TASKS_ENGLISH if is_english else GRAMMAR_TASKS_NORWEGIAN
+    if not is_english:
+        # Norwegian follows the processability stages of the level.
+        return research_design.select_grammar_tasks(level, num_tasks)
+
+    task_pool = GRAMMAR_TASKS_ENGLISH
     # Support sub-levels like "A1.1", "A2.2", "B1.1" etc.
     level_key = "A1_A2" if level.upper().startswith(("A1", "A2")) else "B1_B2"
     
@@ -1130,10 +1011,13 @@ def generate_lesson_content(
             f"Inkluder korte referanser som 'I denne serien utforsker vi...' eller 'Bygger videre på det vi har lært...' der det faller naturlig.\n"
         )
 
-    word_count = "200-300 words" if is_english_subject else "200-300 ord"
-    base_level_for_wc = level.split(".")[0].upper()
-    if base_level_for_wc in ["B1", "B2"]:
-        word_count = "300-400 words" if is_english_subject else "300-400 ord"
+    if is_english_subject:
+        word_count = "200-300 words"
+        if level.split(".")[0].upper() in ["B1", "B2"]:
+            word_count = "300-400 words"
+    else:
+        # Text length per level from the research report's progression matrix.
+        word_count = research_design.design_for(level)["text_length"]
     if options["deep_dive"]:
         word_count = "about 800 words with extra facts and details" if is_english_subject else "ca. 800 ord med ekstra fakta, dybdeinformasjon og detaljer"
 
@@ -1190,6 +1074,7 @@ def generate_lesson_content(
             {series_note_no}{special_note_no}{utdanningsvalg_note}{source_context}
             Krav til teksten:
             {format_level_constraints(level, False, difficulty_modifier)}
+            {research_design.text_design_block(level)}
             - Teksten skal være på norsk (bokmål)
             - Lengde: {word_count}
             - Teksten skal være faktabasert og informativ
@@ -1312,16 +1197,12 @@ def generate_lesson_content(
                 sections.append(f"""{chr(section_letter)}) VIKTIGE BEGREPER
                 - Velg {key_terms_range} nøkkelord/begreper fra teksten
                 - Gi en enkel definisjon av hvert begrep på {level}-nivå
-                - Definisjonen er én kort setning på maks {definition_words} ord, og den bruker ikke andre fagord
+                - Definisjonen er én kort setning på maks {definition_words} ord, og den bruker ikke andre fagord{research_design.worksheet_vocabulary_rules(level)}
                 - Format: "Begrep: definisjon" """)
                 section_letter += 1
-            
+
             if options["comprehension_tasks"]:
-                sections.append(f"""{chr(section_letter)}) LESEFORSTÅELSE
-                - Lag 3 flervalgsspørsmål basert på teksten
-                - Hvert spørsmål skal ha 3 svaralternativer (a, b, c)
-                - Marker riktig svar med *
-                - Spørsmålene skal teste forståelse, ikke bare gjenfinning""")
+                sections.append(research_design.comprehension_section(chr(section_letter), level))
                 section_letter += 1
                 
             if options["discussion_tasks"]:
@@ -1374,7 +1255,7 @@ def generate_lesson_content(
                   "I Norge..."
                 - Tilpass vanskeligheten til {level}-nivå. Eksempel på en ramme for dette nivået: "{frame_example}"
                 - A1 har bare én blank per ramme. B1 kan ha underordnede setninger
-                - Eleven skal få bruke morsmålet til å planlegge før de skriver på norsk""")
+                - Eleven skal få bruke morsmålet til å planlegge før de skriver på norsk{research_design.writing_frame_extra(level)}""")
                 section_letter += 1
             
             if options["cultural_comparison"]:
@@ -1398,7 +1279,7 @@ def generate_lesson_content(
                 - Format:
                   Situasjon: [beskrivelse]
                   Oppgave: Skriv [e-post/SMS/brev] til [mottaker] om [emne]
-                - Tilpass formalitetsnivå og lengde til {level}-nivå""")
+                - Tilpass formalitetsnivå og lengde til {level}-nivå{research_design.real_case_extra(level)}""")
                 section_letter += 1
             
         teacher_key_instruction = ""
@@ -1422,7 +1303,7 @@ For hver seksjon, gi:
 - LESEFORSTÅELSE: Riktig bokstav (a/b/c) etterfulgt av full korrekt setning
 - DISKUSJON: 2-3 modellsvar-punkter per spørsmål
 - FEILRETTING (hvis inkludert): Angi hvilke setninger som hadde feil og skriv korrekte versjoner
-Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
+Vær grundig og presis — lærere bruker dette til å rette elevarbeider.""" + research_design.teacher_key_rules(level)
 
         sections_text = "\n\n".join(sections)
         
@@ -1556,7 +1437,8 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
                 SPRÅKNIVÅ: {level} (CEFR)
                 
                 {language_focus}
-                
+                {research_design.language_task_rules(level)}
+
                 ⚠️ KVALITETSKONTROLL - SVÆRT VIKTIG:
                 - ALLE ord, verb og setninger MÅ komme DIREKTE fra teksten du har mottatt
                 - Hvis temaet er "Energi", bruk verb som "produsere", "bruke", "varme" fra teksten
@@ -1567,14 +1449,14 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
                 {{
                     "grammar_tasks": [
                         {{
-                            "type": "verbbøying" | "ordklasser_sortering" | "preposisjoner" | "sammensatte_ord",
+                            "type": "<type fra grammatikkoppgavene over>",
                             "instruction": "Instruksjon på norsk til eleven",
                             "items": ["oppgave fra teksten 1", "oppgave fra teksten 2", ...]
                         }}
                     ],
                     "vocabulary_tasks": [
                         {{
-                            "type": "fyll_inn" | "koble_ord" | "staving",
+                            "type": "fyll_inn" | "koble_ord" | "staving" | "setningsbygging",
                             "instruction": "Instruksjon på norsk til eleven",
                             "items": ["setning med ___ fra teksten", ...]
                         }}
@@ -1775,7 +1657,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider."""
         "quality_rounds": [item.model_dump(mode="json") for item in quality_result.rounds],
         "quality_stop_reason": quality_result.stop_reason,
         "quality_status": quality_result.quality_status,
-        "prompt_version": os.getenv("PROMPT_VERSION", "norsk-v3-fov"),
+        "prompt_version": os.getenv("PROMPT_VERSION", "norsk-v4-forskning"),
     }
 
     # Save to cache
