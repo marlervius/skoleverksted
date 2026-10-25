@@ -6,6 +6,7 @@ import os
 DEFAULT_PRODUCTION_FRONTEND_ORIGINS = (
     "https://skoleverksted.vercel.app",
     "https://skoleverksted-3npg.vercel.app",
+    "https://norskverksted.vercel.app",
 )
 
 

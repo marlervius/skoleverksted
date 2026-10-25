@@ -143,6 +143,20 @@ npm run dev
 
 ## Produksjon
 
+### Egen språknettside: Norskverksted
+
+**Norskverksted** ligger på `https://norskverksted.vercel.app` som et eget
+Vercel-prosjekt. Det bruker den samme frontendkoden med
+`NEXT_PUBLIC_SITE_EDITION=norsk`: egen offentlig forside, språkprofil,
+personvernside og arbeidsflate på `/verksted`. Andre moduler og felles
+historikksider er utilgjengelige på språknettsiden. Skoleverksted beholder alle
+tre moduler på sin eksisterende nettadresse.
+
+Norskverksted deler foreløpig Render-backend og pilotarbeidsområde med
+Skoleverksted. Tilgangskode, kildekontroll, lærergodkjenning og eksportporter
+gjelder fortsatt. Eget domene betyr ikke egne kundekontoer eller dataseparasjon.
+Se [NORSKVERKSTED_DEPLOYMENT.md](NORSKVERKSTED_DEPLOYMENT.md) for oppsett og kontroll.
+
 - Bygg frontend fra `MateMaTeX/frontend`.
 - Start backend med `uvicorn Skoleverksted.backend.main:app` fra repoets rot.
 - Sett `GOOGLE_API_KEY`, `FRONTEND_URL`, `APP_PASSWORD` (tilgangskoden, påkrevd

@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { M1CoverageCard } from "@/components/m1-coverage";
+import { NorskPrivacy } from "@/components/norsk-privacy";
+import { isLanguageSite, siteName } from "@/lib/site-edition";
 
 export const metadata = {
-  title: "Personvern — Skoleverksted",
+  title: `Personvern — ${siteName()}`,
   description:
-    "Hvordan Skoleverksted behandler lærerinput, lokale elevprofiler, kildetekst og generert innhold.",
+    `Hvordan ${siteName()} behandler lærerinput, kildetekst og generert innhold.`,
 };
 
 export default function PersonvernPage() {
+  if (isLanguageSite()) return <NorskPrivacy />;
   return (
     <div className="max-w-2xl mx-auto prose prose-invert prose-sm">
       <h1 className="font-display text-3xl mb-2">Personvern</h1>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { KeyRound, Loader2 } from "lucide-react";
+import { isLanguageSite, siteName } from "@/lib/site-edition";
 import {
   ACCESS_REQUIRED_EVENT,
   AccessLoginError,
@@ -34,7 +35,7 @@ export function AccessGate({ children }: { children: React.ReactNode }) {
     try {
       const status = await fetchAccessStatus();
       if (!status.configured) {
-        setProblem("Tilgang er ikke satt opp på serveren ennå. Si fra til den som drifter Skoleverksted.");
+        setProblem(`Tilgang er ikke satt opp på serveren ennå. Si fra til den som drifter ${siteName()}.`);
         setPhase("problem");
       } else if (!status.required || status.authenticated) {
         setEverOpen(true);
@@ -96,12 +97,13 @@ function Shell({ children }: { children: React.ReactNode }) {
             <KeyRound className="h-8 w-8 text-white" />
           </div>
         </div>
-        <h1 className="mb-2 text-center text-2xl font-semibold text-stone-900">Skoleverksted</h1>
+        <h1 className="mb-2 text-center text-2xl font-semibold text-stone-900">{siteName()}</h1>
         {children}
         <p className="mt-6 text-center text-xs text-stone-500">
           <Link href="/personvern" className="underline hover:text-stone-700">
             Personvern
           </Link>
+          {isLanguageSite() && <Link href="/" className="ml-4 underline hover:text-stone-700">Til forsiden</Link>}
         </p>
       </div>
     </main>
@@ -132,7 +134,7 @@ function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   return (
     <Shell>
       <p className="mb-6 text-center text-sm text-stone-500">
-        Skoleverksted er i lukket pilot. Skriv inn tilgangskoden du har fått.
+        {siteName()} er i lukket pilot. Skriv inn tilgangskoden du har fått.
       </p>
       <form onSubmit={submit} className="space-y-4">
         <label className="field-label" htmlFor="access-code">

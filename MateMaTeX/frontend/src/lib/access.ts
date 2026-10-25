@@ -8,6 +8,7 @@
  */
 import { isPrivateSession } from "./private-storage";
 import { publicBackendUrl } from "./backend-url";
+import { isLanguageSite } from "./site-edition";
 
 export const ACCESS_STORAGE_KEY = "skoleverksted_access";
 export const ACCESS_REQUIRED_EVENT = "skoleverksted:access-required";
@@ -16,6 +17,7 @@ export const ACCESS_REQUIRED_EVENT = "skoleverksted:access-required";
 const PUBLIC_PREFIXES = ["/shared", "/personvern"];
 
 export function isPublicPath(pathname: string): boolean {
+  if (isLanguageSite() && pathname === "/") return true;
   return PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
