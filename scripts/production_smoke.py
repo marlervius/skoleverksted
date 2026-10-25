@@ -19,6 +19,7 @@ from collections.abc import Callable
 
 
 FRONTEND = os.getenv("SMOKE_FRONTEND_URL", "https://skoleverksted.vercel.app").rstrip("/")
+LANGUAGE_FRONTEND = os.getenv("SMOKE_LANGUAGE_FRONTEND_URL", "https://norskverksted.vercel.app").rstrip("/")
 BACKEND = os.getenv("SMOKE_BACKEND_URL", "https://skoleverksted-api.onrender.com").rstrip("/")
 # A Render rebuild after a merge takes several minutes; keep trying that long.
 ATTEMPTS = int(os.getenv("SMOKE_ATTEMPTS", "48"))
@@ -88,6 +89,15 @@ def run_once(call: Call = request) -> list[str]:
         page_status, _ = call(f"{FRONTEND}{path}")
         if page_status != 200:
             errors.append(f"frontend {path}: HTTP {page_status}")
+
+    for path in ("/", "/verksted", "/personvern"):
+        page_status, _ = call(f"{LANGUAGE_FRONTEND}{path}")
+        if page_status != 200:
+            errors.append(f"language frontend {path}: HTTP {page_status}")
+    for path in ("/fag", "/matematikk", "/history", "/api/backend/estimate"):
+        page_status, _ = call(f"{LANGUAGE_FRONTEND}{path}")
+        if page_status != 404:
+            errors.append(f"language frontend {path}: HTTP {page_status} (expected 404)")
 
     # Anonymous callers must be refused, never served and never a 5xx.
     for label, url, payload in (

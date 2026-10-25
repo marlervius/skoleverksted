@@ -22,10 +22,15 @@ class FakeServer:
         self.login_status = overrides.get("login_status", 200)
         self.authorised_status = overrides.get("authorised_status", 200)
         self.pages_status = overrides.get("pages_status", 200)
+        self.language_pages_status = overrides.get("language_pages_status", 200)
+        self.language_other_status = overrides.get("language_other_status", 404)
         self.calls: list[tuple[str, str]] = []
 
     def __call__(self, url, *, payload=None, token=""):
         self.calls.append(("POST" if payload is not None else "GET", url + (" [token]" if token else "")))
+        if url.startswith(smoke.LANGUAGE_FRONTEND):
+            path = url.removeprefix(smoke.LANGUAGE_FRONTEND)
+            return (self.language_pages_status if path in ("/", "/verksted", "/personvern") else self.language_other_status), ""
         if url.endswith("/health/ready"):
             return 200, self.ready
         if url.endswith("/access/login"):
@@ -56,6 +61,13 @@ def test_a_backend_that_lost_its_gate_fails_even_if_everything_else_is_fine():
 
 def test_missing_frontend_pages_are_reported():
     assert any("frontend /personvern" in error for error in smoke.run_once(FakeServer(pages_status=502)))
+
+
+def test_language_frontend_is_checked_independently():
+    assert any("language frontend /verksted" in error for error in smoke.run_once(FakeServer(language_pages_status=502)))
+    errors = smoke.run_once(FakeServer(language_other_status=200))
+    assert len(errors) == 4
+    assert all("expected 404" in error for error in errors)
 
 
 def test_signed_in_path_signs_in_once_and_checks_both_entrances():

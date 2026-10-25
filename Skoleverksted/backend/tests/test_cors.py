@@ -9,6 +9,10 @@ from Skoleverksted.backend.platform.cors import (
 
 
 class CorsTests(unittest.TestCase):
+    def test_standalone_language_origin_is_explicitly_allowed_in_production(self):
+        with patch.dict(os.environ, {"ENVIRONMENT": "production"}, clear=True):
+            self.assertIn("https://norskverksted.vercel.app", allowed_origins())
+
     def test_keeps_localhost_as_development_default(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(allowed_origins(), ["http://localhost:3000"])
