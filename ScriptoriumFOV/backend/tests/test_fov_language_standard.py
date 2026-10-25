@@ -300,3 +300,18 @@ def test_english_sheets_keep_their_own_design(harness):
     worksheet = _description(harness, "create a worksheet")
     assert "Create 3 multiple choice questions" in worksheet
     assert "PT-trinn" not in _description(harness, "Write an educational text")
+
+
+def test_pre_a1_text_and_worksheet_prompts(harness):
+    agents.generate_lesson_content(topic="Første vakt", subject="Samfunnsfag", level="Pre-A1")
+
+    text_task = _description(harness, "Skriv en pedagogisk tekst")
+    assert "40-80 ord" in text_task
+    assert "Riktig Pre-A1" in text_task
+    worksheet = _description(harness, "lag et arbeidsark")
+    assert "Velg 4–6 nøkkelord" in worksheet
+    assert "Start slik:" in worksheet
+    exercises = _description(harness, "Analyser teksten grundig")
+    assert '"tegnsetting_stor_bokstav"' in exercises
+    assert '"lyd_og_skrift"' in exercises
+    assert "Fokusér mest på vocabulary_tasks" in exercises

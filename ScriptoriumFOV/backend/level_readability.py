@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 # Upper bounds from the FOV framework: A1 8-10, A2 12-14 and B1 up to 20 words
 # per sentence.  The prompts aim lower (8/12/18); the checker only flags real
 # violations so a teacher is not shown noise.
-SENTENCE_LIMITS: dict[str, int] = {"A1": 10, "A2": 14, "B1": 20}
+SENTENCE_LIMITS: dict[str, int] = {"PRE-A1": 8, "A1": 10, "A2": 14, "B1": 20}
 # A1 and A2 additionally forbid constructions the framework calls B1 syntax.
-RESTRICTED_LEVELS = ("A1", "A2")
+RESTRICTED_LEVELS = ("PRE-A1", "A1", "A2")
 MAX_REPORTED_ISSUES = 20
 
 _ABBREVIATIONS = {
@@ -68,6 +68,11 @@ class RepairOutcome:
     reason: str
     before: dict
     after: Optional[dict] = None
+
+
+def level_label(base: str) -> str:
+    """How a base level is written for teachers: "PRE-A1" -> "Pre-A1"."""
+    return "Pre-A1" if base == "PRE-A1" else base
 
 
 def normalize_level(level: str) -> str:
@@ -139,7 +144,7 @@ def _sentence_issues(sentence: str, base: str, limit: int, language: str) -> lis
             "sentence": sentence,
             "words": words,
             "limit": limit,
-            "message": f"{words} ord; {base}-grensen er {limit}. Del setningen i to.",
+            "message": f"{words} ord; {level_label(base)}-grensen er {limit}. Del setningen i to.",
         })
     if language == "nb" and base in RESTRICTED_LEVELS:
         if _DASH_RE.search(sentence):
@@ -156,15 +161,15 @@ def _sentence_issues(sentence: str, base: str, limit: int, language: str) -> lis
                 "sentence": sentence,
                 "words": words,
                 "limit": limit,
-                "message": f"Relativsetning med «som» er for vanskelig på {base}. Skriv to setninger.",
+                "message": f"Relativsetning med «som» er for vanskelig på {level_label(base)}. Skriv to setninger.",
             })
-        if base == "A1" and _A1_CLAUSE_RE.search(sentence):
+        if base in ("PRE-A1", "A1") and _A1_CLAUSE_RE.search(sentence):
             issues.append({
                 "code": "subordinate_clause",
                 "sentence": sentence,
                 "words": words,
                 "limit": limit,
-                "message": "Leddsetning er for vanskelig på A1. Bruk enkle hovedsetninger.",
+                "message": f"Leddsetning er for vanskelig på {level_label(base)}. Bruk enkle hovedsetninger.",
             })
     return issues
 
@@ -209,13 +214,13 @@ def analyze_readability(text: str, level: str, *, language: str = "nb") -> dict:
     if all_issues:
         report["status"] = "needs_attention"
         report["summary"] = (
-            f"{flagged} av {len(sentences)} setninger bryter {base}-reglene "
+            f"{flagged} av {len(sentences)} setninger bryter {level_label(base)}-reglene "
             f"(lengste setning: {report['longest_sentence_words']} ord)."
         )
     else:
         report["status"] = "ok"
         report["summary"] = (
-            f"Alle {len(sentences)} setninger holder {base}-grensen på {limit} ord "
+            f"Alle {len(sentences)} setninger holder {level_label(base)}-grensen på {limit} ord "
             f"(lengste setning: {report['longest_sentence_words']} ord)."
         )
     return report
@@ -228,7 +233,7 @@ def _rewrite_prompt(text: str, base: str, issues: list[dict]) -> str:
     )
     limit = SENTENCE_LIMITS[base]
     return (
-        f"Du forenkler en norsk læringstekst for voksne som lærer norsk på nivå {base} (CEFR).\n\n"
+        f"Du forenkler en norsk læringstekst for voksne som lærer norsk på nivå {level_label(base)} (CEFR).\n\n"
         f"Hver setning skal ha maks {limit} ord og bare én idé. "
         "Del lange setninger i flere korte hovedsetninger. Fjern tankestrek og semikolon. "
         "Skriv relativsetninger med «som» som to setninger.\n\n"

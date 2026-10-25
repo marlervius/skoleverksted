@@ -124,6 +124,26 @@ def _provided_truth_sources(source_text: str | None, source_name: str | None) ->
 # so each level names the constructions it must avoid and gives a model
 # sentence. ``level_readability`` then measures the finished text.
 LEVEL_CONSTRAINTS = {
+    # Pre-A1 is the start phase of NOR07-03 level 1: words, fixed phrases and
+    # canonical subject-verb sentences in forms, timetables and messages.
+    "PRE-A1": {
+        "max_sentence_words": 6,
+        "tense": "bare presens, og faste mønstre med er, har, kan og vil + infinitiv",
+        "vocabulary_note": (
+            "Bruk bare de ca. 300 vanligste ordene og faste fraser (hei, jeg heter, kommer fra, klokka er), "
+            "tall, klokkeslett, ukedager og priser. Gjenta de samme ordene mange ganger."
+        ),
+        "structure": (
+            "Korte hovedsetninger i rekkefølgen subjekt–verb–resten, alltid med subjekt: «Du begynner "
+            "klokka 16.00.», «Det regner.» Ingen tidsuttrykk først i setningen, ingen leddsetninger, "
+            "ingen «som», ingen tankestrek. Bruk gjerne linjer med «Navn:», «Dag:», «Tid:» som i et skjema."
+        ),
+        "key_terms": "4–6",
+        "term_definition_words": 6,
+        "writing_frame": "Jeg heter ___. Jeg begynner klokka ___.",
+        "example_good": "Du begynner klokka 16.00. Du låner nøkkel på kontoret. Vi snakkes!",
+        "example_bad": "I dag begynner du klokka 16.00, og først må du hente nøkkelen på kontoret.",
+    },
     "A1": {
         "max_sentence_words": 8,
         "tense": "presens og enkel preteritum av de vanligste verbene",
@@ -196,6 +216,12 @@ LEVEL_CONSTRAINTS = {
 }
 
 LEVEL_CONSTRAINTS_ENGLISH = {
+    "PRE-A1": {
+        "max_sentence_words": 6,
+        "tense": "present simple only",
+        "vocabulary_note": "Use only about 300 very common words, fixed phrases, numbers, times and days.",
+        "structure": "Very short main clauses, always with a subject. Form-like lines (Name:, Day:, Time:) are welcome.",
+    },
     "A1": {
         "max_sentence_words": 8,
         "tense": "present simple and basic past simple",
@@ -269,12 +295,13 @@ def format_level_constraints(level: str, is_english: bool, difficulty_modifier: 
             f"- Ordforråd: {c.get('vocabulary_note', '')}\n"
             f"- Struktur: {c.get('structure', '')}\n"
         )
-        if c.get("key_terms") and base_level in ("A1", "A2"):
+        if c.get("key_terms") and base_level in ("PRE-A1", "A1", "A2"):
             block += f"- Maks {c['key_terms'].split('–')[-1]} nye fagord per side\n"
         if c.get("example_good") and c.get("example_bad"):
+            level_label = "Pre-A1" if base_level == "PRE-A1" else base_level
             block += (
-                f"- Riktig {base_level}: «{c['example_good']}»\n"
-                f"- Feil {base_level} (for lang eller for vanskelig): «{c['example_bad']}»\n"
+                f"- Riktig {level_label}: «{c['example_good']}»\n"
+                f"- Feil {level_label} (for lang eller for vanskelig): «{c['example_bad']}»\n"
                 "- Test: Kan en elev som bare kan si «Jeg heter X, jeg kommer fra Y, jeg liker å spille "
                 "fotball» lese setningen? Hvis ikke, skriv den om.\n"
                 "- Tell ordene i hver setning før du leverer. Del alle setninger som er for lange.\n"
@@ -437,7 +464,7 @@ def get_random_grammar_tasks(level: str, is_english: bool, num_tasks: int = 3) -
 
     task_pool = GRAMMAR_TASKS_ENGLISH
     # Support sub-levels like "A1.1", "A2.2", "B1.1" etc.
-    level_key = "A1_A2" if level.upper().startswith(("A1", "A2")) else "B1_B2"
+    level_key = "A1_A2" if level.upper().startswith(("PRE-A1", "A1", "A2")) else "B1_B2"
     
     available_tasks = task_pool.get(level_key, [])
     
@@ -1013,7 +1040,9 @@ def generate_lesson_content(
 
     if is_english_subject:
         word_count = "200-300 words"
-        if level.split(".")[0].upper() in ["B1", "B2"]:
+        if research_design.base_level(level) == "PRE-A1":
+            word_count = "40-80 words"
+        elif level.split(".")[0].upper() in ["B1", "B2"]:
             word_count = "300-400 words"
     else:
         # Text length per level from the research report's progression matrix.
@@ -1209,7 +1238,7 @@ def generate_lesson_content(
                 discussion_starter = (
                     "\n                - Skriv en ferdig startsetning under hvert spørsmål, slik at eleven kan "
                     "svare muntlig til en medelev. Format: Start slik: Jeg synes ..."
-                    if base_level_for_tasks in ("A1", "A2")
+                    if base_level_for_tasks in ("PRE-A1", "A1", "A2")
                     else ""
                 )
                 sections.append(f"""{chr(section_letter)}) DISKUSJON
@@ -1419,7 +1448,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider.""" + 
                 RULES:
                 - Use ENGLISH grammar terms (Noun, Verb, Adjective, Preposition)
                 - Create 2-3 exercises per category
-                - For {level}: {"Focus mostly on vocabulary_tasks" if level.upper() in ["A1", "A2"] else "Focus on grammar_tasks and syntax_tasks"}
+                - For {level}: {"Focus mostly on vocabulary_tasks" if research_design.base_level(level) in ("PRE-A1", "A1", "A2") else "Focus on grammar_tasks and syntax_tasks"}
                 - All instructions must be in English
                 
                 CRITICAL: Return ONLY JSON. No explanations, no markdown code blocks, just pure JSON.""",
@@ -1499,7 +1528,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider.""" + 
                 REGLER:
                 - Bruk NORSKE grammatikktermer (Substantiv, Verb, Adjektiv, Preposisjon)
                 - Lag 2-3 oppgaver per kategori
-                - For {level}: {"Fokusér mest på vocabulary_tasks" if level.upper() in ["A1", "A2"] else "Fokusér på grammar_tasks og syntax_tasks"}
+                - For {level}: {"Fokusér mest på vocabulary_tasks" if research_design.base_level(level) in ("PRE-A1", "A1", "A2") else "Fokusér på grammar_tasks og syntax_tasks"}
                 - Alle instruksjoner skal være på norsk
                 
                 KRITISK: Returner BARE JSON. Ingen forklaringer, ingen markdown-kodeblokker, bare ren JSON.""",

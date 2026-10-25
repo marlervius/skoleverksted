@@ -10,6 +10,7 @@ export const SUBJECTS = [
 ] as const;
 
 export const LEVELS = [
+  { value: "Pre-A1", label: "Pre-A1 - Startfase", description: "Ord, faste fraser, skjema og SMS" },
   { value: "A1.1", label: "A1.1 - Nybegynner tidlig", description: "Svært grunnleggende" },
   { value: "A1.2", label: "A1.2 - Nybegynner sent", description: "Grunnleggende med progresjon" },
   { value: "A2.1", label: "A2.1 - Elementært tidlig", description: "Enkelt språk - basis" },

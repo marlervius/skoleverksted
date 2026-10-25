@@ -24,7 +24,7 @@ import random
 
 def base_level(level: str) -> str:
     """``"A2.1"`` -> ``"A2"``; unknown levels fall back to A2."""
-    base = str(level or "").split(".")[0].upper()
+    base = str(level or "").split(".")[0].strip().upper()
     return base if base in LEVEL_DESIGN else "A2"
 
 
@@ -91,6 +91,21 @@ _ADJEKTIV_ATTRIBUTIV = {
     "format": "Først flertall, deretter intetkjønn: adjektivet i parentes foran et substantiv fra teksten",
     "example": '"to (dyr) ___ jakker", "et (stor) ___ rom"',
 }
+_KAN_VIL = {
+    # The type must not contain "verb": the PDF would draw a conjugation table.
+    "type": "kan_vil_infinitiv",
+    "name": "kan og vil + verb",
+    "instruction": "Skriv verbet etter kan eller vil. Verbet har ingen -r: Jeg kan jobbe.",
+    "format": "Korte setninger fra teksten med kan eller vil og verbet i parentes",
+    "example": '"Jeg kan (jobber) ___ i dag.", "Hun vil (låner) ___ en uniform."',
+}
+_SKRIFT_BRO = {
+    "type": "tegnsetting_stor_bokstav",
+    "name": "Stor bokstav, mellomrom og punktum",
+    "instruction": "Skriv setningen riktig: stor bokstav først, mellomrom mellom ordene og punktum til slutt.",
+    "format": "Korte setninger fra teksten skrevet uten stor bokstav, uten mellomrom og uten punktum",
+    "example": '"dubegynnerklokka16.00" → "Du begynner klokka 16.00."',
+}
 _FEILRETTING_L1 = {
     "type": "feilretting",
     "name": "Feilretting – typiske feil",
@@ -149,6 +164,35 @@ _SAMMENSATTE = {
 }
 
 LEVEL_DESIGN: dict[str, dict] = {
+    "PRE-A1": {
+        "stage": "PT-trinn 1 med skriftbro: ord, faste fraser og setninger med subjekt først",
+        "grammar_target": (
+            "subjekt først i hver setning (Jeg, Du, Det regner), er og har, kan/vil + verb i infinitiv, "
+            "og stor bokstav, mellomrom mellom ordene og punktum eller spørsmålstegn"
+        ),
+        "core_tasks": [_SUBJEKT, _SKRIFT_BRO],
+        "pool": [_KAN_VIL, _ARTIKLER, _PRESENS],
+        "syntax_task": (
+            "Stokkede korte setninger (3-5 ord) i rekkefølgen subjekt–verb–resten. Eleven skriver dem med "
+            "stor forbokstav, mellomrom og punktum. Ikke start med tidsuttrykk."
+        ),
+        "text_length": "40-80 ord",
+        "genres": (
+            "Bruk en praktisk teksttype med fast oppsett: vaktliste, timeplan, skjema med Navn:/Dag:/Tid:, "
+            "SMS eller meldingstråd, prisliste i kantina eller et skilt. Ikke skriv en fortelling"
+        ),
+        "word_range": "6-8",
+        "self_check": [
+            "Står personen (Jeg, Du, Han, Hun, Vi) eller det først i hver setning?",
+            "Begynner hver setning med stor bokstav og slutter med punktum eller spørsmålstegn?",
+            "Har jeg mellomrom mellom alle ordene?",
+        ],
+        "writing_words": 3,
+        "writing_length": "3 setninger eller et utfylt skjema",
+        "challenge": "Skriv én setning til med og.",
+        "sound_pairs": True,
+        "comprehension_questions": 3,
+    },
     "A1": {
         "stage": "PT-trinn 1–2: ord og bøying av ord",
         "grammar_target": (
@@ -275,6 +319,16 @@ def select_grammar_tasks(level: str, num_tasks: int = 3, rng: random.Random | No
 def text_design_block(level: str) -> str:
     """Rules for the model text: coverage, natural binding and the stage target."""
     design = design_for(level)
+    # Pre-A1 and A1 keep to main clauses, so only coordinating words are allowed.
+    linking = (
+        "og, men, så" if base_level(level) in ("PRE-A1", "A1")
+        else "og, men, så, fordi, derfor, etterpå"
+    )
+    genre_rule = (
+        f"            - Teksttype: {design['genres']}.\n" if design.get("genres") else
+        "            - Bruk gjerne en tekstsjanger fra virkeligheten: melding, vaktliste, e-post, "
+        "oppslag eller kort sakprosa.\n"
+    )
     return (
         "\n            FORSKNINGSBASERT TEKSTDESIGN:\n"
         f"            - Grammatisk mål ({design['stage']}): la teksten naturlig inneholde flere eksempler på "
@@ -282,11 +336,11 @@ def text_design_block(level: str) -> str:
         "            - Ordforråd: minst 95 % av ordene skal være kjente på nivået. Nye ord ut over "
         "nøkkelordene skal unngås. Bruk hvert nøkkelord minst to ganger.\n"
         "            - Ikke hakk teksten opp i bare korte setninger uten sammenheng. Vis sammenhengen "
-        "med enkle bindeord (og, men, så, fordi, derfor, etterpå) der nivået tillater det.\n"
+        f"med enkle bindeord ({linking}) der nivået tillater det.\n"
         "            - Velg en situasjon med voksen relevans for ungdom 16–19 år, for eksempel deltidsjobb, "
         "arbeidskontrakt, lønnsslipp, hybel, transport, helse, digital svindel eller praksis i verksted "
-        "eller lab. Bruk gjerne en tekstsjanger fra virkeligheten: melding, vaktliste, e-post, "
-        "oppslag eller kort sakprosa.\n"
+        "eller lab.\n"
+        f"{genre_rule}"
         "            - Teksten skal være god å lese høyt. Læreren leser den høyt mens elevene følger med.\n"
     )
 
@@ -299,6 +353,15 @@ def worksheet_vocabulary_rules(level: str) -> str:
 
 def comprehension_section(letter: str, level: str) -> str:
     """Four questions that cannot be answered by copying a line from the text."""
+    if design_for(level).get("comprehension_questions") == 3:
+        # Pre-A1: the learner finds and combines facts in a form, list or message.
+        return f"""{letter}) LESEFORSTÅELSE
+                - Lag 3 korte spørsmål. Ingen av dem skal kunne besvares ved å kopiere en linje fra teksten
+                - Spørsmål 1 og 2: flervalg med 3 svaralternativer (a, b, c), med andre ord enn teksten
+                  (eksempel: teksten sier «Kl. 16.00», alternativet sier «klokka fire»). Marker riktig svar med *
+                - Spørsmål 3: eleven må koble to opplysninger, for eksempel regne ut hvor mange timer
+                  til sammen eller si hvorfor noen må gjøre noe. Gi en startsetning: «Han jobber ___ timer.»
+                  Skriv «Svar med egne ord.» etter spørsmålet"""
     return f"""{letter}) LESEFORSTÅELSE
                 - Lag 4 spørsmål. Ingen av dem skal kunne besvares ved å kopiere en setning fra teksten
                 - Spørsmålene skal bruke andre ord enn teksten (synonymer eller et annet perspektiv).
