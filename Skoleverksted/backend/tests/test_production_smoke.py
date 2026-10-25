@@ -24,6 +24,8 @@ class FakeServer:
         self.pages_status = overrides.get("pages_status", 200)
         self.language_pages_status = overrides.get("language_pages_status", 200)
         self.language_other_status = overrides.get("language_other_status", 404)
+        self.language_requires_code = overrides.get("language_requires_code", False)
+        self.private_language_status = overrides.get("private_language_status", 401)
         self.calls: list[tuple[str, str]] = []
 
     def __call__(self, url, *, payload=None, token=""):
@@ -33,6 +35,14 @@ class FakeServer:
             return (self.language_pages_status if path in ("/", "/verksted", "/personvern") else self.language_other_status), ""
         if url.endswith("/health/ready"):
             return 200, self.ready
+        if url.endswith("/access/status?module=norsk"):
+            return 200, {"required": self.language_requires_code, "configured": True}
+        if url.endswith("/api/norsk/auth/config"):
+            return 200, {"password_required": self.language_requires_code}
+        if url.endswith("/api/norsk/generate-lesson-json"):
+            return 422, {}
+        if url.endswith("/api/norsk/download-json/private-pilot-job"):
+            return self.private_language_status, {}
         if url.endswith("/access/login"):
             return self.login_status, ({"token": "sv1_x"} if self.login_status == 200 else {"detail": "no"})
         if "/api/" in url:
@@ -42,6 +52,11 @@ class FakeServer:
 
 def test_a_healthy_gated_deployment_passes():
     assert smoke.run_once(FakeServer()) == []
+
+
+def test_open_trial_must_work_without_exposing_private_language_jobs():
+    assert any("still requires a code" in error for error in smoke.run_once(FakeServer(language_requires_code=True)))
+    assert any("private language job" in error for error in smoke.run_once(FakeServer(private_language_status=200)))
 
 
 @pytest.mark.parametrize("status", [200, 404, 500, 0])

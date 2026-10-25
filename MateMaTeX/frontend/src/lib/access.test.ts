@@ -221,6 +221,13 @@ describe("fetch interceptor", () => {
 });
 
 describe("signing in", () => {
+  it("asks for open language access only on the standalone language frontend", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_EDITION", "norsk");
+    upstreamFetch.mockResolvedValueOnce(json({ required: false, authenticated: true, configured: true }));
+    await expect(access.fetchAccessStatus()).resolves.toEqual({ required: false, authenticated: true, configured: true });
+    expect(upstreamFetch.mock.calls[0][0]).toBe(`${BACKEND}/api/platform/access/status?module=norsk`);
+  });
+
   it("stores the token returned for a correct code", async () => {
     upstreamFetch.mockResolvedValueOnce(json({ required: true, token: "sv1_new", expires_at: FUTURE }));
 

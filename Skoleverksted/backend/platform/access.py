@@ -10,8 +10,8 @@ anyone who knew the public backend address.
 * The login endpoint trades the code for a signed token that expires, so the
   code itself never has to appear in a URL. Changing ``APP_PASSWORD`` revokes
   every outstanding token.
-* Only health checks, the login/status pair and the capability links for shared
-  mathematics sheets are reachable without credentials.
+* The temporary Norsk trial permits new language jobs and their capability links.
+  Existing pilot jobs, the platform, Fag and mathematics remain protected.
 * In production a missing code fails closed instead of silently opening the API.
 """
 
@@ -30,6 +30,7 @@ from urllib.parse import parse_qs
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from ScriptoriumFOV.backend.auth import PUBLIC_NORSK_SCOPE_KEY, norsk_open_access_enabled
 
 
 #: Set on the ASGI scope once a request is authorised, so mounted domain apps
@@ -122,6 +123,35 @@ def is_public_route(method: str, path: str) -> bool:
     return any(method in methods and pattern.match(path) for methods, pattern in _PUBLIC_ROUTES)
 
 
+_OPEN_JOB = r"open-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+_OPEN_NORSK_READ = re.compile(
+    rf"^/api/norsk/(?:generation-status|download-(?:pdf|trainer|zip|json))/{_OPEN_JOB}$"
+)
+_OPEN_NORSK_WRITE = re.compile(rf"^/api/norsk/generation/{_OPEN_JOB}/(?:approve|cancel)$")
+_OPEN_NORSK_CREATE = frozenset(
+    f"/api/norsk/{route}" for route in (
+        "generate-lesson", "generate-lesson-json", "generate-pdf-from-json",
+        "generate-dual-lesson", "generate-multi-lesson", "generate-lesson-with-image",
+    )
+)
+
+
+def is_open_norsk_route(method: str, path: str) -> bool:
+    """Open only the language trial and its unguessable new job links.
+
+    Old pilot job IDs, project/history APIs, documentation and all other modules
+    still require the shared code. Origins are deliberately not credentials.
+    """
+    if not norsk_open_access_enabled():
+        return False
+    if method in _READ_METHODS:
+        return (
+            path in {"/api/norsk/", "/api/norsk/health", "/api/norsk/auth/config"}
+            or bool(_OPEN_NORSK_READ.fullmatch(path))
+        )
+    return method == "POST" and (path in _OPEN_NORSK_CREATE or bool(_OPEN_NORSK_WRITE.fullmatch(path)))
+
+
 def _bearer(authorization: str) -> str:
     scheme, _, value = authorization.partition(" ")
     return value.strip() if scheme.lower() == "bearer" else ""
@@ -195,6 +225,18 @@ class AccessGateMiddleware:
             authorization, query_token = _scope_credentials(scope)
             if credentials_valid(method=method, authorization=authorization, query_token=query_token):
                 scope[ACCESS_SCOPE_KEY] = True
+                await self.app(scope, receive, send)
+                return
+            if is_open_norsk_route(method, str(scope.get("path", ""))):
+                # Open trial work must never be attached to the private pilot's projects.
+                if any(key.lower() == b"x-skoleverksted-project" for key, _ in scope.get("headers", [])):
+                    rejection = JSONResponse(
+                        {"detail": "Åpne genereringer kan ikke knyttes til private prosjekter."}, status_code=403,
+                    )
+                    await rejection(scope, receive, send)
+                    return
+                scope[ACCESS_SCOPE_KEY] = True
+                scope[PUBLIC_NORSK_SCOPE_KEY] = True
                 await self.app(scope, receive, send)
                 return
             rejection = JSONResponse(
@@ -287,13 +329,14 @@ _NO_STORE = {"Cache-Control": "no-store"}
 @router.get("/status")
 async def access_status(request: Request) -> JSONResponse:
     """Tell the browser whether it must sign in and whether it already has."""
-    required = access_enforced()
+    language_trial = request.query_params.get("module") == "norsk" and norsk_open_access_enabled()
+    required = access_enforced() and not language_trial
     authorization, query_token = _scope_credentials(request.scope)
     authenticated = (not required) or credentials_valid(
         method=request.method, authorization=authorization, query_token=query_token
     )
     return JSONResponse(
-        {"required": required, "authenticated": authenticated, "configured": bool(access_code()) or not required},
+        {"required": required, "authenticated": authenticated, "configured": bool(access_code()) or not access_enforced()},
         headers=_NO_STORE,
     )
 

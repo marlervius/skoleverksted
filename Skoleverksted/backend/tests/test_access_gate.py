@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
-from ScriptoriumFOV.backend.auth import platform_access_granted, require_app_password
+from ScriptoriumFOV.backend.auth import new_generation_id, platform_access_granted, require_app_password
 from Skoleverksted.backend.platform import access
 from Skoleverksted.backend.platform.access import (
     ACCESS_SCOPE_KEY,
@@ -81,6 +81,10 @@ def build_app() -> FastAPI:
     async def status(generation_id: str, _auth: None = Depends(require_app_password)):
         return {"id": generation_id}
 
+    @norsk.post("/generate-lesson-json")
+    async def generate(request: Request, _auth: None = Depends(require_app_password)):
+        return {"generation_id": new_generation_id(request)}
+
     app.mount("/api/norsk", norsk)
     return app
 
@@ -89,6 +93,7 @@ def build_app() -> FastAPI:
 def fresh_state(monkeypatch):
     monkeypatch.delenv("ENVIRONMENT", raising=False)
     monkeypatch.delenv("ACCESS_TOKEN_TTL_HOURS", raising=False)
+    monkeypatch.delenv("NORSK_OPEN_ACCESS", raising=False)
     monkeypatch.setenv("APP_PASSWORD", CODE)
     monkeypatch.setattr(access, "_throttle", LoginThrottle())
 
@@ -348,6 +353,50 @@ def test_norsk_keeps_checking_the_password_when_run_standalone(monkeypatch):
     assert client.get("/generation-status/abc").status_code == 401
     assert client.get("/generation-status/abc", headers=bearer("feil")).status_code == 401
     assert client.get("/generation-status/abc", headers=bearer(CODE)).status_code == 200
+
+
+def test_open_language_trial_needs_no_code_but_other_modules_stay_locked(client):
+    assert client.get("/api/platform/access/status?module=norsk").json() == {
+        "required": False, "authenticated": True, "configured": True,
+    }
+    assert client.get("/api/platform/access/status").json()["required"] is True
+    assert client.get("/api/norsk/auth/config").json() == {"password_required": False}
+    generated = client.post("/api/norsk/generate-lesson-json")
+    assert generated.status_code == 200
+    job_id = generated.json()["generation_id"]
+    assert job_id.startswith("open-")
+    assert client.get(f"/api/norsk/generation-status/{job_id}").status_code == 200
+    assert client.get("/api/norsk/generation-status/private-job").status_code == 401
+    for path in ("/api/platform/jobs", "/api/fag/health", "/api/matematikk/health", "/api/norsk/docs"):
+        assert client.get(path).status_code == 401
+
+
+def test_trial_does_not_expose_private_jobs_or_accept_private_project_bindings(client):
+    job_id = "open-00000000-0000-4000-8000-000000000000"
+    for path in (
+        "/api/norsk/download-json/private-pilot-id",
+        "/api/norsk/generation/private-pilot-id/approve",
+        f"/api/platform/jobs/{job_id}",
+        f"/api/norsk/generation-status/{job_id}/extra",
+        "/api/norsk/generation-status/open-not-a-random-uuid",
+    ):
+        assert client.get(path).status_code == 401
+    assert client.post("/api/norsk/generate-lesson-json", headers={"X-Skoleverksted-Project": "private-id"}).status_code == 403
+
+
+def test_open_trial_can_be_disabled_without_changing_the_pilot_secret(client, monkeypatch):
+    monkeypatch.setenv("NORSK_OPEN_ACCESS", "0")
+    assert client.get("/api/platform/access/status?module=norsk").json()["required"] is True
+    assert client.get("/api/norsk/auth/config").status_code == 401
+    assert client.post("/api/norsk/generate-lesson-json").status_code == 401
+    assert client.post("/api/norsk/generate-lesson-json", headers=bearer(CODE)).status_code == 200
+
+
+def test_open_trial_fails_closed_when_the_production_signing_code_is_missing(client, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("APP_PASSWORD")
+    assert client.get("/api/platform/access/status?module=norsk").json()["configured"] is False
+    assert client.post("/api/norsk/generate-lesson-json").status_code == 503
 
 
 # --- wiring --------------------------------------------------------------
