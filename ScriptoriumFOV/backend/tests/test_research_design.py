@@ -87,3 +87,57 @@ def test_sentence_building_tasks_get_one_line_per_prompt():
     result = format_language_exercises(exercises, {"vocabulary_tasks": True})
     assert result.count("#line(length: 100%") == 3
     assert "praksisplass på et verksted" in result
+
+
+# ---------------------------------------------------------------------------
+# Pre-A1 (NOR07-03 level 1, start phase)
+# ---------------------------------------------------------------------------
+
+
+def test_pre_a1_is_its_own_level_with_stage_one_tasks():
+    assert research_design.base_level("Pre-A1") == "PRE-A1"
+    tasks = _types(research_design.select_grammar_tasks("Pre-A1", 3, random.Random(3)))
+    assert tasks[:2] == ["pronomen_subjekt", "tegnsetting_stor_bokstav"]
+    design = research_design.design_for("Pre-A1")
+    types = {task["type"] for task in design["core_tasks"] + design["pool"]}
+    assert not types & {"bestemt_form", "tidsbruk_preteritum_perfektum", "kombiner_leddsetning", "feilretting"}
+
+
+def test_pre_a1_text_is_short_practical_and_without_subordinate_linking():
+    block = research_design.text_design_block("Pre-A1")
+    assert "vaktliste" in block and "SMS" in block and "skjema" in block
+    assert "fordi" not in block
+    assert research_design.design_for("Pre-A1")["text_length"] == "40-80 ord"
+    assert "fordi" in research_design.text_design_block("A2.1")
+
+
+def test_pre_a1_comprehension_has_three_questions():
+    section = research_design.comprehension_section("b", "Pre-A1")
+    assert "Lag 3 korte spørsmål" in section
+    assert "Svar med egne ord." in section
+
+
+def test_pre_a1_prompt_and_readability_limits():
+    from ScriptoriumFOV.backend.level_readability import SENTENCE_LIMITS, analyze_readability
+
+    block = agents.format_level_constraints("Pre-A1", False)
+    assert "Maks 6 ord per setning" in block
+    assert "Riktig Pre-A1" in block
+    assert agents.LEVEL_CONSTRAINTS["PRE-A1"]["max_sentence_words"] <= SENTENCE_LIMITS["PRE-A1"]
+    report = analyze_readability("Du begynner klokka fire fordi sjefen er syk.", "Pre-A1")
+    assert report["status"] == "needs_attention"
+    assert any(issue["code"] == "subordinate_clause" for issue in report["issues"])
+    assert "Pre-A1" in report["summary"]
+
+
+def test_english_pre_a1_uses_the_beginner_pool():
+    english = _types(agents.get_random_grammar_tasks("Pre-A1", True, 3))
+    assert set(english) <= {task["type"] for task in agents.GRAMMAR_TASKS_ENGLISH["A1_A2"]}
+
+
+def test_the_api_accepts_pre_a1_for_single_and_dual_sheets():
+    from ScriptoriumFOV.backend import main
+
+    request = main.LessonRequest(topic="Første vakt", subject="Samfunnsfag", level="Pre-A1")
+    assert request.level == "Pre-A1"
+    assert main._ADJACENT_LEVELS["Pre-A1"] == ("Pre-A1", "A1.1")

@@ -753,7 +753,7 @@ class LessonRequest(BaseModel):
         description="The subject area (e.g., 'Samfunnsfag', 'Naturfag', 'Norsk')",
         examples=["Samfunnsfag"]
     )
-    level: Literal["A1.1", "A1.2", "A2.1", "A2.2", "B1.1", "B1.2", "B2.1", "B2.2"] = Field(
+    level: Literal["Pre-A1", "A1.1", "A1.2", "A2.1", "A2.2", "B1.1", "B1.2", "B2.1", "B2.2"] = Field(
         ...,
         description="CEFR language level with sub-levels",
         examples=["A2.1"]
@@ -803,7 +803,7 @@ class LessonRequest(BaseModel):
     )
 
 
-CefrLevel = Literal["A1.1", "A1.2", "A2.1", "A2.2", "B1.1", "B1.2", "B2.1", "B2.2"]
+CefrLevel = Literal["Pre-A1", "A1.1", "A1.2", "A2.1", "A2.2", "B1.1", "B1.2", "B2.1", "B2.2"]
 
 
 class MultiLevelLessonRequest(BaseModel):
@@ -1705,6 +1705,7 @@ async def generate_pdf_from_json(
 
 # Adjacent level map for dual generation
 _ADJACENT_LEVELS: Dict[str, tuple] = {
+    "Pre-A1": ("Pre-A1", "A1.1"),
     "A1.1": ("A1.1", "A1.2"),
     "A1.2": ("A1.1", "A1.2"),
     "A2.1": ("A2.1", "A2.2"),
@@ -2017,7 +2018,7 @@ async def generate_lesson_with_image(
         JSON with generation_id for tracking progress
     """
     # --- Validate level ---
-    valid_levels = {"A1.1", "A1.2", "A2.1", "A2.2", "B1.1", "B1.2", "B2.1", "B2.2"}
+    valid_levels = {"Pre-A1", "A1.1", "A1.2", "A2.1", "A2.2", "B1.1", "B1.2", "B2.1", "B2.2"}
     if level not in valid_levels:
         raise HTTPException(status_code=422, detail=f"Invalid level: {level}")
 

@@ -31,7 +31,7 @@ export function ReadabilityPanel({ report }: Props) {
         )}
         <div className="min-w-0">
           <h3 id="readability-title" className="font-semibold text-stone-900">
-            Språknivå-sjekk ({report.base_level})
+            Språknivå-sjekk ({report.base_level === "PRE-A1" ? "Pre-A1" : report.base_level})
           </h3>
           <p className="mt-1 text-sm text-stone-700">{report.summary}</p>
           {report.auto_simplified && (

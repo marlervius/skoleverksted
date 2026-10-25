@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ArrowRight, BookOpenText, Check, FileCheck2, Languages, Layers3, MoveUpRight } from "lucide-react";
 
 const features = [
-  { icon: Languages, title: "Språket på riktig nivå", text: "Velg fra A1.1 til B2.2 og lag tekster, begrepsforklaringer og oppgaver tilpasset deltakerne dine." },
+  { icon: Languages, title: "Språket på riktig nivå", text: "Velg fra Pre-A1 til B2.2 og lag tekster, begrepsforklaringer og oppgaver tilpasset deltakerne dine." },
   { icon: Layers3, title: "Ett tema. Flere innganger.", text: "Lag materiell om samme tema på flere språknivåer. Velg blant annet leseoppgaver, grammatikk, samtale og skrivestøtte." },
   { icon: BookOpenText, title: "Fra begrep til forståelse", text: "La deltakerne øve videre med en nedlastbar begrepstrener. Den åpnes i nettleseren og kan brukes uten nett." },
 ];

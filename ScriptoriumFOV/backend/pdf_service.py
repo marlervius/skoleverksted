@@ -29,8 +29,8 @@ def _typst_string(value: str) -> str:
 
 # Levels that get scaffolding from the FOV framework: a "Mitt språk" writing
 # line for every term (A1-B1) and the key terms before the text (A1-A2).
-NATIVE_LANGUAGE_LEVELS = ("A1", "A2", "B1")
-PRE_READING_LEVELS = ("A1", "A2")
+NATIVE_LANGUAGE_LEVELS = ("PRE-A1", "A1", "A2", "B1")
+PRE_READING_LEVELS = ("PRE-A1", "A1", "A2")
 
 
 @contextmanager
@@ -888,6 +888,9 @@ def format_language_exercises(exercises: dict, options: dict = None, is_english:
                                                    "spørre", "question", "konjunk", "conjunct", "bindeord",
                                                    "modal", "conditional", "betingelse"]):
                     grammar_content.append(render_fill_in_generic(items, is_english))
+                # Script bridge: rewrite with capital letter, spaces and full stop
+                elif "tegnsetting" in task_type:
+                    grammar_content.append(render_sentence_writing_exercise(items))
                 # Error correction tasks (#8)
                 elif "feilrett" in task_type or "error_correct" in task_type or "error correct" in task_type:
                     grammar_content.append(render_error_correction_exercise(items, is_english))
@@ -1088,7 +1091,8 @@ def create_typst_template(
     # Process the content using the robust sanitizer
     # Main text and topic don't need section cleaning
     safe_topic = sanitize_for_typst(topic)
-    safe_main_text = sanitize_for_typst(main_text)
+    # Rotas, forms and message threads keep one line per entry.
+    safe_main_text = keep_line_breaks(sanitize_for_typst(main_text))
     
     # Section content gets extra cleaning (headers, meta-instructions removed)
     safe_vocabulary = format_vocabulary_as_list(
