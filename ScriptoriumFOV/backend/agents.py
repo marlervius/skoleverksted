@@ -5,6 +5,7 @@ import json
 import random
 import hashlib
 import time
+from collections.abc import Callable
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, Process, LLM
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt
@@ -852,6 +853,7 @@ def generate_lesson_content(
     source_name: str = None,
     quality_generator_id: str = "norsk.learning_sheet",
     request_id: str = "",
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> dict:
     """
     Generate complete lesson content using the AI agents.
@@ -1626,6 +1628,7 @@ Vær grundig og presis — lærere bruker dette til å rette elevarbeider.""" + 
         level=level,
         provided_sources=_provided_truth_sources(source_text, source_name),
         request_id=request_id,
+        progress_callback=progress_callback,
     )
     truth_audit = type(
         "QualityAudit",

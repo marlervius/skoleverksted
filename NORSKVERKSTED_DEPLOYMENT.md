@@ -48,6 +48,25 @@ customer accounts, billing or a commercial hosting plan.
 
 ## Verify and publish
 
+Language generation uses three bounded AI roles in the existing Python truth
+pipeline: a claim mapper inventories decoded document nodes, a source researcher
+discovers authoritative pages whose snapshots are fetched independently, and a
+corrector checks those snapshots and proposes anchored corrections. The mapper's
+obligations cannot be silently omitted or reclassified by the corrector. Both
+must explicitly cover every non-empty document leaf. Agreement alone never
+approves facts: unavailable sources, missing obligations, cancellation and time
+limits retain the existing fail-closed behavior. Corrected candidates go through
+all three roles again before source approval, followed by the teacher's approval
+of the exact revision. Other modules keep their existing verification flows.
+
+The roles reuse the configured Google model and credentials; no new service or
+secret is needed. Compared with the previous research-and-assessment flow, each
+language audit round adds one inventory model call. The existing overall time,
+retry and revision budgets still apply. Progress reports identify each role.
+Offline regression coverage is in
+`Skoleverksted/backend/tests/test_language_fact_crew.py`; these tests make no
+paid model calls. A real model quality evaluation remains a separate manual run.
+
 Run frontend tests, lint, TypeScript and production builds for both editions.
 For local language preview, set `NEXT_PUBLIC_SITE_EDITION=norsk` and run
 `npm run dev` from `MateMaTeX/frontend`. Clear that variable when previewing
