@@ -913,6 +913,11 @@ def run_quality_pipeline(
                     request_id=request_id,
                     repair_feedback=tuple(repair_feedback),
                 )
+                if generator_id.startswith("norsk."):
+                    kwargs.update(
+                        three_agent_review=True,
+                        agent_progress=lambda message, cancelled=cancelled: None if cancelled() else emit(message, round_number),
+                    )
             # A round includes provider retries, optional JSON repair and
             # evidence retrieval. It must not share one model call's limit.
             attempt_budget = min(remaining, quality_model_timeout_seconds() * quality_max_model_attempts() * 3 + 24.0)
@@ -943,6 +948,12 @@ def run_quality_pipeline(
             )
             if attempt == 0 and retryable:
                 active_sources.extend(passport.sources)
+                if generator_id.startswith("norsk.") and not passport.register_complete:
+                    repair_feedback.append({
+                        "failure": "incomplete_claim_register",
+                        "details": list(passport.limitations),
+                        "instruction": "Kontroller alle oppgitte bladstier og alle kontrollpunkter på nytt.",
+                    })
                 continue
             return outcome
         raise QualityLayerTimeout("truth layer attempts exhausted")

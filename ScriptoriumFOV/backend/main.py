@@ -604,6 +604,7 @@ def generate_lesson_background(
             source_text=getattr(request, 'source_text', None),
             source_name=getattr(request, 'source_name', None),
             request_id=str((get_progress(generation_id) or {}).get("request_id") or ""),
+            progress_callback=lambda event: update_progress(generation_id, 1, 4, event["message"]),
         )
 
         # Step 2: Process the image (skip if caller already provided a local path)
@@ -1373,6 +1374,7 @@ def generate_lesson_json_background(
             source_text=lesson_request.source_text,
             source_name=lesson_request.source_name,
             request_id=str((get_progress(generation_id) or {}).get("request_id") or ""),
+            progress_callback=lambda event: update_progress(generation_id, 1, 3, event["message"]),
         )
         
         image_candidates: list[dict] = []
@@ -1537,6 +1539,7 @@ def generate_pdf_from_json_background(
             level=request.level,
             provided_sources=request.provided_sources,
             request_id=request_id,
+            progress_callback=lambda event: update_progress(generation_id, 0, 3, event["message"]),
         )
         quality_document = _quality_result_document(quality)
         source_approved = _quality_document_is_source_approved(quality_document)
