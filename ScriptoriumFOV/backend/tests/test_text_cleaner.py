@@ -227,3 +227,13 @@ def test_clean_meta_instructions_removes_patterns():
     result = clean_meta_instructions(text)
     assert "Her er 4 spørsmål" not in result
     assert "Hva er demokrati" in result
+
+
+def test_sanitize_keeps_answer_blanks_separate_from_markdown_bold():
+    for blank in ("__", "___", "____", "________"):
+        source = f"__Start slik:__ Sara jobber {blank} og starter {blank}."
+        result = sanitize_for_typst(source)
+        assert "#strong[Start slik:]" in result
+        assert result.count("#strong[") == 1
+        escaped_blank = "\\_" * len(blank)
+        assert result.count(escaped_blank) == 2

@@ -246,13 +246,15 @@ def test_text_task_names_the_stage_target_length_and_coverage(harness):
     assert "Ikke hakk teksten opp" in text_task
 
 
-def test_comprehension_forbids_copying_and_ends_with_open_questions(harness):
+def test_comprehension_progresses_from_finding_to_explaining_explicit_information(harness):
     agents.generate_lesson_content(topic="Lønnsslipp", subject="Samfunnsfag", level="A2.1")
 
     worksheet = _description(harness, "lag et arbeidsark")
     assert "Lag 3 flervalgsspørsmål" not in worksheet
     assert "Lag 4 spørsmål" in worksheet
-    assert "kopiere en setning fra teksten" in worksheet
+    assert "to eksplisitte opplysninger" in worksheet
+    assert "uttrykker tydelig" in worksheet
+    assert "nøyaktig ett riktig svar" in worksheet
     assert "Svar med egne ord." in worksheet
 
 
@@ -315,3 +317,37 @@ def test_pre_a1_text_and_worksheet_prompts(harness):
     assert '"tegnsetting_stor_bokstav"' in exercises
     assert '"lyd_og_skrift"' in exercises
     assert "Fokusér mest på vocabulary_tasks" in exercises
+
+
+@pytest.mark.parametrize("level, expected, excluded", [
+    ("Pre-A1", "Lag 3 korte spørsmål", "Svar med egne ord."),
+    ("A1.2", "to tomme felt", "Svar med egne ord."),
+    ("A2.1", "to eksplisitte opplysninger", "trekk en enkel slutning"),
+    ("B1.2", "trekk en enkel slutning", "to tomme felt"),
+    ("B2.1", "begrunnelse støtter hovedbudskapet", "to tomme felt"),
+])
+def test_generation_passes_level_specific_reading_and_key_contract_to_model(harness, level, expected, excluded):
+    agents.generate_lesson_content(topic="Vaktbytte", subject="Norsk", level=level, options={"teacher_key": True})
+    worksheet = _description(harness, "lag et arbeidsark")
+    assert expected in worksheet
+    assert excluded not in worksheet
+    assert "tekstbelegg for hvert svar" in worksheet
+    assert "hva svaret må inneholde" in worksheet
+    assert "Riktig bokstav (a/b/c) etterfulgt av full korrekt setning" not in worksheet
+    assert "samme nummerering og antall" in worksheet
+
+
+def test_pre_a1_generation_keeps_the_practical_text_structure(harness):
+    agents.generate_lesson_content(topic="Første vakt", subject="Norsk", level="Pre-A1")
+    text_task = _description(harness, "Skriv en pedagogisk tekst")
+    assert "korte linjer og tydelige felt" in text_task
+    assert "2-3 avsnitt" not in text_task
+    assert "hvem pronomen viser til" in text_task
+    assert "leseoppgaver kan besvares fra teksten" in text_task
+
+
+def test_disabling_reading_does_not_add_reading_questions(harness):
+    agents.generate_lesson_content(topic="Vaktbytte", subject="Norsk", level="A1.1", options={"comprehension_tasks": False})
+    worksheet = _description(harness, "lag et arbeidsark")
+    assert "LESEFORSTÅELSE" not in worksheet
+    assert "Lag 4 spørsmål" not in worksheet

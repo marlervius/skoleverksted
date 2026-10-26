@@ -2,13 +2,15 @@
 
 import random
 
+import pytest
+
 from ScriptoriumFOV.backend import agents, research_design
 from ScriptoriumFOV.backend.pdf_service import (
     format_language_exercises,
     keep_line_breaks,
     render_scrambled_sentences,
 )
-from ScriptoriumFOV.backend.text_cleaner import format_mcq_content
+from ScriptoriumFOV.backend.text_cleaner import format_mcq_content, sanitize_comprehension_for_typst
 
 
 def _types(tasks):
@@ -114,7 +116,8 @@ def test_pre_a1_text_is_short_practical_and_without_subordinate_linking():
 def test_pre_a1_comprehension_has_three_questions():
     section = research_design.comprehension_section("b", "Pre-A1")
     assert "Lag 3 korte spørsmål" in section
-    assert "Svar med egne ord." in section
+    assert "Svar kort." in section
+    assert "Svar med egne ord." not in section
 
 
 def test_pre_a1_prompt_and_readability_limits():
@@ -141,3 +144,70 @@ def test_the_api_accepts_pre_a1_for_single_and_dual_sheets():
     request = main.LessonRequest(topic="Første vakt", subject="Samfunnsfag", level="Pre-A1")
     assert request.level == "Pre-A1"
     assert main._ADJACENT_LEVELS["Pre-A1"] == ("Pre-A1", "A1.1")
+
+
+@pytest.mark.parametrize("level", ["Pre-A1", "A1.1", "A1.2", "A2.1", "A2.2", "B1.1", "B1.2", "B2.1", "B2.2"])
+def test_reading_tasks_require_evidence_and_unambiguous_choices_at_every_level(level):
+    section = research_design.comprehension_section("c", level)
+    assert section.startswith("c) LESEFORSTÅELSE")
+    for rule in ("nøyaktig ett riktig svar", "klart feil ut fra teksten", "ingen overlappende svar",
+                 "Ikke krev forkunnskaper", "regning", "personlige erfaringer", "Ikke finn på et svar"):
+        assert rule in section
+    assert "Ingen av dem skal kunne besvares ved å kopiere" not in section
+
+
+@pytest.mark.parametrize("level", ["Pre-A1", "A1.1", "A1.2"])
+def test_beginner_reading_does_not_require_paraphrasing_or_inference(level):
+    section = research_design.comprehension_section("a", level)
+    assert "Svar kort." in section
+    assert "Svar med egne ord." not in section
+    assert "Ikke krev" in section and "slutninger" in section
+    if level == "Pre-A1":
+        assert "ett ord eller et tall" in section
+        assert "Spørsmål 4" not in section
+    else:
+        assert "to tomme felt" in section
+        assert "hente svaret direkte fra teksten" in section
+
+
+def test_a2_builds_on_explicit_links_before_b1_inference_and_b2_argument():
+    a2 = research_design.comprehension_section("a", "A2.2")
+    b1 = research_design.comprehension_section("a", "B1.1")
+    b2 = research_design.comprehension_section("a", "B2.2")
+    assert "to eksplisitte opplysninger" in a2
+    assert "samme avsnitt" in a2
+    assert "uttrykker tydelig" in a2
+    assert "trekk en enkel slutning" not in a2
+    assert "trekk en enkel slutning" in b1
+    assert "ett konkret tekstbelegg" in b1
+    assert "begrunnelse støtter hovedbudskapet" in b2
+    assert "det eleven tolker" in b2
+    assert research_design.comprehension_section("a", "unknown") == research_design.comprehension_section("a", "A2")
+
+
+@pytest.mark.parametrize("deep_dive", [False, True])
+def test_beginner_practical_text_is_not_forced_into_paragraphs(deep_dive):
+    rule = research_design.text_structure_rule("Pre-A1", deep_dive)
+    assert "korte linjer" in rule
+    assert "2-3 avsnitt" not in rule
+    assert "2-3 avsnitt" in research_design.text_structure_rule("A1.1")
+    assert "2-3 avsnitt" not in research_design.text_structure_rule("A2.1", True)
+
+
+@pytest.mark.parametrize("level", ["Pre-A1", "A1.1", "A2.1", "B1.1", "B2.1"])
+def test_key_grades_reading_against_text_evidence_and_accepts_alternative_answers(level):
+    key = research_design.teacher_key_rules(level)
+    for rule in ("samme nummerering og antall", "flervalg", "åpne spørsmål", "tekstbelegg for hvert svar",
+                 "hva svaret må inneholde", "ikke rettskriving", "ikke den eneste tillatte"):
+        assert rule in key
+    assert "spørsmål 3 og 4" not in key
+    assert ("ikke krev omskriving" in key) == (level in ("Pre-A1", "A1.1"))
+
+
+def test_short_beginner_answers_get_writing_space_without_exposing_choices():
+    text = "1. Når starter vakten?\na) Klokka åtte *\nb) Klokka ni\nc) Klokka ti\n2. Hvor jobber Sara? Svar kort."
+    rendered = format_mcq_content(sanitize_comprehension_for_typst(text))
+    choice, short_answer = rendered.split("#strong[2.]")
+    assert "*" not in choice
+    assert "#line(" not in choice
+    assert short_answer.count("#line(") == 2

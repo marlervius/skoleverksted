@@ -341,6 +341,10 @@ def text_design_block(level: str) -> str:
         "arbeidskontrakt, lønnsslipp, hybel, transport, helse, digital svindel eller praksis i verksted "
         "eller lab.\n"
         f"{genre_rule}"
+        "            - Gi en tydelig situasjon og la det være klart hvem pronomen viser til. Forklar nødvendige "
+        "nye ord kort i sammenhengen, med ord på elevens nivå.\n"
+        "            - La sentrale opplysninger henge sammen. Hvis teksten omtaler en årsak eller en "
+        "rekkefølge, gjør sammenhengen tydelig, slik at leseoppgaver kan besvares fra teksten.\n"
         "            - Teksten skal være god å lese høyt. Læreren leser den høyt mens elevene følger med.\n"
     )
 
@@ -351,27 +355,77 @@ def worksheet_vocabulary_rules(level: str) -> str:
     return "\n                - Velg ord eleven trenger for å skrive om temaet selv, ikke sjeldne ord"
 
 
+def text_structure_rule(level: str, deep_dive: bool = False) -> str:
+    """Keep practical beginner genres instead of forcing them into an essay."""
+    if base_level(level) == "PRE-A1":
+        return "Bruk korte linjer og tydelige felt i melding, liste eller skjema. Ikke krev flere avsnitt."
+    if deep_dive:
+        return "Del teksten inn i korte avsnitt med tydelig struktur."
+    return "Del teksten inn i 2-3 avsnitt med tydelig struktur."
+
+
 def comprehension_section(letter: str, level: str) -> str:
-    """Four questions that cannot be answered by copying a line from the text."""
-    if design_for(level).get("comprehension_questions") == 3:
-        # Pre-A1: the learner finds and combines facts in a form, list or message.
-        return f"""{letter}) LESEFORSTÅELSE
-                - Lag 3 korte spørsmål. Ingen av dem skal kunne besvares ved å kopiere en linje fra teksten
-                - Spørsmål 1 og 2: flervalg med 3 svaralternativer (a, b, c), med andre ord enn teksten
-                  (eksempel: teksten sier «Kl. 16.00», alternativet sier «klokka fire»). Marker riktig svar med *
-                - Spørsmål 3: eleven må koble to opplysninger, for eksempel regne ut hvor mange timer
-                  til sammen eller si hvorfor noen må gjøre noe. Gi en startsetning: «Han jobber ___ timer.»
-                  Skriv «Svar med egne ord.» etter spørsmålet"""
+    """Scaffold reading from locating explicit information to supported inference.
+
+    CEFR Companion volume (2020), reading scales pp. 54-57, informs the
+    progression. Question counts and formats are this product's design choices,
+    not CEFR requirements. See research/NORSK_PEDAGOGICAL_PROGRESSION.md.
+    """
+    base = base_level(level)
+    if base == "PRE-A1":
+        progression = """- Lag 3 korte spørsmål i denne rekkefølgen:
+                - Spørsmål 1 og 2: flervalg. Finn én tydelig opplysning per spørsmål, som navn,
+                  sted eller tidspunkt. Bruk kjente ord fra teksten også i svaralternativene.
+                - Spørsmål 3: finn én annen opplysning. Eleven kan svare med ett ord eller et tall
+                  fra teksten. Gi en tom svarplass eller en enkel startsetning uten å røpe svaret.
+                  Avslutt spørsmålet med «Svar kort.»
+                - Ikke krev omskriving, slutninger eller at eleven kobler to opplysninger."""
+    elif base == "A1":
+        progression = """- Lag 4 spørsmål i denne rekkefølgen:
+                - Spørsmål 1 og 2: flervalg om tydelige opplysninger i teksten. Bruk kjente ord;
+                  ikke bytt ut tekstens ord med vanskeligere synonymer bare for å unngå avskrift.
+                - Spørsmål 3: finn én opplysning og svar med et ord, tall eller en kort frase.
+                  Det er lov å hente svaret direkte fra teksten. Avslutt med «Svar kort.»
+                - Spørsmål 4: finn to opplysninger som står nær hverandre i teksten.
+                  Gi en enkel startsetning med to tomme felt. Avslutt med «Svar kort.»
+                - Ikke krev slutninger, egne meninger eller fullstendige setninger."""
+    elif base == "A2":
+        progression = """- Lag 4 spørsmål i denne rekkefølgen:
+                - Spørsmål 1: flervalg om en tydelig opplysning i teksten.
+                - Spørsmål 2: flervalg om hovedinnholdet i et kort avsnitt. Bruk en enkel
+                  omskriving med kjente ord; behold nødvendige nøkkelord fra teksten.
+                - Spørsmål 3: koble to eksplisitte opplysninger. De kan stå i samme avsnitt
+                  hvis teksten er kort. Gi en startsetning uten å røpe svaret.
+                - Spørsmål 4: forklar en enkel årsak, hensikt eller rekkefølge som teksten
+                  uttrykker tydelig. Ikke krev skjulte motiver eller egne meninger.
+                - Avslutt spørsmål 3 og 4 med «Svar med egne ord.» Tillat tekstens nøkkelord
+                  og korte svar; omskrivingen skal ikke være vanskeligere enn lesingen."""
+    else:
+        final_question = (
+            "vurder hvordan tekstens begrunnelse støtter hovedbudskapet. Skill mellom det teksten "
+            "sier direkte og det eleven tolker. Be om ett konkret tekstbelegg."
+            if base == "B2" else
+            "trekk en enkel slutning med ett konkret tekstbelegg. Ikke spør om skjulte motiver "
+            "som teksten ikke gir holdepunkter for."
+        )
+        progression = f"""- Lag 4 spørsmål i denne rekkefølgen:
+                - Spørsmål 1: flervalg om en relevant detalj.
+                - Spørsmål 2: flervalg om tekstens hovedbudskap eller formål. Bruk en naturlig
+                  omskriving; behold nødvendige fagord.
+                - Spørsmål 3: koble to opplysninger fra ulike deler av teksten. Vis til avsnitt
+                  bare når teksten faktisk har slike avsnitt.
+                - Spørsmål 4: {final_question}
+                - Avslutt spørsmål 3 og 4 med «Svar med egne ord.» Flere formuleringer kan være gyldige."""
     return f"""{letter}) LESEFORSTÅELSE
-                - Lag 4 spørsmål. Ingen av dem skal kunne besvares ved å kopiere en setning fra teksten
-                - Spørsmålene skal bruke andre ord enn teksten (synonymer eller et annet perspektiv).
-                  Ikke gjenta tekstens setning i spørsmålet
-                - Spørsmål 1 og 2: flervalg med 3 svaralternativer (a, b, c). Svaralternativene bruker
-                  også andre ord enn teksten. Marker riktig svar med *
-                - Spørsmål 3: eleven må koble informasjon fra to ulike avsnitt (eller fra tekst og tabell).
-                  Skriv «Svar med egne ord.» etter spørsmålet
-                - Spørsmål 4: eleven må trekke en slutning eller gi en egen vurdering, og begrunne den.
-                  Skriv «Svar med egne ord.» etter spørsmålet"""
+                {progression}
+                FELLES KRAV TIL LESEOPPGAVENE:
+                - Alle svar skal kunne begrunnes i leseteksten. Ikke krev forkunnskaper,
+                  regning eller personlige erfaringer. Legg egne meninger i DISKUSJON, hvis den er valgt.
+                - Flervalg har 3 alternativer (a, b, c) og nøyaktig ett riktig svar. Marker det med *.
+                  De to andre skal være plausible, men klart feil ut fra teksten; ingen overlappende svar,
+                  doble nektelser eller «alle/ingen av alternativene». Bruk omtrent samme lengde og språkform.
+                - Kontroller hvert spørsmål mot teksten før levering. Hvis et svar mangler tekstbelegg,
+                  eller flere alternativer er riktige, skriv om spørsmålet. Ikke finn på et svar."""
 
 
 def writing_frame_extra(level: str) -> str:
@@ -401,11 +455,24 @@ def real_case_extra(level: str) -> str:
 
 
 def teacher_key_rules(level: str) -> str:
-    """Process-level feedback (Hattie & Timperley): explain the rule, not only the answer."""
+    """Give text evidence and answer criteria without grading writing as reading."""
+    short_answers = (
+        " På Pre-A1/A1 er ord, tall og korte fraser fullverdige lesesvar; ikke krev omskriving "
+        "eller fullstendige setninger."
+        if base_level(level) in ("PRE-A1", "A1") else
+        " Godta ulike formuleringer når de uttrykker samme innhold og har støtte i teksten."
+    )
     return (
-        "\nForklar kort på prosessnivå hvorfor svaret er riktig, med regelen eleven skal bruke. "
-        "Eksempel: «Her står tidsuttrykket I morgen først. Derfor står verbet starter på plass 2, før jeg.» "
-        "For LESEFORSTÅELSE spørsmål 3 og 4: gi et eksempel på et godt svar og hva svaret må inneholde."
+        "\nFor LESEFORSTÅELSE: følg samme nummerering og antall som spørsmålene. "
+        "For flervalg: oppgi riktig bokstav og hele svaret. For åpne spørsmål: gi et kort "
+        "eksempelsvar og hva svaret må inneholde. Oppgi konkret tekstbelegg for hvert svar "
+        "(et kort sitat eller en presis henvisning). Skill eksplisitt informasjon fra tolkning. "
+        "Et eksempelsvar er ikke den eneste tillatte formuleringen. Vurder leseforståelse, "
+        "ikke rettskriving, når meningen er forståelig."
+        f"{short_answers}"
+        "\nGi kort tilbakemelding på prosessnivå: vis hvordan eleven kan finne eller koble "
+        "opplysningene. For grammatikkoppgaver: forklar regelen for det aktuelle nivået. "
+        "Hvis fasiten ikke kan begrunnes i teksten, rett oppgaven før levering; ikke legg til nye fakta i fasiten."
     )
 
 

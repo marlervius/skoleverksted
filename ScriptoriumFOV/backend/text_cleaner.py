@@ -202,7 +202,8 @@ def sanitize_for_typst(text: str, is_section_content: bool = False) -> str:
 
     # Bold / italic
     text = re.sub(r"\*\*(.+?)\*\*", r"#strong[\1]", text)
-    text = re.sub(r"__(.+?)__", r"#strong[\1]", text)
+    # Underscore runs are answer blanks, not Markdown bold delimiters.
+    text = re.sub(r"(?<!_)__(?![_\s])(.+?)(?<![_\s])__(?!_)", r"#strong[\1]", text)
     text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"#emph[\1]", text)
 
     # Protect Typst commands from escaping
@@ -320,8 +321,8 @@ def sanitize_comprehension_for_typst(text: str) -> str:
     return sanitize_for_typst(text, is_section_content=True)
 
 
-# Open questions ("Svar med egne ord.") get room to write a paraphrased answer.
-_OPEN_ANSWER_RE = re.compile(r"egne ord|own words", re.IGNORECASE)
+# Open questions, including short beginner answers, get room to write.
+_OPEN_ANSWER_RE = re.compile(r"egne ord|own words|svar kort", re.IGNORECASE)
 _ANSWER_LINES = [
     "#v(0.6em)",
     "#line(length: 100%, stroke: 0.5pt + luma(180))",
