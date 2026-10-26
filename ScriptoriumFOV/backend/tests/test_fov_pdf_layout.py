@@ -115,3 +115,35 @@ def test_b2_pdf_compiles_without_my_language_lines_and_keeps_the_text_first():
     text = _pdf_text("B2.1")
     assert "Mitt språk" not in text
     assert text.index("Isbjørnen er hvit") < text.index("Fossil")
+
+
+@needs_typst
+@pytest.mark.parametrize("level", ["Pre-A1", "A1.1"])
+def test_short_reading_answers_compile_without_leaking_the_teacher_key(level):
+    worksheet = (
+        "a) LESEFORSTÅELSE\n"
+        "1. Hvor jobber Sara?\na) I kantina *\nb) På biblioteket\nc) På kontoret\n"
+        "2. Hvor jobber Sara, og hva tar hun med? Svar kort.\n"
+        "Start slik: Sara jobber ___ og tar med ___."
+    )
+    key = "FASIT: 1 a. 2 I kantina og et forkle. Belegg: Sara jobber i kantina. Hun tar med et forkle."
+    kwargs = dict(
+        content_text="Sara jobber i kantina. Hun tar med et forkle.",
+        worksheet_text=worksheet, topic="Første vakt", level=level,
+        teacher_key_content=key,
+    )
+    template = create_typst_template(
+        topic="Første vakt", level=level, main_text=kwargs["content_text"],
+        comprehension=pdf_service.parse_worksheet_content(worksheet)["comprehension"],
+    )
+    assert template.count("#line(length: 100%, stroke: 0.5pt + luma(180))") == 2
+    pdf = create_lesson_pdf(**kwargs, options={"teacher_key": False})
+    text = "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(pdf)).pages)
+    assert "Svar kort." in text
+    assert "I kantina" in text
+    assert "*" not in text
+    assert "FASIT:" not in text
+    teacher_pdf = create_lesson_pdf(**kwargs, options={"teacher_key": True})
+    teacher_text = "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(teacher_pdf)).pages)
+    assert "FASIT:" in teacher_text
+    assert "Belegg:" in teacher_text

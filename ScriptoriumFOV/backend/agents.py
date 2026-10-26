@@ -1112,7 +1112,7 @@ def generate_lesson_content(
             - Kulturell representasjon: ikke la menn dominere som helter eller eksperter, bruk ingen
               utdaterte kjønnsroller, ikke ha «turistperspektiv» på norsk kultur, og vis elevenes egne
               kulturer som likeverdige bidrag
-            - Del teksten inn i 2-3 avsnitt med tydelig struktur (flere hvis det er en deep dive)
+            - {research_design.text_structure_rule(level, options["deep_dive"])}
             - Ikke søk etter eller ta med en bilde-URL""",
             expected_output=f"""En velskrevet, pedagogisk tekst på norsk om {topic},
             tilpasset {level}-nivå.""",
@@ -1329,7 +1329,7 @@ VIKTIG: Lag en fullstendig, strukturert FASIT helt til slutt i svaret ditt.
 Marker den tydelig med nøyaktig denne overskriften på en egen linje: === FASIT (KUN FOR LÆRER) ===
 For hver seksjon, gi:
 - VIKTIGE BEGREPER: Korrekt definisjon for hvert begrep
-- LESEFORSTÅELSE: Riktig bokstav (a/b/c) etterfulgt av full korrekt setning
+- LESEFORSTÅELSE: Fasit til både flervalg og åpne spørsmål etter reglene under
 - DISKUSJON: 2-3 modellsvar-punkter per spørsmål
 - FEILRETTING (hvis inkludert): Angi hvilke setninger som hadde feil og skriv korrekte versjoner
 Vær grundig og presis — lærere bruker dette til å rette elevarbeider.""" + research_design.teacher_key_rules(level)
