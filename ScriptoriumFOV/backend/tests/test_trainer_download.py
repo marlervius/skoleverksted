@@ -246,41 +246,18 @@ def test_the_direct_generation_path_stores_lesson_metadata_and_yields_a_trainer(
     assert b"Politiker" in main.download_trainer(job, None).body
 
 
-def test_the_preview_to_pdf_path_stores_lesson_metadata_and_uses_the_revised_content(monkeypatch, job):
-    revised = _sheet(worksheet=WORKSHEET + "\nLover: Regler som gjelder for alle.")
-    passport = TruthPassport(
-        version="3.0", status="verified", content_revision=content_digest(revised),
-        claims=[], sources=[], register_complete=True,
-    )
-    quality = QualityGateResult(
-        approved_content=revised,
-        passport=passport,
-        rounds=[],
-        quarantine=[],
-        stop_reason="source_approved",
-        deterministic_failures=[],
-        release_manifest=ReleaseManifest(
-            document_revision_id="fixture-revision",
-            document_hash=content_digest(revised),
-            renderer_version="test",
-        ),
-    )
-    monkeypatch.setattr(main, "run_quality_pipeline", lambda **_kwargs: quality)
-    monkeypatch.setattr(main, "create_lesson_pdf", lambda **_kwargs: PDF_FIXTURE)
-
-    request = main.PreviewPDFRequest(
-        topic="Demokrati i Norge",
-        subject="Samfunnsfag",
-        level="A2.1",
-        text=TEXT,
-        worksheet=WORKSHEET,
-        options={"grammar_tasks": True},
-    )
+def test_the_preview_to_pdf_path_keeps_the_teachers_edits_for_the_trainer(monkeypatch, job):
+    revised_worksheet = WORKSHEET + "\nLover: Regler som gjelder for alle."
+    monkeypatch.setattr(main, "create_lesson_pdf", lambda **kwargs: PDF_FIXTURE)
+    request = main.PreviewPDFRequest(topic="Demokrati i Norge", subject="Samfunnsfag", level="A2.1",
+        text=TEXT, worksheet=revised_worksheet, options={"grammar_tasks": True})
     main.generate_pdf_from_json_background(job, request)
-
     state = main.get_progress(job)
     assert state["job_status"] == "completed"
     assert state["lesson_meta"] == META
-    main.approve_generation(job, None)
+    with pytest.raises(main.HTTPException):
+        main.download_trainer(job, None)
+    main.approve_generation(job, None, main.TeacherApproval(content_reviewed=True))
     html = main.download_trainer(job, None).body.decode("utf-8")
-    assert "Lover" in html  # the gate's revised wording, not the request's original
+    assert "Lover" in html
+    assert "Innholdet kontrolleres av lærer" in html

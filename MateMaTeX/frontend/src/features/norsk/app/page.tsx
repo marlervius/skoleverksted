@@ -587,9 +587,7 @@ export default function HomeContent() {
           image_credit: previewData.image_credit || "",
           image_source_page: previewData.image_source_page || null,
           language_exercises: previewData.language_exercises,
-          provided_sources: Array.isArray(previewData.truth_passport?.sources)
-            ? previewData.truth_passport.sources
-            : [],
+          teacher_key_content: previewData.teacher_key_content || "",
           options,
           accessibility,
         }),
@@ -737,22 +735,8 @@ export default function HomeContent() {
     return true;
   };
 
-  const editPreviewContent = (field: "text" | "worksheet", value: string) => {
+  const editPreviewContent = (field: "text" | "worksheet" | "teacher_key_content", value: string) => {
     setPreviewData((current) => (current ? { ...current, [field]: value } : current));
-  };
-
-  const removeClaimFromDraft = (claimText: string) => {
-    const exact = claimText.trim();
-    if (!exact) return;
-    setPreviewData((current) => {
-      if (!current) return current;
-      const remove = (value: string) => value.split(exact).join("").replace(/\n{3,}/g, "\n\n").trim();
-      return {
-        ...current,
-        text: remove(current.text),
-        worksheet: remove(current.worksheet),
-      };
-    });
   };
 
   const pollPreviewProgress = async (gId: string, attempt = 0) => {
@@ -971,7 +955,7 @@ export default function HomeContent() {
   };
 
   async function approveExactGeneration(gId: string) {
-    const res = await authFetch(`${apiUrl}/generation/${gId}/approve`, { method: "POST" });
+    const res = await authFetch(`${apiUrl}/generation/${gId}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content_reviewed: true }) });
     if (!res.ok) await throwFromResponse(res);
   }
 
@@ -1322,7 +1306,7 @@ export default function HomeContent() {
                     <textarea
                       value={sourceText}
                       onChange={(e) => setSourceText(e.target.value.slice(0, 5000))}
-                      placeholder="Lim inn et autoritativt utdrag. Kildebaserte faktapåstander merkes med [K] i resultatet."
+                      placeholder="Lim inn tekst du vil bruke som grunnlag for læringsarket."
                       rows={5}
                       className="input-field resize-y text-sm"
                       disabled={formDisabled}
@@ -1700,7 +1684,7 @@ export default function HomeContent() {
                       <h3 id="trainer-title" className="font-medium text-stone-900">Begrepstrener</h3>
                       <p className="mt-1 text-sm text-stone-600">
                         En øvingsfil elevene åpner i nettleseren: lær begrepene, koble, fyll inn, quiz og skriv selv.
-                        Alt innhold er hentet fra det kontrollerte læringsarket, og filen fungerer uten nett.
+                        Alt innhold er hentet fra læringsarket. Kontroller innholdet før godkjenning; filen fungerer uten nett.
                       </p>
                       <button
                         type="button"
@@ -1797,7 +1781,6 @@ export default function HomeContent() {
           onGeneratePdf={generatePdfFromPreview}
           onSelectImage={selectPreviewImage}
           onEditContent={editPreviewContent}
-          onRemoveClaim={removeClaimFromDraft}
         />
       )}
     </div>

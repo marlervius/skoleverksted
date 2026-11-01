@@ -1014,6 +1014,7 @@ def create_typst_template(
     accessibility: Optional[dict] = None,
     options: dict = None,
     draft: bool = False,
+    manual_review: bool = False,
 ) -> str:
     """
     Create a Typst document template for the lesson plan.
@@ -1526,6 +1527,8 @@ def create_typst_template(
 #v(1em)
 '''
 
+    review_note = ("AI-generated. Content is checked by the teacher." if is_english else
+                   "KI-generert. Innholdet kontrolleres av lærer.") if manual_review else ""
     # Build the Typst document
     typst_doc = f'''// Scriptorium - Lesson Plan
 // UTF-8 encoding for Norwegian characters (æ, ø, å)
@@ -1546,6 +1549,7 @@ def create_typst_template(
   }},
   footer: context {{
     set text(size: 9pt, fill: gray)
+    [{review_note}]
     h(1fr)
     counter(page).display("1 / 1", both: true)
     h(1fr)
@@ -1851,6 +1855,7 @@ def create_lesson_pdf(
     series_header: str = "",
     accessibility: Optional[dict] = None,
     draft: bool = False,
+    manual_review: bool = False,
 ) -> bytes:
     """
     Create a PDF lesson plan from the AI-generated content.
@@ -1914,6 +1919,7 @@ def create_lesson_pdf(
         language_exercises=language_exercises,
         options=options,
         draft=draft,
+        manual_review=manual_review,
     )
     
     # Compile to PDF using typst CLI

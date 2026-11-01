@@ -202,59 +202,27 @@ def test_teacher_revision_invalidates_previous_approval():
         clear_progress(job_id)
 
 
-def test_preview_pdf_finishes_as_review_required_with_a_safe_draft(monkeypatch):
-    job_id = "norsk-preview-review-required"
+def test_preview_pdf_finishes_for_manual_review_and_needs_explicit_approval(monkeypatch):
+    job_id = "norsk-preview-manual-review"
     clear_progress(job_id)
-    initialize_progress(job_id, 3, "Starter", request_id="request-review")
-
-    class FakePassport:
-        total_claims = 3
-        verified_claims = 0
-
-        def model_dump(self, mode="json"):
-            return {
-                "status": "source_unavailable",
-                "total_claims": self.total_claims,
-                "verified_claims": self.verified_claims,
-            }
-
-    quality = SimpleNamespace(
-        source_approved=False,
-        quality_status="needs_teacher_review",
-        approved_content="Kontrollert innhold",
-        passport=FakePassport(),
-        quarantine=[],
-        rounds=[],
-        stop_reason="truth_layer_unresolved_claims",
-    )
-    monkeypatch.setattr(main, "run_quality_pipeline", lambda **_kwargs: quality)
-    monkeypatch.setattr(main, "create_lesson_pdf", lambda **_kwargs: PDF_FIXTURE)
-
+    initialize_progress(job_id, 3, "Starter")
+    monkeypatch.setattr(main, "create_lesson_pdf", lambda **kwargs: PDF_FIXTURE)
     try:
-        request = main.PreviewPDFRequest(
-            topic="Arbeidsliv",
-            subject="Norsk",
-            level="A2.1",
-            text="Kontrollert tekst.",
-            worksheet="a) Oppgave",
-            options={"grammar_tasks": True},
-        )
+        request = main.PreviewPDFRequest(topic="Arbeidsliv", subject="Norsk", level="A2.1",
+            text="Lærerens tekst.", worksheet="a) Oppgave", options={})
         main.generate_pdf_from_json_background(job_id, request)
-
         state = main.get_progress(job_id)
-        assert state["job_status"] == "needs_teacher_review"
-        assert state["status"] == "needs_teacher_review"
-        assert state["step"] == 3
-        assert "Lærergjennomgang kreves" in state["message"]
-        assert "pdf_bytes" not in state
-        assert state["preview_pdf_bytes"] == PDF_FIXTURE
-        preview = main.download_pdf(job_id, None, preview=True)
-        assert preview.body == PDF_FIXTURE
-        assert preview.headers["cache-control"] == "no-store"
-        assert preview.headers["x-preview-draft"] == "true"
+        assert state["job_status"] == "completed"
+        assert state["last_event"]["type"] == "done"
+        assert state["quality_review"]["status"] == "teacher_review"
+        assert not state["quality_documents"][0].get("truth_passport")
+        assert main.download_pdf(job_id, None, preview=True).body == PDF_FIXTURE
         with pytest.raises(main.HTTPException) as blocked:
             main.download_pdf(job_id, None)
         assert blocked.value.status_code == 409
-        assert state["last_event"]["type"] == "review_required"
+        with pytest.raises(main.HTTPException):
+            main.approve_generation(job_id, None)
+        main.approve_generation(job_id, None, main.TeacherApproval(content_reviewed=True))
+        assert main.download_pdf(job_id, None).body == PDF_FIXTURE
     finally:
         clear_progress(job_id)

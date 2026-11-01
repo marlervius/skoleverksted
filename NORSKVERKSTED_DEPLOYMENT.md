@@ -35,8 +35,8 @@ Norskverksted is temporarily open without a code. The standalone frontend asks
 for `/api/platform/access/status?module=norsk`, and only the explicitly listed
 language generation routes and new `open-<UUID>` job capability links are open.
 Existing pilot job IDs, private project bindings, the shared job index and all
-other modules still require the pilot code. Source checks, teacher approval,
-export gates and generation rate limits still apply. Do not publish job links
+other modules still require the pilot code. Manual teacher review, exact-revision approval,
+export validation and generation rate limits still apply. Do not publish job links
 containing private work: anyone with an open job link can read or approve it.
 
 To restore the code, set the non-secret backend setting `NORSK_OPEN_ACCESS=0`
@@ -48,24 +48,21 @@ customer accounts, billing or a commercial hosting plan.
 
 ## Verify and publish
 
-Language generation uses three bounded AI roles in the existing Python truth
-pipeline: a claim mapper inventories decoded document nodes, a source researcher
-discovers authoritative pages whose snapshots are fetched independently, and a
-corrector checks those snapshots and proposes anchored corrections. The mapper's
-obligations cannot be silently omitted or reclassified by the corrector. Both
-must explicitly cover every non-empty document leaf. Agreement alone never
-approves facts: unavailable sources, missing obligations, cancellation and time
-limits retain the existing fail-closed behavior. Corrected candidates go through
-all three roles again before source approval, followed by the teacher's approval
-of the exact revision. Other modules keep their existing verification flows.
+Language generation uses manual teacher review. Automatic source research,
+fact auditing and corrective fact-check agents are disabled for this product.
+No green fact passport or automatic source-approval claim is manufactured.
+The teacher reviews the text, exercises and answer key, then explicitly approves
+the exact content revision and the PDF/ZIP file hash before final download.
+Edits, changed files and incomplete or invalid artifacts close that approval.
+The concept trainer follows the same manual-review contract. An unobtrusive
+note identifies generated material and the teacher's content-review role.
 
-The roles reuse the configured Google model and credentials; no new service or
-secret is needed. Compared with the previous research-and-assessment flow, each
-language audit round adds one inventory model call. The existing overall time,
-retry and revision budgets still apply. Progress reports identify each role.
+The existing auth, privacy, image licensing and artifact validation gates remain.
+Persisted jobs using the old automated contract keep their original export
+checks; regenerating their preview creates a new manual-review job. Other
+application modules retain their existing factuality and source controls.
 Offline regression coverage is in
-`Skoleverksted/backend/tests/test_language_fact_crew.py`; these tests make no
-paid model calls. A real model quality evaluation remains a separate manual run.
+`ScriptoriumFOV/backend/tests/test_teacher_review.py`.
 
 Run frontend tests, lint, TypeScript and production builds for both editions.
 For local language preview, set `NEXT_PUBLIC_SITE_EDITION=norsk` and run

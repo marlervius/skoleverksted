@@ -16,7 +16,7 @@ from urllib.parse import quote
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -34,7 +34,6 @@ from Skoleverksted.backend.platform.models import utc_now
 from Skoleverksted.backend.platform.quality_gate import (
     content_digest,
     require_export_ready,
-    run_quality_pipeline,
     source_approval_reasons,
 )
 if __package__:
@@ -50,6 +49,7 @@ if __package__:
     from .config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from .errors import GeminiQuotaExceededError
     from .auth import app_password_configured, new_generation_id, platform_access_granted, require_app_password, verify_password_plain
+    from .teacher_review import REVIEW_MODE, artifact_hash, require_review, review_document, review_ready
     from .pdf_service import create_lesson_pdf
     from .media_manager import image_processor
     from .progress_store import (
@@ -70,6 +70,7 @@ else:
     from config import ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, PDF_THREAD_POOL_WORKERS, RATE_LIMIT_PER_MINUTE
     from errors import GeminiQuotaExceededError
     from auth import app_password_configured, new_generation_id, platform_access_granted, require_app_password, verify_password_plain
+    from teacher_review import REVIEW_MODE, artifact_hash, require_review, review_document, review_ready
     from pdf_service import create_lesson_pdf
     from media_manager import image_processor
     from progress_store import (
@@ -362,6 +363,9 @@ def _log_download_failure(generation_id: str, error_code: str) -> None:
 
 
 def _content_quality_document(content: dict) -> dict:
+    if content.get("review_mode") == REVIEW_MODE:
+        return review_document(content["verification_content"])
+    # Retain the original gates for already persisted, automatically audited jobs.
     return {
         "content": content.get("verification_content", ""),
         "truth_passport": content.get("truth_passport") or {},
@@ -375,23 +379,10 @@ def _content_quality_document(content: dict) -> dict:
     }
 
 
-def _quality_result_document(quality: object) -> dict:
-    """Convert a QualityGateResult into the storage contract used by exports."""
-    return {
-        "content": str(getattr(quality, "approved_content", "") or ""),
-        "truth_passport": getattr(quality, "passport").model_dump(mode="json"),
-        "quarantine": [item.model_dump(mode="json") for item in getattr(quality, "quarantine", [])],
-        "quality_rounds": [item.model_dump(mode="json") for item in getattr(quality, "rounds", [])],
-        "quality_stop_reason": str(getattr(quality, "stop_reason", "") or ""),
-        "quality_status": str(getattr(quality, "quality_status", "needs_teacher_review") or "needs_teacher_review"),
-        "release_manifest": (
-            getattr(quality, "release_manifest").model_dump(mode="json")
-            if getattr(quality, "release_manifest", None) is not None
-            else None
-        ),
-        "teacher_approved_at": None,
-        "approved_digest": "",
-    }
+def _quality_document_is_review_ready(document: dict) -> bool:
+    if document.get("review_mode") == REVIEW_MODE:
+        return review_ready(document)
+    return _quality_document_is_source_approved(document)
 
 
 def _quality_document_is_source_approved(document: dict) -> bool:
@@ -418,18 +409,20 @@ def _quality_review_payload(
     """Public, teacher-facing quality data without exposing binary payloads."""
     return {
         "status": (
-            "source_approved"
+            "teacher_review" if documents and all(item.get("review_mode") == REVIEW_MODE for item in documents)
+            else "source_approved"
             if documents and all(_quality_document_is_source_approved(item) for item in documents)
             else "needs_teacher_review"
         ),
         "documents": [
             {
                 "index": index,
+                "review_mode": document.get("review_mode"),
                 "truth_passport": document.get("truth_passport") or {},
                 "quarantine": document.get("quarantine") or [],
                 "quality_rounds": document.get("quality_rounds") or [],
                 "quality_stop_reason": document.get("quality_stop_reason", ""),
-                "content_revision": (document.get("truth_passport") or {}).get("content_revision", ""),
+                "content_revision": document.get("content_revision") or (document.get("truth_passport") or {}).get("content_revision", ""),
             }
             for index, document in enumerate(documents)
         ],
@@ -466,6 +459,8 @@ def _review_message(documents: list[dict]) -> str:
 def _lesson_preview_payload(content: dict) -> dict:
     """Build the JSON preview shape from generated content for review recovery."""
     return {
+        "review_mode": content.get("review_mode"),
+        "teacher_key_content": content.get("teacher_key_content", ""),
         "topic": content.get("topic", ""),
         "subject": content.get("subject", ""),
         "level": content.get("level", ""),
@@ -502,6 +497,14 @@ def _require_norsk_documents(
     if not documents:
         raise HTTPException(status_code=409, detail="Eksportporten er lukket: kvalitetsdata mangler.")
     for document in documents:
+        if document.get("review_mode") == REVIEW_MODE:
+            if export_id not in {"norsk.pdf", "norsk.zip", "norsk.trainer"}:
+                raise HTTPException(status_code=409, detail="Ugyldig eksport for lærergjennomgang.")
+            try:
+                require_review(document, progress, approved=teacher)
+            except PermissionError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            continue
         passport = document.get("truth_passport") or {}
         content = str(document.get("content") or "")
         quarantined = [item.get("original_text", "") for item in document.get("quarantine", [])]
@@ -604,7 +607,6 @@ def generate_lesson_background(
             source_text=getattr(request, 'source_text', None),
             source_name=getattr(request, 'source_name', None),
             request_id=str((get_progress(generation_id) or {}).get("request_id") or ""),
-            progress_callback=lambda event: update_progress(generation_id, 1, 4, event["message"]),
         )
 
         # Step 2: Process the image (skip if caller already provided a local path)
@@ -636,7 +638,7 @@ def generate_lesson_background(
         _log_generation_event("pdf_build_started", generation_id)
         pdf_started_at = time.perf_counter()
         quality_document = _content_quality_document(content)
-        source_approved = _quality_document_is_source_approved(quality_document)
+        ready_for_teacher = _quality_document_is_review_ready(quality_document)
         pdf_bytes = create_lesson_pdf(
             content_text=content["text"],
             worksheet_text=content["worksheet"],
@@ -651,7 +653,8 @@ def generate_lesson_background(
             teacher_key_content=content.get("teacher_key_content", ""),
             series_header=content.get("series_header", ""),
             accessibility=getattr(request, 'accessibility', None),
-            draft=not source_approved,
+            manual_review=quality_document.get("review_mode") == REVIEW_MODE,
+            draft=not ready_for_teacher,
         )
         _log_generation_event(
             "pdf_build_completed",
@@ -684,14 +687,14 @@ def generate_lesson_background(
             ready_message=(
                 (
                     "Utkastet er bygget og validert. Lærergjennomgang kreves."
-                    if not source_approved
+                    if not ready_for_teacher
                     else "PDF-en er bygget, validert og lagret. PDF klar for nedlasting."
                 )
                 + image_warning
             ),
-            terminal_status="completed" if source_approved else "needs_teacher_review",
-            draft=not source_approved,
-            review_preview=None if source_approved else _lesson_preview_payload(content),
+            terminal_status="completed" if ready_for_teacher else "needs_teacher_review",
+            draft=not ready_for_teacher,
+            review_preview=None if ready_for_teacher else _lesson_preview_payload(content),
             lesson_meta={"topic": request.topic, "subject": request.subject, "level": request.level},
         )
 
@@ -872,6 +875,7 @@ class PreviewPDFRequest(BaseModel):
     image_credit: str = Field("", max_length=600)
     image_source_page: Optional[str] = Field(None, max_length=600)
     language_exercises: Optional[dict] = None
+    teacher_key_content: str = ""
     options: dict[str, bool]
     accessibility: Optional[dict] = None
     provided_sources: list[dict] = Field(
@@ -914,6 +918,8 @@ class LessonResponse(BaseModel):
     language_exercises: Optional[dict] = None
     source_grounded: bool = False
     source_name: Optional[str] = None
+    review_mode: Optional[str] = None
+    teacher_key_content: str = ""
     truth_passport: Optional[dict] = None
     quarantine: list[dict] = Field(default_factory=list)
     quality_rounds: list[dict] = Field(default_factory=list)
@@ -1089,12 +1095,9 @@ def download_trainer(generation_id: str, _auth: AuthPasswordDep, preview: bool =
     """
     Download the concept trainer (an offline HTML practice app) for a generation.
 
-    The trainer is built only from the exact content revision the quality gate
-    verified (``quality_documents``), never from request fields, so it cannot
-    carry a fact the gate has not audited. It is released under the same rules
-    as the PDF: a final download needs source approval and the teacher's
-    approval of that exact revision; a draft job only yields a watermarked
-    teacher preview.
+    The trainer is derived from the stored content revision, never from new
+    request fields. New language jobs require manual teacher approval of the
+    exact revision and file; persisted legacy drafts keep their original gates.
     """
     progress = get_progress(generation_id)
     if progress is None:
@@ -1140,7 +1143,7 @@ def download_trainer(generation_id: str, _auth: AuthPasswordDep, preview: bool =
             frame=str(get_level_constraints(level, False).get("writing_frame") or ""),
         )
         artifact = validate_trainer_artifact(
-            render_trainer_html(model, draft=is_draft),
+            render_trainer_html(model, draft=is_draft, manual_review=documents[0].get("review_mode") == REVIEW_MODE),
             (_safe_filename(topic) or "begrepstrener") + "_begrepstrener.html",
         )
     except TrainerUnavailable as exc:
@@ -1245,20 +1248,29 @@ def download_zip(generation_id: str, _auth: AuthPasswordDep, preview: bool = Fal
     )
 
 
+class TeacherApproval(BaseModel):
+    content_reviewed: StrictBool = False
+
+
 @app.post("/generation/{generation_id}/approve")
-def approve_generation(generation_id: str, _auth: AuthPasswordDep):
-    """Bind the teacher's approval to every exact verified document revision."""
+def approve_generation(generation_id: str, _auth: AuthPasswordDep, body: TeacherApproval | None = None):
+    """Bind the teacher's approval to the exact reviewed material and file."""
     progress = get_progress(generation_id)
     if progress is None:
         raise HTTPException(status_code=404, detail="Generation task not found")
     export_id = "norsk.zip" if progress.get("zip_bytes") else "norsk.pdf"
     _require_norsk_documents(progress, export_id, teacher=False)
+    manual = any(item.get("review_mode") == REVIEW_MODE for item in progress.get("quality_documents") or [])
+    if manual and (body is None or not body.content_reviewed):
+        raise HTTPException(status_code=409, detail="Bekreft at du har gjennomgått og kontrollert innholdet.")
     approved_at = utc_now()
     documents = []
     for document in progress.get("quality_documents") or []:
         revised = dict(document)
         revised["teacher_approved_at"] = approved_at
         revised["approved_digest"] = content_digest(str(document.get("content") or ""))
+        if document.get("review_mode") == REVIEW_MODE:
+            revised["approved_artifact_hash"] = artifact_hash(progress)
         documents.append(revised)
     merge_progress(generation_id, quality_documents=documents)
     return {"status": "approved", "approved_at": approved_at, "documents": len(documents)}
@@ -1374,7 +1386,6 @@ def generate_lesson_json_background(
             source_text=lesson_request.source_text,
             source_name=lesson_request.source_name,
             request_id=str((get_progress(generation_id) or {}).get("request_id") or ""),
-            progress_callback=lambda event: update_progress(generation_id, 1, 3, event["message"]),
         )
         
         image_candidates: list[dict] = []
@@ -1404,6 +1415,8 @@ def generate_lesson_json_background(
         merge_progress(
             generation_id,
             json_data={
+                "review_mode": content.get("review_mode"),
+                "teacher_key_content": content.get("teacher_key_content", ""),
                 "topic": content["topic"],
                 "subject": content["subject"],
                 "level": content["level"],
@@ -1440,11 +1453,11 @@ def generate_lesson_json_background(
             review_preview=_lesson_preview_payload(content),
         )
         quality_document = _content_quality_document(content)
-        source_approved = _quality_document_is_source_approved(quality_document)
-        terminal_status = "completed" if source_approved else "needs_teacher_review"
+        ready_for_teacher = _quality_document_is_review_ready(quality_document)
+        terminal_status = "completed" if ready_for_teacher else "needs_teacher_review"
         terminal_message = (
             "Forhåndsvisning er klar!"
-            if source_approved
+            if ready_for_teacher
             else _review_message([quality_document])
         )
         # Publish the completed step only after json_data is persisted. This
@@ -1455,12 +1468,12 @@ def generate_lesson_json_background(
             3,
             3,
             terminal_message,
-            event_type="progress" if source_approved else "review_required",
+            event_type="progress" if ready_for_teacher else "review_required",
             job_status=terminal_status,
         )
         publish_event(
             generation_id,
-            "done" if source_approved else "review_required",
+            "done" if ready_for_teacher else "review_required",
             message=terminal_message,
             job_status=terminal_status,
         )
@@ -1522,53 +1535,12 @@ def generate_pdf_from_json_background(
 ):
     """Background task to generate PDF directly from JSON (skipping AI steps)."""
     try:
-        verification_document = json.dumps(
-            {
-                "text": request.text,
-                "worksheet": request.worksheet,
-                "language_exercises": request.language_exercises,
-            },
-            ensure_ascii=False,
-        )
-        request_id = str((get_progress(generation_id) or {}).get("request_id") or "")
-        quality = run_quality_pipeline(
-            generator_id="norsk.preview_pdf",
-            content=verification_document,
-            topic=request.topic,
-            subject=request.subject,
-            level=request.level,
-            provided_sources=request.provided_sources,
-            request_id=request_id,
-            progress_callback=lambda event: update_progress(generation_id, 0, 3, event["message"]),
-        )
-        quality_document = _quality_result_document(quality)
-        source_approved = _quality_document_is_source_approved(quality_document)
-        original_text = request.text
-        original_worksheet = request.worksheet
-        original_language_exercises = request.language_exercises
-        try:
-            revised_document = json.loads(quality.approved_content)
-            if not isinstance(revised_document, dict):
-                raise ValueError("kontrollert innhold er ikke et objekt")
-            revised_text = revised_document.get("text")
-            revised_worksheet = revised_document.get("worksheet")
-            revised_language = revised_document.get("language_exercises")
-            if not isinstance(revised_text, str) or not isinstance(revised_worksheet, str):
-                raise ValueError("kontrollerte tekstfelt mangler")
-            if revised_language is not None and not isinstance(revised_language, dict):
-                raise ValueError("språkoppgavene er ikke et objekt")
-            request.text = revised_text
-            request.worksheet = revised_worksheet
-            request.language_exercises = revised_language
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            if source_approved:
-                raise ValueError("Kontrollert innhold kunne ikke deles trygt tilbake i PDF-feltene.") from exc
-            # A review draft must remain visible even if the controller could
-            # not safely parse a revised structured payload. It is explicitly
-            # watermarked and can never be served by the final export route.
-            request.text = original_text
-            request.worksheet = original_worksheet
-            request.language_exercises = original_language_exercises
+        quality_document = review_document(json.dumps({
+            "text": request.text, "worksheet": request.worksheet,
+            "language_exercises": request.language_exercises,
+            "teacher_key_content": request.teacher_key_content,
+        }, ensure_ascii=False))
+        ready_for_teacher = _quality_document_is_review_ready(quality_document)
         update_progress(generation_id, 1, 3, "Behandler og optimaliserer bilde...")
         
         image_asset: Optional[ImageResult] = None
@@ -1607,9 +1579,11 @@ def generate_pdf_from_json_background(
             image_caption=image_caption,
             image_credit=image_credit,
             language_exercises=request.language_exercises,
+            teacher_key_content=request.teacher_key_content,
             options=request.options,
             accessibility=getattr(request, "accessibility", None),
-            draft=not source_approved,
+            manual_review=quality_document.get("review_mode") == REVIEW_MODE,
+            draft=not ready_for_teacher,
         )
         _log_generation_event(
             "pdf_build_completed",
@@ -1643,14 +1617,16 @@ def generate_pdf_from_json_background(
             ready_message=(
                 (
                     "Utkastet er bygget og validert. " + _review_message([quality_document])
-                    if not source_approved
+                    if not ready_for_teacher
                     else "PDF-en er bygget, validert og lagret. PDF klar for nedlasting."
                 )
                 + image_warning
             ),
-            terminal_status="completed" if source_approved else "needs_teacher_review",
-            draft=not source_approved,
+            terminal_status="completed" if ready_for_teacher else "needs_teacher_review",
+            draft=not ready_for_teacher,
             review_preview={
+                "review_mode": REVIEW_MODE,
+                "teacher_key_content": request.teacher_key_content,
                 "topic": request.topic,
                 "subject": request.subject,
                 "level": request.level,
@@ -1752,7 +1728,7 @@ def _generate_single_pdf(
         content,
     )
     quality_document = _content_quality_document(content)
-    source_approved = _quality_document_is_source_approved(quality_document)
+    ready_for_teacher = _quality_document_is_review_ready(quality_document)
     try:
         pdf_bytes = create_lesson_pdf(
             content_text=content["text"],
@@ -1768,7 +1744,8 @@ def _generate_single_pdf(
             teacher_key_content=content.get("teacher_key_content", ""),
             series_header=content.get("series_header", ""),
             accessibility=req.accessibility,
-            draft=not source_approved,
+            manual_review=quality_document.get("review_mode") == REVIEW_MODE,
+            draft=not ready_for_teacher,
         )
     finally:
         _cleanup_image(processed_image_path)
@@ -1826,8 +1803,8 @@ def _generate_dual_background(generation_id: str, lesson_req: "LessonRequest"):
             size_bytes=validated.size_bytes,
         )
 
-        all_source_approved = all(
-            _quality_document_is_source_approved(document)
+        all_ready_for_teacher = all(
+            _quality_document_is_review_ready(document)
             for document in (quality_a, quality_b)
         )
         _publish_validated_artifact(
@@ -1838,12 +1815,12 @@ def _generate_dual_background(generation_id: str, lesson_req: "LessonRequest"):
             quality_documents=[quality_a, quality_b],
             ready_message=(
                 "ZIP-utkastet er bygget og validert. " + _review_message([quality_a, quality_b])
-                if not all_source_approved
+                if not all_ready_for_teacher
                 else "ZIP-artefaktet er bygget, validert og lagret."
             ),
             done_message="Ferdig! ZIP klar for nedlasting.",
-            terminal_status="completed" if all_source_approved else "needs_teacher_review",
-            draft=not all_source_approved,
+            terminal_status="completed" if all_ready_for_teacher else "needs_teacher_review",
+            draft=not all_ready_for_teacher,
         )
         logger.info("Dual PDF ZIP generated: %s bytes", validated.size_bytes)
 
@@ -1929,8 +1906,8 @@ def _generate_multi_level_background(generation_id: str, lesson_req: "MultiLevel
             size_bytes=validated.size_bytes,
         )
 
-        all_source_approved = all(
-            _quality_document_is_source_approved(document)
+        all_ready_for_teacher = all(
+            _quality_document_is_review_ready(document)
             for _pdf, _name, document in zip_parts
         )
         quality_documents = [quality for _pdf, _name, quality in zip_parts]
@@ -1942,12 +1919,12 @@ def _generate_multi_level_background(generation_id: str, lesson_req: "MultiLevel
             quality_documents=quality_documents,
             ready_message=(
                 "ZIP-utkastet er bygget og validert. " + _review_message(quality_documents)
-                if not all_source_approved
+                if not all_ready_for_teacher
                 else "ZIP-artefaktet er bygget, validert og lagret."
             ),
             done_message="Ferdig! ZIP klar for nedlasting.",
-            terminal_status="completed" if all_source_approved else "needs_teacher_review",
-            draft=not all_source_approved,
+            terminal_status="completed" if all_ready_for_teacher else "needs_teacher_review",
+            draft=not all_ready_for_teacher,
         )
         logger.info("Multi-level PDF ZIP generated: %s bytes (%s levels)", validated.size_bytes, n)
 
