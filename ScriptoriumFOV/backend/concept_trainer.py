@@ -393,7 +393,7 @@ def _escape_html(value: str) -> str:
     )
 
 
-def render_trainer_html(model: TrainerModel, *, draft: bool = False) -> str:
+def render_trainer_html(model: TrainerModel, *, draft: bool = False, manual_review: bool = False) -> str:
     """Render the trainer as one self-contained HTML document."""
     labels = model.labels
     prefix = "UTKAST – " if draft and model.language == "nb" else "DRAFT – " if draft else ""
@@ -401,6 +401,9 @@ def render_trainer_html(model: TrainerModel, *, draft: bool = False) -> str:
     banner = (
         f'<div class="draft" role="alert">{_escape_html(labels["draft"])}</div>' if draft else ""
     )
+    if manual_review and not draft:
+        note = "AI-generated. Content is checked by the teacher." if model.language == "en" else "KI-generert. Innholdet kontrolleres av lærer."
+        banner = f'<p class="review-note">{_escape_html(note)}</p>'
     values = {
         "LANG": "en" if model.language == "en" else "nb",
         "CSP": _CSP,
@@ -454,6 +457,7 @@ _STYLE = """
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:18px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;text-align:left}
 .draft{background:#fef3c7;color:#78350f;border-bottom:2px solid #b45309;padding:.75rem 1rem;font-weight:700}
+.review-note{color:#57534e;font-size:.8rem;text-align:center;padding:.4rem;margin:0}
 .top,main,footer,.status{max-width:44rem;margin:0 auto;padding:0 1rem}
 .top{padding-top:1rem}
 .top-row{display:flex;gap:1rem;align-items:baseline;justify-content:space-between;flex-wrap:wrap}

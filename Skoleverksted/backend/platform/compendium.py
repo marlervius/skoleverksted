@@ -502,7 +502,6 @@ def _call_google_json(
     resolve_grounding_redirects: bool = True,
     research_prompt: str = "",
     research_sources: Iterable[object] = (),
-    research_completed_callback: Callable[[], None] | None = None,
 ) -> tuple[dict[str, Any], list[CompendiumSource]]:
     from google import genai
     from google.genai import types
@@ -645,8 +644,6 @@ def _call_google_json(
             )
             config.pop("tools", None)
             config["automaticFunctionCalling"] = types.AutomaticFunctionCallingConfig(disable=True)
-            if research_completed_callback:
-                research_completed_callback()
         try:
             response = generate("truth_model_call", prompt, config)
         except Exception as exc:

@@ -42,7 +42,7 @@ export function NorskHome() {
 
       <section className="mb-16 rounded-2xl border border-accent-200 bg-white p-6 sm:p-10" aria-labelledby="workflow-title">
         <div className="flex items-center gap-3"><FileCheck2 className="h-6 w-6 text-accent-700" aria-hidden="true" /><h2 id="workflow-title" className="font-display text-3xl text-accent-900">Du har siste ord.</h2></div>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-stone-600">KI lager et utkast. Kilder og innhold kontrolleres, og du gjennomgår og godkjenner den konkrete versjonen før endelig eksport.</p>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-stone-600">KI lager et utkast. Du gjennomgår og kontrollerer innholdet selv, og godkjenner den konkrete versjonen før nedlasting.</p>
         <ol className="my-7 grid gap-5 text-sm md:grid-cols-3">{["Velg fag, tema og språknivå.", "Les forhåndsvisningen og gjør endringer.", "Godkjenn og last ned læringsark og øvingsmateriell."].map((step, index) => <li key={step} className="flex gap-3"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-50 text-xs font-semibold text-accent-800">{index + 1}</span><span className="pt-1 text-stone-700">{step}</span></li>)}</ol>
         <div className="flex flex-wrap items-center justify-between gap-5 border-t border-stone-200 pt-6"><p className="flex items-center gap-2 text-xs text-stone-600"><Check className="h-4 w-4 text-accent-700" aria-hidden="true" />PDF-læringsark, flernivåpakker og begrepstrener</p><Link href="/verksted" className="inline-flex items-center gap-2 text-sm font-semibold text-accent-700 hover:underline">Lag ditt første læringsark <MoveUpRight className="h-4 w-4" aria-hidden="true" /></Link></div>
       </section>

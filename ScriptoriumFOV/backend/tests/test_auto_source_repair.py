@@ -1,4 +1,5 @@
 import json
+import pytest
 from collections import deque
 from types import SimpleNamespace
 
@@ -154,62 +155,29 @@ def test_grounding_sources_are_collected_from_every_candidate():
     ]
 
 
-def test_pdf_recheck_reuses_sources_and_structured_content(monkeypatch):
-    job_id = "norsk-source-recheck"
+def test_preview_pdf_keeps_the_teachers_content_without_calling_the_truth_gate(monkeypatch):
+    job_id = "norsk-manual-preview"
     clear_progress(job_id)
-    initialize_progress(job_id, 3, "Starter", request_id="request-source-recheck")
+    initialize_progress(job_id, 3, "Starter")
+    def forbidden(**kwargs):
+        raise AssertionError("Automatic source checking must not run for language previews")
+    from Skoleverksted.backend.platform import quality_gate
+    monkeypatch.setattr(quality_gate, "run_quality_pipeline", forbidden)
     pdf_bytes = build_valid_pdf_bytes()
-    provided = [SOURCE.model_dump(mode="json")]
-    captured = {}
-    document = json.dumps(
-        {
-            "text": "Kontrollert tekst.",
-            "worksheet": "Kontrollert oppgave.",
-            "language_exercises": None,
-        },
-        ensure_ascii=False,
-    )
-    passport = TruthPassport(
-        version="3.0",
-        status="verified",
-        content_revision=content_digest(document),
-        claims=[],
-        sources=[SOURCE],
-        register_complete=True,
-    )
-    quality = QualityGateResult(
-        approved_content=document,
-        passport=passport,
-        rounds=[],
-        quarantine=[],
-        stop_reason="source_approved",
-        deterministic_failures=[],
-        release_manifest=_manifest(document),
-    )
-
-    def run_quality(**kwargs):
-        captured.update(kwargs)
-        return quality
-
-    monkeypatch.setattr(main, "run_quality_pipeline", run_quality)
-    monkeypatch.setattr(main, "create_lesson_pdf", lambda **_kwargs: pdf_bytes)
-
+    monkeypatch.setattr(main, "create_lesson_pdf", lambda **kwargs: pdf_bytes)
     try:
-        request = main.PreviewPDFRequest(
-            topic="Arbeidsliv",
-            subject="Norsk",
-            level="A2.1",
-            text="Kontrollert tekst.",
-            worksheet="Kontrollert oppgave.",
-            options={"grammar_tasks": True},
-            provided_sources=provided,
-        )
+        request = main.PreviewPDFRequest(topic="Arbeidsliv", subject="Norsk", level="A2.1",
+            text="Lærerens tekst.", worksheet="Lærerens oppgaver.", options={},
+            provided_sources=[SOURCE.model_dump(mode="json")])
         main.generate_pdf_from_json_background(job_id, request)
-
-        assert json.loads(captured["content"]) == json.loads(document)
-        assert captured["provided_sources"] == provided
         state = main.get_progress(job_id)
+        document = state["quality_documents"][0]
         assert state["job_status"] == "completed"
         assert state["pdf_bytes"] == pdf_bytes
+        assert json.loads(document["content"])["text"] == request.text
+        assert document["review_mode"] == "teacher-v1"
+        assert not document.get("truth_passport")
+        with pytest.raises(main.HTTPException):
+            main.download_pdf(job_id, None)
     finally:
         clear_progress(job_id)

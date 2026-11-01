@@ -148,8 +148,8 @@ export function GenerationStatus({
             </p>
             <p className="text-stone-500 text-sm mt-1">
               {isDual
-                ? "Kontroller filene, og velg deretter «Godkjenn og last ned ZIP»."
-                : "Kontroller filen, og velg deretter «Godkjenn og last ned PDF»."}
+                ? "Gjennomgå og kontroller innholdet i alle filene, og velg deretter «Godkjenn og last ned ZIP»."
+                : "Gjennomgå og kontroller innholdet, og velg deretter «Godkjenn og last ned PDF»."}
             </p>
           </div>
         </div>

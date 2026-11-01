@@ -94,6 +94,8 @@ export interface ReadabilityReport {
 
 /** JSON lesson payload from /download-json (matches backend LessonResponse). */
 export interface LessonResponse {
+  review_mode?: "teacher-v1";
+  teacher_key_content?: string;
   topic: string;
   subject: string;
   level: string;

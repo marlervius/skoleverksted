@@ -178,11 +178,14 @@ def test_writing_frame_is_pitched_at_the_level(harness):
     assert "Hovedårsaken til ___ er ___ fordi ___." in _description(harness, "lag et arbeidsark")
 
 
-def test_overlong_sentences_are_split_before_the_truth_gate_sees_the_text(harness):
+def test_overlong_sentences_are_split_before_the_teacher_reviews_the_text(harness):
     result = agents.generate_lesson_content(topic="Livets historie", subject="Naturfag", level="A2.1")
 
     assert len(harness["llm"].prompts) == 1
-    assert json.loads(harness["gate_inputs"][0])["text"] == SIMPLIFIED
+    assert not harness["gate_inputs"]
+    assert json.loads(result["verification_content"])["text"] == SIMPLIFIED
+    assert result["review_mode"] == "teacher-v1"
+    assert "truth_passport" not in result
     assert result["text"] == SIMPLIFIED
     assert result["readability"]["status"] == "ok"
     assert result["readability"]["auto_simplified"] is True
